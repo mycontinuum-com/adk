@@ -1,5 +1,5 @@
 {
-  "name": "@mycontinuum-com/adk",
+  "name": "@anima/adk",
   "version": "0.1.0",
   "description": "Anima Agent Development Kit - Framework for building production-grade multi-agent AI systems",
   "main": "dist/index.js",
@@ -55,7 +55,7 @@
     "url": "https://github.com/mycontinuum-com/adk"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "restricted"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -1,11 +1,11 @@
-# @mycontinuum-com/adk - Agent Development Kit
+# @anima/adk - Agent Development Kit
 
 Anima's framework for building production-grade multi-agent AI systems.
 
 ## Installation
 
 ```bash
-npm install @mycontinuum-com/adk
+npm install @anima/adk
 
 # Install provider SDKs as needed
 npm install openai           # For OpenAI models
@@ -24,7 +24,7 @@ import {
   openai,
   injectSystemMessage,
   includeHistory,
-} from '@mycontinuum-com/adk';
+} from '@anima/adk';
 
 const calculator = tool({
   name: 'calculate',
@@ -76,7 +76,7 @@ The ADK provides five composable primitives:
 Swap between LLM providers with one line:
 
 ```typescript
-import { openai, gemini, claude } from '@mycontinuum-com/adk';
+import { openai, gemini, claude } from '@anima/adk';
 
 // OpenAI
 model: openai('gpt-4o-mini', { temperature: 0.7 })
@@ -126,7 +126,7 @@ const approval = tool({
 The package includes two built-in session services:
 
 ```typescript
-import { InMemorySessionService, LocalSessionService } from '@mycontinuum-com/adk/persistence';
+import { InMemorySessionService, LocalSessionService } from '@anima/adk/persistence';
 
 // In-memory (for testing/development)
 const memoryService = new InMemorySessionService();
@@ -142,7 +142,7 @@ For production DynamoDB persistence with OpenSearch, see the implementation in a
 ## Testing
 
 ```typescript
-import { runTest, user, model, setupAdkMatchers } from '@mycontinuum-com/adk/testing';
+import { runTest, user, model, setupAdkMatchers } from '@anima/adk/testing';
 
 setupAdkMatchers();
 
@@ -196,7 +196,7 @@ For production-style examples with Anima-specific integrations, see anima-servic
 ## Architecture
 
 ```
-@mycontinuum-com/adk/
+@anima/adk/
 ├── agents/      # Runnable factories (agent, step, sequence, parallel, loop)
 ├── core/        # Runner, tools, orchestration primitives
 ├── context/     # Render pipeline for model context
@@ -218,7 +218,7 @@ If migrating from the embedded `modules/adk` in anima-service:
 import { agent, tool } from '../../../modules/adk';
 
 // After  
-import { agent, tool } from '@mycontinuum-com/adk';
+import { agent, tool } from '@anima/adk';
 ```
 
 For `PersistentSessionService` (DynamoDB), continue importing from anima-service until that is extracted.
