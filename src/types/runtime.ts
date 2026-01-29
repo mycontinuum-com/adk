@@ -52,6 +52,7 @@ export type RunStatus =
 export interface TransferTarget {
   invocationId: string;
   agent: Runnable;
+  message?: string;
 }
 
 export type RunResult<TOutput = unknown> =

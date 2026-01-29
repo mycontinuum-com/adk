@@ -5,6 +5,7 @@ import type {
   ToolCallEvent,
   InvocationEndReason,
   Event,
+  StreamEvent,
 } from '../types';
 import type { BaseSession } from '../session';
 import type { InvocationBoundaryOptions } from '../core';
@@ -210,7 +211,7 @@ export function workflowResultToRunResult<TRunnable extends Runnable>(
 }
 
 export interface InvocationBoundaryConfig {
-  onStream?: (event: unknown) => void;
+  onStream?: (event: StreamEvent) => void;
   fingerprint?: string;
 }
 

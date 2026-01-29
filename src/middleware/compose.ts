@@ -74,7 +74,8 @@ export function composeObservationHooks(
   };
 }
 
-type AnyHook = ((...args: unknown[]) => unknown) | undefined;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyHook = ((...args: any[]) => any) | undefined;
 
 function composeBeforeHook<T extends AnyHook>(
   middlewareHooks: (T | undefined)[],
@@ -84,7 +85,8 @@ function composeBeforeHook<T extends AnyHook>(
 
   if (hooks.length === 0 && !innerCallback) return undefined;
 
-  return (async (...args: unknown[]) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (async (...args: any[]) => {
     for (const hook of hooks) {
       const result = await hook(...args);
       if (result !== undefined) return result;
@@ -103,7 +105,8 @@ function composeAfterHook<T extends AnyHook>(
 
   if (hooks.length === 0 && !innerCallback) return undefined;
 
-  return (async (ctx: unknown, value: unknown) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (async (ctx: any, value: any) => {
     let result = value;
 
     if (innerCallback) {
