@@ -2,7 +2,84 @@
 
 Anima's framework for building production-grade multi-agent AI systems.
 
+> **Private Package**: This is a private npm package. See [Setup](#setup) for access instructions.
+
+## Setup
+
+This package is published to npm as a **private package** under the `@animahealth` organization. You'll need to configure npm authentication before installing.
+
+### Developer Setup (One-time)
+
+1. **Get an npm read token** from your team lead or create one at [npmjs.com/settings/~/tokens](https://www.npmjs.com/settings/~/tokens) (requires org membership)
+
+2. **Configure npm** by adding the token to your global `~/.npmrc`:
+
+   ```ini
+   //registry.npmjs.org/:_authToken=npm_xxxxxxxxxxxx
+   ```
+
+   Or set it as an environment variable:
+
+   ```bash
+   # Add to your shell profile (~/.zshrc, ~/.bashrc, etc.)
+   export NPM_TOKEN=npm_xxxxxxxxxxxx
+   ```
+
+   Then create/update `~/.npmrc`:
+
+   ```ini
+   //registry.npmjs.org/:_authToken=${NPM_TOKEN}
+   ```
+
+3. **Verify access**:
+
+   ```bash
+   npm view @animahealth/adk
+   ```
+
+### CI Setup (GitHub Actions)
+
+1. **Add the npm token as a repository secret**:
+   - Go to your repo → Settings → Secrets and variables → Actions
+   - Add a secret named `NPM_TOKEN` with a read-only npm token
+
+2. **Create `.npmrc` in your repo root**:
+
+   ```ini
+   //registry.npmjs.org/:_authToken=${NPM_TOKEN}
+   ```
+
+3. **Configure your workflow**:
+
+   ```yaml
+   jobs:
+     build:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: actions/checkout@v4
+         
+         - uses: actions/setup-node@v4
+           with:
+             node-version: '20'
+             cache: 'npm'
+         
+         - name: Install dependencies
+           run: npm ci
+           env:
+             NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+   ```
+
+### CI Setup (Other Providers)
+
+For CircleCI, GitLab CI, etc., set `NPM_TOKEN` as an environment variable and ensure `.npmrc` references it:
+
+```ini
+//registry.npmjs.org/:_authToken=${NPM_TOKEN}
+```
+
 ## Installation
+
+Once authenticated, install the package:
 
 ```bash
 npm install @animahealth/adk
@@ -223,6 +300,45 @@ import { agent, tool } from '@animahealth/adk';
 
 For `PersistentSessionService` (DynamoDB), continue importing from anima-service until that is extracted.
 
+## Publishing (Maintainers)
+
+To publish a new version:
+
+1. **Update version** in `package.json`
+
+2. **Build and test**:
+
+   ```bash
+   npm run build
+   npm test
+   ```
+
+3. **Publish** (requires npm org write access + 2FA):
+
+   ```bash
+   npm publish
+   ```
+
+   If using an automation token with 2FA bypass:
+
+   ```bash
+   npm publish --//registry.npmjs.org/:_authToken=npm_xxxxxxxxxxxx
+   ```
+
+4. **Tag the release**:
+
+   ```bash
+   git tag v0.x.x
+   git push origin v0.x.x
+   ```
+
+## Security
+
+- **Never commit npm tokens** to the repository
+- Use **read-only tokens** for CI and developer access
+- Use **write tokens** only for publishing, with limited scope to `@animahealth/adk`
+- Rotate tokens periodically via [npmjs.com/settings/~/tokens](https://www.npmjs.com/settings/~/tokens)
+
 ## License
 
-MIT
+MIT - Anima Health Internal Use
