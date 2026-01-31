@@ -90,8 +90,10 @@ export interface ToolYieldEvent extends EventBase {
   preparedArgs: unknown;
 }
 
-export interface ToolInputEvent
-  extends Omit<EventBase, 'invocationId' | 'agentName'> {
+export interface ToolInputEvent extends Omit<
+  EventBase,
+  'invocationId' | 'agentName'
+> {
   type: 'tool_input';
   callId: string;
   name: string;
@@ -189,8 +191,7 @@ export interface InvocationYieldEvent extends EventBase, InvocationEventFields {
 }
 
 export interface InvocationResumeEvent
-  extends EventBase,
-    InvocationEventFields {
+  extends EventBase, InvocationEventFields {
   type: 'invocation_resume';
   invocationId: string;
   yieldIndex: number;
@@ -255,8 +256,9 @@ export type Event =
   | ModelStartEvent
   | ModelEndEvent;
 
-interface DeltaEvent<T extends 'thought_delta' | 'assistant_delta'>
-  extends EventBase {
+interface DeltaEvent<
+  T extends 'thought_delta' | 'assistant_delta',
+> extends EventBase {
   type: T;
   delta: string;
   text: string;

@@ -122,7 +122,7 @@ export class AgentUserError extends Error {
   }
 }
 
-export function createAgentUser(config: AgentUserConfig): User {
+export function agentUser(config: AgentUserConfig): User {
   const formatPrompt = config.bridge?.formatPrompt ?? defaultFormatPrompt;
   const formatResponse = config.bridge?.formatResponse ?? defaultFormatResponse;
 

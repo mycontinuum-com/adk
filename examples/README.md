@@ -17,15 +17,15 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
 
 ## Examples
 
-| Example | Description |
-|---------|-------------|
-| `quickstart.ts` | Minimal agent with calculator tool |
-| `assistant.ts` | Interactive chat loop with tools |
-| `yieldResume.ts` | Human-in-the-loop approval workflow |
-| `reasoning.ts` | Multi-provider reasoning models |
+| Example          | Description                                             |
+| ---------------- | ------------------------------------------------------- |
+| `quickstart.ts`  | Minimal agent with calculator tool                      |
+| `assistant.ts`   | Interactive chat loop with tools                        |
+| `yieldResume.ts` | Human-in-the-loop approval workflow                     |
+| `reasoning.ts`   | Multi-provider reasoning models                         |
 | `dynamicFlow.ts` | Dynamic orchestration (call, spawn, dispatch, transfer) |
-| `step.ts` | Steps with routing, gates, and signals |
-| `staticFlow.ts` | Full content pipeline (parallel, sequence, loop) |
+| `step.ts`        | Steps with routing, gates, and signals                  |
+| `staticFlow.ts`  | Full content pipeline (parallel, sequence, loop)        |
 
 ## Running Examples
 
@@ -37,7 +37,7 @@ npx tsx examples/yieldResume.ts
 
 ## More Examples
 
-For additional production-style examples (clinical triage, document research), 
+For additional production-style examples (clinical triage, document research),
 see the anima-service repository:
 
 - `scripts/adk/examples/clinician/` - Multi-agent clinical triage system

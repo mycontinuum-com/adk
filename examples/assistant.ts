@@ -16,8 +16,8 @@ import {
   injectSystemMessage,
   includeHistory,
   type LoopContext,
-} from '@anima/adk';
-import { cli } from '@anima/adk/cli';
+} from '../src';
+import { cli } from '../src/cli';
 
 const calculate = tool({
   name: 'calculate',

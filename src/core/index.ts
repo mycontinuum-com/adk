@@ -6,6 +6,9 @@ export {
   isYieldSignal,
   isRunnable,
   signalYield,
+  isProviderTool,
+  isFunctionTool,
+  partitionTools,
 } from './tools';
 export type { ControlSignal, YieldSignal } from './tools';
 export { withRetry, withStreamRetry } from './retry';

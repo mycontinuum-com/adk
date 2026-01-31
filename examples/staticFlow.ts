@@ -59,15 +59,15 @@ import {
   parallel,
   loop,
   openai,
+  gemini,
   message,
   output,
   injectSystemMessage,
   includeHistory,
   type LoopContext,
-  gemini,
   type StateSchema,
-} from '@anima/adk';
-import { cli } from '@anima/adk/cli';
+} from '../src';
+import { cli } from '../src/cli';
 
 const MAX_REVISIONS = 3;
 const QUALITY_THRESHOLD = 8;

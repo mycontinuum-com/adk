@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import type {
   Tool,
-  ToolHookContext,
+  FunctionTool,
+  FunctionToolHookContext,
+  ProviderTool,
   RetryConfig,
   ToolCallEvent,
   Runnable,
@@ -42,6 +44,30 @@ export function signalYield(
   info: Omit<YieldSignal, typeof CONTROL>,
 ): YieldSignal {
   return { [CONTROL]: 'yield', ...info };
+}
+
+export function isProviderTool(tool: Tool): tool is ProviderTool {
+  return 'type' in tool && typeof (tool as ProviderTool).type === 'string';
+}
+
+export function isFunctionTool(tool: Tool): tool is FunctionTool {
+  return !isProviderTool(tool);
+}
+
+export function partitionTools(tools: Tool[]): {
+  functionTools: FunctionTool[];
+  providerTools: ProviderTool[];
+} {
+  const functionTools: FunctionTool[] = [];
+  const providerTools: ProviderTool[] = [];
+  for (const t of tools) {
+    if (isProviderTool(t)) {
+      providerTools.push(t);
+    } else {
+      functionTools.push(t);
+    }
+  }
+  return { functionTools, providerTools };
 }
 
 /**
@@ -102,17 +128,17 @@ export function tool<TInput, TOutput, TYield = never>(config: {
   schema: z.ZodType<TInput>;
   yieldSchema?: z.ZodType<TYield>;
   prepare?: (
-    ctx: ToolHookContext<TInput>,
+    ctx: FunctionToolHookContext<TInput>,
   ) => TInput | void | Promise<TInput | void>;
   execute?: (
-    ctx: ToolHookContext<TInput, TYield>,
+    ctx: FunctionToolHookContext<TInput, TYield>,
   ) => TOutput | Promise<TOutput>;
   finalize?: (
-    ctx: ToolHookContext<TInput, TYield, TOutput>,
+    ctx: FunctionToolHookContext<TInput, TYield, TOutput>,
   ) => TOutput | void | Promise<TOutput | void>;
   timeout?: number;
   retry?: RetryConfig;
-}): Tool<TInput, TOutput, TYield> {
+}): FunctionTool<TInput, TOutput, TYield> {
   if (!config.yieldSchema && !config.execute) {
     throw new Error(
       `Tool '${config.name}' must have either 'execute' or 'yieldSchema'`,

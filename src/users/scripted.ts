@@ -33,7 +33,7 @@ class ScriptedUserNoHandlerError extends Error {
   }
 }
 
-export function createScriptedUser(config: ScriptedUserConfig): User {
+export function scriptedUser(config: ScriptedUserConfig): User {
   const callCounts = new Map<string, number>();
   let messageIndex = 0;
 

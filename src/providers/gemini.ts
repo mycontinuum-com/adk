@@ -17,7 +17,7 @@ import type {
   ModelConfig,
   Event,
   RenderContext,
-  Tool,
+  FunctionTool,
   StreamEvent,
   ToolCallEvent,
   ModelUsage,
@@ -145,7 +145,7 @@ Either:
         contents,
         config: {
           systemInstruction,
-          tools: serializeTools(ctx.tools),
+          tools: serializeTools(ctx.functionTools),
           toolConfig: serializeToolConfig(toolChoice, ctx.allowedTools),
           thinkingConfig,
           ...(useNativeStructuredOutput && {
@@ -436,7 +436,7 @@ export function parseResponse(
   };
 }
 
-export function serializeTools(tools: Tool[]) {
+export function serializeTools(tools: FunctionTool[]) {
   if (tools.length === 0) return [];
 
   return [

@@ -8,7 +8,7 @@ import type {
   ClaudeModel,
   Event,
   RenderContext,
-  Tool,
+  FunctionTool,
   StreamEvent,
   ToolCallEvent,
   ModelUsage,
@@ -178,8 +178,8 @@ Either:
         max_tokens: config.maxTokens ?? 4096,
         ...(system && { system }),
         messages,
-        ...(ctx.tools.length > 0 && {
-          tools: serializeTools(ctx.tools),
+        ...(ctx.functionTools.length > 0 && {
+          tools: serializeTools(ctx.functionTools),
           tool_choice: serializeToolChoice(
             toolChoice,
             thinkingConfig ? undefined : ctx.allowedTools,
@@ -387,9 +387,7 @@ export function serializeContext(ctx: RenderContext): {
   };
 }
 
-function getClaudeContext(
-  event: Pick<Event, 'providerContext'>,
-):
+function getClaudeContext(event: Pick<Event, 'providerContext'>):
   | {
       id?: string;
       tool_use_id?: string;
@@ -529,7 +527,7 @@ export function parseResponse(
   };
 }
 
-export function serializeTools(tools: Tool[]): ClaudeTool[] {
+export function serializeTools(tools: FunctionTool[]): ClaudeTool[] {
   return tools.map((t) => {
     const fn = zodResponsesFunction({
       name: t.name,

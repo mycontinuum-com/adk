@@ -16,8 +16,8 @@ import {
   injectSystemMessage,
   includeHistory,
   type LoopContext,
-} from '@anima/adk';
-import { cli } from '@anima/adk/cli';
+} from '../src';
+import { cli } from '../src/cli';
 
 const calculate = tool({
   name: 'calculate',
@@ -42,16 +42,16 @@ const getCurrentTime = tool({
   description: 'Get the current date and time',
   schema: z.object({}),
   execute: () => {
-    return { 
+    return {
       timestamp: new Date().toISOString(),
-      readable: new Date().toLocaleString('en-GB', { 
-        weekday: 'long', 
-        year: 'numeric', 
-        month: 'long', 
+      readable: new Date().toLocaleString('en-GB', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
         day: 'numeric',
         hour: '2-digit',
-        minute: '2-digit'
-      })
+        minute: '2-digit',
+      }),
     };
   },
 });

@@ -4,8 +4,7 @@ import type { Runnable } from './runnables';
 import type { User } from './user';
 
 export interface StreamResult<T = RunResult>
-  extends AsyncIterable<StreamEvent>,
-    PromiseLike<T> {
+  extends AsyncIterable<StreamEvent>, PromiseLike<T> {
   abort(): void;
 }
 

@@ -34,7 +34,7 @@ function defaultParseInput(input: string, ctx: YieldContext): unknown {
   }
 }
 
-export function createHumanUser(options?: HumanUserOptions): User {
+export function humanUser(options?: HumanUserOptions): User {
   const formatPrompt = options?.formatPrompt ?? defaultFormatPrompt;
   const parseInput = options?.parseInput ?? defaultParseInput;
 

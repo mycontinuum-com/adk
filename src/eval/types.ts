@@ -1,10 +1,9 @@
 import type {
   Event,
-  Tool,
+  FunctionTool,
   Runnable,
   Session,
   StateAccessorWithScopes,
-  StateScope,
 } from '../types';
 
 export interface MockToolContext {
@@ -19,7 +18,7 @@ export interface ToolMock {
   execute: (args: unknown, ctx: MockToolContext) => unknown | Promise<unknown>;
 }
 
-export type ToolMocks = Record<string, ToolMock | Tool>;
+export type ToolMocks = Record<string, ToolMock | FunctionTool>;
 
 export interface YieldInfo {
   type: 'loop' | 'tool';

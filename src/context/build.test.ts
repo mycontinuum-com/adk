@@ -27,7 +27,8 @@ describe('injectSystemMessage', () => {
     invocationId: TEST_INV_ID,
     agentName: 'test',
     events: [],
-    tools: [],
+    functionTools: [],
+    providerTools: [],
     state: createStateAccessor(session, TEST_INV_ID),
   });
 
@@ -68,7 +69,8 @@ describe('includeHistory', () => {
     invocationId,
     agentName: 'test',
     events,
-    tools: [],
+    functionTools: [],
+    providerTools: [],
     state: createStateAccessor(session, invocationId),
   });
 
@@ -220,7 +222,8 @@ describe('selectRecentEvents', () => {
       invocationId: TEST_INV_ID,
       agentName: 'test',
       events,
-      tools: [],
+      functionTools: [],
+      providerTools: [],
       state: createStateAccessor(session, TEST_INV_ID),
     };
   };
@@ -309,7 +312,8 @@ describe('pruneReasoning', () => {
       invocationId: TEST_INV_ID,
       agentName: 'test',
       events,
-      tools: [],
+      functionTools: [],
+      providerTools: [],
       state: createStateAccessor(session, TEST_INV_ID),
     };
 
@@ -333,7 +337,8 @@ describe('excludeChildInvocationInstructions', () => {
       invocationId: 'parent-inv',
       agentName: 'test',
       events,
-      tools: [],
+      functionTools: [],
+      providerTools: [],
       state: createStateAccessor(session, 'parent-inv'),
     };
   };
@@ -506,7 +511,8 @@ describe('excludeChildInvocationEvents', () => {
       invocationId: 'parent-inv',
       agentName: 'test',
       events,
-      tools: [],
+      functionTools: [],
+      providerTools: [],
       state: createStateAccessor(session, 'parent-inv'),
     };
   };
@@ -749,7 +755,8 @@ describe('wrapUserMessages', () => {
     invocationId: TEST_INV_ID,
     agentName,
     events,
-    tools: [],
+    functionTools: [],
+    providerTools: [],
     state: createStateAccessor(session, TEST_INV_ID),
   });
 

@@ -8,13 +8,14 @@ import type {
   ContextMessageSummary,
   ContextToolSummary,
   Event,
-  Tool,
+  FunctionTool,
   OutputMode,
 } from '../types';
 import type { z } from 'zod';
 import { createEventId } from '../session';
 import { zodResponsesFunction } from 'openai/helpers/zod';
 import { createBoundStateAccessor } from './state';
+import { partitionTools } from '../core/tools';
 
 function isObjectSchema(schema: unknown): boolean {
   if (!schema || typeof schema !== 'object') return false;
@@ -66,7 +67,7 @@ function eventToMessageSummary(event: Event): ContextMessageSummary | null {
   }
 }
 
-function toolToSummary(tool: Tool): ContextToolSummary {
+function toolToSummary(tool: FunctionTool): ContextToolSummary {
   return {
     name: tool.name,
     description: tool.description,
@@ -114,7 +115,7 @@ export function createStartEvent(
     agentName: ctx.agentName,
     stepIndex,
     messages,
-    tools: ctx.tools.map(toolToSummary),
+    tools: ctx.functionTools.map(toolToSummary),
     outputSchema: ctx.outputSchema ? getOutputSchemaName(ctx) : undefined,
     serializedSchema: serializeOutputSchema(ctx),
   };
@@ -153,6 +154,7 @@ export function createRenderContext(
   invocationId: string,
 ): RenderContext {
   const outputConfig = getOutputSchemaConfig(agent);
+  const { functionTools, providerTools } = partitionTools(agent.tools);
   return {
     invocationId,
     agentName: agent.name,
@@ -160,7 +162,8 @@ export function createRenderContext(
     state: createBoundStateAccessor(session, invocationId),
     agent,
     events: [],
-    tools: agent.tools,
+    functionTools,
+    providerTools,
     outputSchema: outputConfig.schema,
     outputMode: outputConfig.mode,
   };

@@ -1,5 +1,10 @@
 /**
- * Multi-turn conversation test (non-interactive)
+ * Multi-turn conversation debugging script
+ *
+ * Tests multi-turn conversation handling and context preservation.
+ *
+ * Usage:
+ *   npx tsx scripts/debug-multi-turn.ts
  */
 
 import { z } from 'zod';
@@ -35,7 +40,9 @@ const assistant = agent({
     },
   }),
   context: [
-    injectSystemMessage('You are a helpful assistant. Be concise. Use the calculator for math.'),
+    injectSystemMessage(
+      'You are a helpful assistant. Be concise. Use the calculator for math.',
+    ),
     includeHistory(),
   ],
   tools: [calculate],
@@ -78,7 +85,7 @@ async function main() {
 }
 
 function getLastAssistantMessage(session: BaseSession): string {
-  const assistantEvents = session.events.filter(e => e.type === 'assistant');
+  const assistantEvents = session.events.filter((e) => e.type === 'assistant');
   const last = assistantEvents[assistantEvents.length - 1];
   return last && 'text' in last ? last.text : '(no response)';
 }

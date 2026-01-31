@@ -45,8 +45,8 @@ import {
   InMemorySessionService,
   BaseSession,
   type StateSchema,
-} from '@anima/adk';
-import { cli } from '@anima/adk/cli';
+} from '../src';
+import { cli } from '../src/cli';
 
 const processedProductSchema = z.object({
   id: z.number(),

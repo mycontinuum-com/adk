@@ -9,7 +9,7 @@ import type {
   ThoughtEvent,
   ToolCallEvent,
   ToolResultEvent,
-  Tool,
+  FunctionTool,
 } from '../types';
 import {
   serializeContext,
@@ -601,7 +601,7 @@ describe('Gemini serialization', () => {
     });
 
     it('should wrap tools in functionDeclarations', () => {
-      const tools: Tool[] = [
+      const tools: FunctionTool[] = [
         {
           name: 'get_weather',
           description: 'Get weather for a city',
@@ -622,7 +622,7 @@ describe('Gemini serialization', () => {
     });
 
     it('should serialize multiple tools', () => {
-      const tools: Tool[] = [
+      const tools: FunctionTool[] = [
         {
           name: 'tool_a',
           description: 'Tool A',

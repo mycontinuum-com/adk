@@ -1,5 +1,10 @@
 /**
- * Quick test using Vertex AI (Gemini)
+ * Vertex AI (Gemini) debugging script
+ *
+ * Tests Gemini via Vertex AI authentication and basic functionality.
+ *
+ * Usage:
+ *   npx tsx scripts/debug-vertex.ts
  */
 
 import { z } from 'zod';
@@ -47,32 +52,39 @@ const assistant = agent({
 
 async function main() {
   console.log('Running with Vertex AI (Gemini)...\n');
-  
+
   // Create runner with only Gemini adapter (no OpenAI)
   const adapters = new Map<'gemini', typeof GeminiAdapter.prototype>();
   adapters.set('gemini', new GeminiAdapter());
-  
+
   const runner = new BaseRunner({
     adapters: adapters as any,
   });
-  
-  const session = new BaseSession('test').addMessage('What is 134 divided by 4?');
+
+  const session = new BaseSession('test').addMessage(
+    'What is 134 divided by 4?',
+  );
   const result = await runner.run(assistant, session);
-  
+
   console.log('\n--- Result ---');
   console.log('Status:', result.status);
-  
+
   // Find the assistant's response
-  const assistantEvents = result.session.events.filter(e => e.type === 'assistant');
+  const assistantEvents = result.session.events.filter(
+    (e) => e.type === 'assistant',
+  );
   const lastResponse = assistantEvents[assistantEvents.length - 1];
   if (lastResponse && 'text' in lastResponse) {
     console.log('Response:', lastResponse.text);
   }
-  
+
   // Show tool calls
-  const toolCalls = result.session.events.filter(e => e.type === 'tool_call');
+  const toolCalls = result.session.events.filter((e) => e.type === 'tool_call');
   if (toolCalls.length > 0) {
-    console.log('Tool calls:', toolCalls.map(t => ('name' in t ? t.name : 'unknown')));
+    console.log(
+      'Tool calls:',
+      toolCalls.map((t) => ('name' in t ? t.name : 'unknown')),
+    );
   }
 }
 

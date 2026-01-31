@@ -8,7 +8,7 @@ import type {
   ThoughtEvent,
   ToolCallEvent,
   ToolResultEvent,
-  Tool,
+  FunctionTool,
   StreamEvent,
 } from '../types';
 import {
@@ -416,7 +416,7 @@ describe('OpenAI serialization', () => {
 
   describe('serializeTools', () => {
     it('should serialize tools with zod schemas', () => {
-      const tools: Tool[] = [
+      const tools: FunctionTool[] = [
         {
           name: 'get_weather',
           description: 'Get weather for a city',
@@ -437,12 +437,15 @@ describe('OpenAI serialization', () => {
         description: 'Get weather for a city',
         strict: true,
       });
-      expect(result[0].parameters).toHaveProperty('properties');
-      expect(result[0].parameters.properties).toHaveProperty('city');
+      const functionTool = result[0] as { parameters: Record<string, unknown> };
+      expect(functionTool.parameters).toHaveProperty('properties');
+      expect(
+        functionTool.parameters.properties as Record<string, unknown>,
+      ).toHaveProperty('city');
     });
 
     it('should serialize multiple tools', () => {
-      const tools: Tool[] = [
+      const tools: FunctionTool[] = [
         {
           name: 'tool_a',
           description: 'Tool A',
@@ -460,8 +463,9 @@ describe('OpenAI serialization', () => {
       const result = serializeTools(tools);
 
       expect(result).toHaveLength(2);
-      expect(result[0].name).toBe('tool_a');
-      expect(result[1].name).toBe('tool_b');
+      const [tool0, tool1] = result as Array<{ name: string }>;
+      expect(tool0.name).toBe('tool_a');
+      expect(tool1.name).toBe('tool_b');
     });
 
     it('should return empty array for no tools', () => {

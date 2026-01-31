@@ -18,8 +18,8 @@ import {
   claude,
   injectSystemMessage,
   includeHistory,
-} from '@anima/adk';
-import { cli } from '@anima/adk/cli';
+} from '../src';
+import { cli } from '../src/cli';
 
 type Provider = 'openai' | 'gemini' | 'gemini-vertex' | 'claude-vertex';
 
@@ -33,9 +33,8 @@ const VERTEX_LOCATION = 'europe-west1';
 function getModel(provider: Provider) {
   switch (provider) {
     case 'openai':
-      return openai('gpt-4o-mini', {
-        // For reasoning models like o1, o3:
-        // reasoning: { effort: 'high', summary: 'detailed' },
+      return openai('gpt-5-mini', {
+        reasoning: { effort: 'high', summary: 'detailed' },
       });
 
     case 'gemini':

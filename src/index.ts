@@ -2,9 +2,9 @@ export { agent, step, sequence, parallel, loop } from './agents';
 export { tool } from './core';
 
 export {
-  createScriptedUser,
-  createHumanUser,
-  createAgentUser,
+  scriptedUser,
+  humanUser,
+  agentUser,
   AgentUserError,
   ScriptedUserExhaustedError,
   ScriptedUserNoHandlerError,
@@ -107,6 +107,25 @@ export {
 } from './core';
 
 export { buildInvocationBlocks } from './cli/blocks';
+
+export {
+  webSearch,
+  fetchPage,
+  fetchPages,
+  SerperProvider,
+  linkedInPipeline,
+  closeBrowser,
+} from './web';
+
+export type {
+  WebSearchConfig,
+  FetchPageConfig,
+  SearchProvider,
+  SearchResult,
+  FetchPageResult,
+  FetchPipeline,
+  ProxyConfig,
+} from './web';
 
 export {
   parse,

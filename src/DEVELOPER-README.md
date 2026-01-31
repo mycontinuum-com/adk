@@ -1302,14 +1302,10 @@ expect(result).toHaveStatus('completed');
 For advanced testing and CLI/eval scenarios, the ADK provides User primitives:
 
 ```typescript
-import {
-  createScriptedUser,
-  createHumanUser,
-  createAgentUser,
-} from 'modules/adk';
+import { scriptedUser, humanUser, agentUser } from 'modules/adk';
 
-// ScriptedUser - for automated testing with runner
-const scriptedUser = createScriptedUser({
+// scriptedUser - for automated testing with runner
+const user = scriptedUser({
   tools: {
     ask: [{ answer: 'yes' }, { answer: 'no' }], // Sequential responses
     confirm: (args, ctx) => ({ confirmed: true }), // Function handler
@@ -1317,16 +1313,16 @@ const scriptedUser = createScriptedUser({
   messages: ['Hello', 'Goodbye'], // For loop yields
 });
 
-const result = await runner.runWithUser(agent, session, { user: scriptedUser });
+const result = await runner.runWithUser(agent, session, { user });
 
-// HumanUser - for CLI interactive input
-const humanUser = createHumanUser({
+// humanUser - for CLI interactive input
+const human = humanUser({
   formatPrompt: (ctx) => `Enter input for ${ctx.toolName}: `,
   parseInput: (input, ctx) => JSON.parse(input),
 });
 
-// AgentUser - for eval with LLM-powered simulated users
-const agentUser = createAgentUser({
+// agentUser - for eval with LLM-powered simulated users
+const simUser = agentUser({
   loop: conversationAgent,
   tools: { ask: questionAnsweringAgent },
   bridge: { formatPrompt, formatResponse },

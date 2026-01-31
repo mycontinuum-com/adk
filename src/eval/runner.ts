@@ -1,12 +1,12 @@
 import type {
   Runnable,
-  Tool,
+  FunctionTool,
   Agent,
-  ToolHookContext,
+  FunctionToolHookContext,
   RunConfig,
   StreamResult,
 } from '../types';
-import { BaseRunner, type BaseRunnerConfig } from '../core';
+import { BaseRunner, type BaseRunnerConfig, isFunctionTool } from '../core';
 import { BaseSession } from '../session';
 import type { ToolMocks, MockToolContext } from './types';
 import { EvalToolError } from './errors';
@@ -21,7 +21,7 @@ export interface EvalRunnerConfig extends BaseRunnerConfig {
     | ((toolName: string, args: unknown) => void);
 }
 
-function isRealTool(value: unknown): value is Tool {
+function isRealTool(value: unknown): value is FunctionTool {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -38,18 +38,18 @@ interface InterceptionConfig {
   onUnmockedTool?:
     | UnmockedToolBehavior
     | ((toolName: string, args: unknown) => void);
-  originalTools: Map<string, Tool>;
+  originalTools: Map<string, FunctionTool>;
 }
 
 function createInterceptedTool<TInput, TOutput>(
-  originalTool: Tool<TInput, TOutput>,
+  originalTool: FunctionTool<TInput, TOutput>,
   config: InterceptionConfig,
-): Tool<TInput, TOutput> {
+): FunctionTool<TInput, TOutput> {
   config.originalTools.set(originalTool.name, originalTool);
 
   return {
     ...originalTool,
-    execute: async (ctx: ToolHookContext<TInput>): Promise<TOutput> => {
+    execute: async (ctx: FunctionToolHookContext<TInput>): Promise<TOutput> => {
       const mockOrTool = config.mocks[originalTool.name];
 
       if (!mockOrTool) {
@@ -74,8 +74,8 @@ function createInterceptedTool<TInput, TOutput>(
 }
 
 function handleUnmockedTool<TInput, TOutput>(
-  originalTool: Tool<TInput, TOutput>,
-  ctx: ToolHookContext<TInput>,
+  originalTool: FunctionTool<TInput, TOutput>,
+  ctx: FunctionToolHookContext<TInput>,
   config: InterceptionConfig,
 ): Promise<TOutput> {
   const behavior = config.strict
@@ -111,17 +111,20 @@ function handleUnmockedTool<TInput, TOutput>(
 }
 
 function interceptAgentTools(agent: Agent, config: InterceptionConfig): Agent {
-  if (!agent.tools || agent.tools.length === 0) {
+  const functionTools = agent.tools.filter(isFunctionTool);
+  const providerTools = agent.tools.filter((t) => !isFunctionTool(t));
+
+  if (functionTools.length === 0) {
     return agent;
   }
 
-  const interceptedTools = agent.tools.map((tool) =>
+  const interceptedTools = functionTools.map((tool) =>
     createInterceptedTool(tool, config),
   );
 
   return {
     ...agent,
-    tools: interceptedTools,
+    tools: [...interceptedTools, ...providerTools],
   };
 }
 
@@ -169,7 +172,7 @@ export class EvalRunner extends BaseRunner {
   private onUnmockedTool?:
     | UnmockedToolBehavior
     | ((toolName: string, args: unknown) => void);
-  private originalTools: Map<string, Tool> = new Map();
+  private originalTools: Map<string, FunctionTool> = new Map();
 
   constructor(config?: EvalRunnerConfig) {
     super(config);
@@ -209,7 +212,7 @@ export class EvalRunner extends BaseRunner {
     this.strict = strict;
   }
 
-  getOriginalTools(): Map<string, Tool> {
+  getOriginalTools(): Map<string, FunctionTool> {
     return this.originalTools;
   }
 }

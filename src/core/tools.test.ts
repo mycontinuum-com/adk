@@ -2,15 +2,22 @@ import { z } from 'zod';
 import { tool } from './index';
 import { BaseSession } from '../session';
 import { createStateAccessor } from '../context';
-import type { ToolContext, ToolHookContext, Tool } from '../types';
+import type {
+  ToolContext,
+  FunctionToolHookContext,
+  FunctionTool,
+} from '../types';
 
 async function runToolWithLifecycle<TInput, TOutput>(
-  t: Tool<TInput, TOutput>,
+  t: FunctionTool<TInput, TOutput>,
   args: TInput,
   ctx: ToolContext,
 ): Promise<TOutput> {
   let preparedArgs = args;
-  const hookCtx: ToolHookContext<TInput> = { ...ctx, args: preparedArgs };
+  const hookCtx: FunctionToolHookContext<TInput> = {
+    ...ctx,
+    args: preparedArgs,
+  };
 
   if (t.prepare) {
     const prepared = await t.prepare(hookCtx);
@@ -24,14 +31,16 @@ async function runToolWithLifecycle<TInput, TOutput>(
     throw new Error('Tool has no execute function');
   }
 
-  let output = await t.execute(hookCtx as ToolHookContext<TInput, never>);
+  let output = await t.execute(
+    hookCtx as FunctionToolHookContext<TInput, never>,
+  );
 
   if (t.finalize) {
     const finalizeCtx = {
       ...hookCtx,
       input: undefined as never,
       result: output,
-    } as ToolHookContext<TInput, never, TOutput>;
+    } as FunctionToolHookContext<TInput, never, TOutput>;
     const finalized = await t.finalize(finalizeCtx);
     if (finalized !== undefined) {
       output = finalized;
@@ -82,7 +91,7 @@ describe('tool', () => {
       execute: executeMock,
     });
 
-    const hookCtx = { ...mockCtx(), args: { a: 1 } } as ToolHookContext<
+    const hookCtx = { ...mockCtx(), args: { a: 1 } } as FunctionToolHookContext<
       { a: number },
       never
     >;
@@ -107,7 +116,7 @@ describe('tool', () => {
     const hookCtx = {
       ...mockCtx(session),
       args: { value: 21 },
-    } as ToolHookContext<{ value: number }, never>;
+    } as FunctionToolHookContext<{ value: number }, never>;
     await myTool.execute!(hookCtx);
     expect(session.state.session.get('computed')).toBe(42);
   });

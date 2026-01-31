@@ -3,6 +3,7 @@ export { JsonSchemaForm } from './JsonSchemaForm';
 
 import type { z } from 'zod';
 import type { Runnable, Agent } from '../../types';
+import { isFunctionTool } from '../../core/tools';
 
 export function extractYieldSchemas(
   runnable: Runnable,
@@ -11,7 +12,7 @@ export function extractYieldSchemas(
 
   function walk(r: Runnable): void {
     if (r.kind === 'agent') {
-      for (const tool of (r as Agent).tools) {
+      for (const tool of (r as Agent).tools.filter(isFunctionTool)) {
         if (tool.yieldSchema) {
           schemas.set(tool.name, tool.yieldSchema);
         }

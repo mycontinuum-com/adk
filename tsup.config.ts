@@ -6,6 +6,7 @@ export default defineConfig({
     'cli/index': 'src/cli/index.ts',
     'testing/index': 'src/testing/index.ts',
     'persistence/index': 'src/persistence/index.ts',
+    'web/index': 'src/web/index.ts',
   },
   format: ['cjs', 'esm'],
   dts: true,
@@ -21,5 +22,9 @@ export default defineConfig({
     'ink-spinner',
     'ink-text-input',
     'better-sqlite3',
+    '@mozilla/readability',
+    'jsdom',
+    'turndown',
+    'playwright',
   ],
 });

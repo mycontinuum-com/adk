@@ -74,7 +74,7 @@ export type Provider = ModelConfig['provider'];
 
 export type ToolChoice = 'auto' | 'none' | 'required' | { name: string };
 
-export interface ToolHookContext<
+export interface FunctionToolHookContext<
   TInput = unknown,
   TYield = unknown,
   TResult = unknown,
@@ -84,21 +84,49 @@ export interface ToolHookContext<
   readonly result?: TResult;
 }
 
-export interface Tool<TInput = unknown, TOutput = unknown, TYield = unknown> {
+export type ToolHookContext<
+  TInput = unknown,
+  TYield = unknown,
+  TResult = unknown,
+> = FunctionToolHookContext<TInput, TYield, TResult>;
+
+export interface FunctionTool<
+  TInput = unknown,
+  TOutput = unknown,
+  TYield = unknown,
+> {
   name: string;
   description: string;
   schema: z.ZodType<TInput>;
   yieldSchema?: z.ZodType<TYield>;
   prepare?(
-    ctx: ToolHookContext<TInput>,
+    ctx: FunctionToolHookContext<TInput>,
   ): TInput | void | Promise<TInput | void>;
-  execute?(ctx: ToolHookContext<TInput, TYield>): TOutput | Promise<TOutput>;
+  execute?(
+    ctx: FunctionToolHookContext<TInput, TYield>,
+  ): TOutput | Promise<TOutput>;
   finalize?(
-    ctx: ToolHookContext<TInput, TYield, TOutput>,
+    ctx: FunctionToolHookContext<TInput, TYield, TOutput>,
   ): TOutput | void | Promise<TOutput | void>;
   timeout?: number;
   retry?: RetryConfig;
 }
+
+export interface WebSearchTool {
+  type: 'web_search';
+  searchContextSize?: 'low' | 'medium' | 'high';
+  userLocation?: {
+    type: 'approximate';
+    country?: string;
+    city?: string;
+    region?: string;
+    timezone?: string;
+  };
+}
+
+export type ProviderTool = WebSearchTool;
+
+export type Tool = FunctionTool | ProviderTool;
 
 export interface RenderContext {
   readonly invocationId: string;
@@ -107,7 +135,8 @@ export interface RenderContext {
   readonly state: StateAccessorWithScopes;
   readonly agent: Agent;
   events: Event[];
-  tools: Tool[];
+  functionTools: FunctionTool[];
+  providerTools: ProviderTool[];
   outputSchema?: z.ZodType;
   outputMode?: OutputMode;
   toolChoice?: ToolChoice;

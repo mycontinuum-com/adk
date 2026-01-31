@@ -1,13 +1,13 @@
 export {
-  createScriptedUser,
+  scriptedUser,
   ScriptedUserExhaustedError,
   ScriptedUserNoHandlerError,
 } from './scripted';
 
-export { createHumanUser } from './human';
+export { humanUser } from './human';
 
 export {
-  createAgentUser,
+  agentUser,
   AgentUserError,
   type Bridge,
   type AgentUserConfig,

@@ -14,12 +14,13 @@ import type {
   ModelConfig,
   Event,
   RenderContext,
-  Tool,
+  FunctionTool,
   StreamEvent,
   ToolCallEvent,
   ModelUsage,
   ModelEndEvent,
   ToolChoice,
+  ProviderTool,
 } from '../types';
 import { createEventId, createCallId } from '../session';
 import { withStreamRetry } from '../core';
@@ -141,7 +142,10 @@ export class OpenAIAdapter implements ModelAdapter {
       }
       const input = serializeContext(ctx);
       const toolChoice = ctx.toolChoice ?? ctx.agent.toolChoice;
-      const serializedTools = serializeTools(ctx.tools);
+      const serializedTools = serializeTools(
+        ctx.functionTools,
+        ctx.providerTools,
+      );
       const serializedToolChoice = serializeToolChoice(
         toolChoice,
         ctx.allowedTools,
@@ -408,8 +412,11 @@ export function parseResponse(
   };
 }
 
-export function serializeTools(tools: Tool[]) {
-  return tools.map((t) => {
+export function serializeTools(
+  functionTools: FunctionTool[],
+  providerTools?: ProviderTool[],
+) {
+  const serializedFunctionTools = functionTools.map((t) => {
     const fn = zodResponsesFunction({
       name: t.name,
       description: t.description,
@@ -423,6 +430,21 @@ export function serializeTools(tools: Tool[]) {
       strict: true,
     };
   });
+
+  const serializedProviderTools = (providerTools ?? []).map((pt) => {
+    if (pt.type === 'web_search') {
+      return {
+        type: 'web_search' as const,
+        ...(pt.searchContextSize && {
+          search_context_size: pt.searchContextSize,
+        }),
+        ...(pt.userLocation && { user_location: pt.userLocation }),
+      };
+    }
+    return pt;
+  });
+
+  return [...serializedFunctionTools, ...serializedProviderTools];
 }
 
 function getOpenAIContext(

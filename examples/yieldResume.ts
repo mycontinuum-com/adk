@@ -16,8 +16,8 @@ import {
   openai,
   injectSystemMessage,
   includeHistory,
-} from '@anima/adk';
-import { cli } from '@anima/adk/cli';
+} from '../src';
+import { cli } from '../src/cli';
 
 const approvalTool = tool({
   name: 'request_approval',

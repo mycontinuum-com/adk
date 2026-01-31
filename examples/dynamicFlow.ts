@@ -18,8 +18,8 @@ import {
   injectSystemMessage,
   includeHistory,
   excludeChildInvocationEvents,
-} from '@anima/adk';
-import { cli } from '@anima/adk/cli';
+} from '../src';
+import { cli } from '../src/cli';
 
 const pythonAgent = agent({
   name: 'python_agent',

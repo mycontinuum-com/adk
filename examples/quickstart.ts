@@ -6,7 +6,7 @@ import {
   openai,
   injectSystemMessage,
   includeHistory,
-} from '@anima/adk';
+} from '../src';
 
 const calculator = tool({
   name: 'calculate',

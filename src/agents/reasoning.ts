@@ -5,7 +5,7 @@ import type {
   ToolCallEvent,
   ToolYieldEvent,
   ToolInputEvent,
-  ToolHookContext,
+  FunctionToolHookContext,
   RunConfig,
   RunResult,
   RunResultBase,
@@ -15,13 +15,14 @@ import type {
   StreamEvent,
   ErrorContext,
   InvocationOutcome,
-  Tool,
+  FunctionTool,
   Hooks,
   Runnable,
   HandoffTarget,
   TransferTarget,
   ParsedOutput,
 } from '../types';
+import { isFunctionTool } from '../core/tools';
 import type { ComposedErrorHandler, ErrorRecovery } from '../errors/types';
 import { OutputParseError } from '../errors/types';
 import { createParser } from '../parser';
@@ -45,7 +46,7 @@ import { composeErrorHandlers } from '../errors';
 
 function enrichToolCallsWithYieldFlag(
   toolCalls: ToolCallEvent[],
-  tools: Tool[],
+  tools: FunctionTool[],
 ): void {
   const yieldingToolNames = new Set(
     tools.filter((t) => t.yieldSchema).map((t) => t.name),
@@ -237,7 +238,9 @@ async function processResumedYields(
     );
     if (!toolCall) continue;
 
-    const tool = agent.tools.find((t) => t.name === yieldEvent.name);
+    const tool = agent.tools
+      .filter(isFunctionTool)
+      .find((t) => t.name === yieldEvent.name);
     if (!tool) continue;
 
     const baseToolCtx = createToolContext(
@@ -271,7 +274,7 @@ async function processResumedYields(
       userInput = parsed.data;
     }
 
-    const hookCtx: ToolHookContext = {
+    const hookCtx: FunctionToolHookContext = {
       ...baseToolCtx,
       args: yieldEvent.preparedArgs,
       input: userInput,
@@ -286,7 +289,7 @@ async function processResumedYields(
       }
 
       if (tool.finalize) {
-        const finalizeCtx: ToolHookContext = { ...hookCtx, result };
+        const finalizeCtx: FunctionToolHookContext = { ...hookCtx, result };
         const finalized = await tool.finalize(finalizeCtx);
         if (finalized !== undefined) {
           result = finalized;
@@ -364,7 +367,9 @@ async function executeToolCall(
     agentName: agent.name,
   };
 
-  const tool = agent.tools.find((t) => t.name === toolCall.name);
+  const tool = agent.tools
+    .filter(isFunctionTool)
+    .find((t) => t.name === toolCall.name);
   if (!tool) {
     return {
       event: await applyAfterTool(agent, toolCtx, {
@@ -387,7 +392,7 @@ async function executeToolCall(
   }
 
   let preparedArgs = parseResult.data;
-  const hookCtx: ToolHookContext = { ...toolCtx, args: preparedArgs };
+  const hookCtx: FunctionToolHookContext = { ...toolCtx, args: preparedArgs };
 
   if (tool.prepare) {
     const prepared = await tool.prepare(hookCtx);
@@ -467,7 +472,10 @@ async function executeToolCall(
       }
 
       if (tool.finalize) {
-        const finalizeCtx: ToolHookContext = { ...hookCtx, result: output };
+        const finalizeCtx: FunctionToolHookContext = {
+          ...hookCtx,
+          result: output,
+        };
         const finalized = await tool.finalize(finalizeCtx);
         if (finalized !== undefined) {
           output = finalized;
@@ -955,7 +963,10 @@ async function* executeAgentLoop(
       config?.onStream?.(endEvent);
       yield endEvent;
 
-      enrichToolCallsWithYieldFlag(finalStepResult.toolCalls, agent.tools);
+      enrichToolCallsWithYieldFlag(
+        finalStepResult.toolCalls,
+        agent.tools.filter(isFunctionTool),
+      );
 
       for (const event of finalStepResult.stepEvents) {
         await runnerConfig.sessionService.appendEvent(session, event);
@@ -999,7 +1010,9 @@ async function* executeAgentLoop(
 
       if (pendingCalls.length > 0) {
         for (const toolCall of pendingCalls) {
-          const tool = agent.tools.find((t) => t.name === toolCall.name);
+          const tool = agent.tools
+            .filter(isFunctionTool)
+            .find((t) => t.name === toolCall.name);
           if (!tool) continue;
 
           const baseToolCtx = createToolContext(
@@ -1014,7 +1027,7 @@ async function* executeAgentLoop(
 
           let preparedArgs = parseResult.data;
           if (tool.prepare) {
-            const hookCtx: ToolHookContext = {
+            const hookCtx: FunctionToolHookContext = {
               ...baseToolCtx,
               args: preparedArgs,
             };

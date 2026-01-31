@@ -7,7 +7,7 @@ import type {
   ThoughtEvent,
   ToolCallEvent,
   ToolResultEvent,
-  Tool,
+  FunctionTool,
   RenderContext,
 } from '../types';
 import {
@@ -36,10 +36,14 @@ function createEvent<T extends Event>(
   } as T;
 }
 
-function mockRenderContext(events: Event[], tools: Tool[] = []): RenderContext {
+function mockRenderContext(
+  events: Event[],
+  functionTools: FunctionTool[] = [],
+): RenderContext {
   return {
     events,
-    tools,
+    functionTools,
+    providerTools: [],
     invocationId: TEST_INV_ID,
     agentName: TEST_AGENT,
     session: {} as never,
@@ -446,7 +450,7 @@ describe('Claude provider', () => {
 
   describe('serializeTools', () => {
     it('should serialize tools with input_schema', () => {
-      const tools: Tool[] = [
+      const tools: FunctionTool[] = [
         {
           name: 'get_weather',
           description: 'Get weather for a city',

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { Runnable, Tool } from '../types';
+import type { Runnable } from '../types';
+import { isFunctionTool } from '../core/tools';
 
 interface FingerprintNode {
   kind: string;
@@ -16,11 +17,13 @@ function buildFingerprintTree(runnable: Runnable): FingerprintNode {
   };
 
   switch (runnable.kind) {
-    case 'agent':
-      if (runnable.tools.length > 0) {
-        base.tools = runnable.tools.map((t: Tool) => t.name).sort();
+    case 'agent': {
+      const functionTools = runnable.tools.filter(isFunctionTool);
+      if (functionTools.length > 0) {
+        base.tools = functionTools.map((t) => t.name).sort();
       }
       break;
+    }
 
     case 'sequence':
     case 'parallel':
