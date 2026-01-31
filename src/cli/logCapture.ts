@@ -88,9 +88,7 @@ function addEntry(entry: LogEntry): void {
   if (logBuffer.length > bufferSize) {
     logBuffer.shift();
   }
-  for (const listener of listeners) {
-    listener(entry);
-  }
+  listeners.forEach((listener) => listener(entry));
 }
 
 function addLog(level: LogLevel, args: unknown[]): void {
@@ -148,8 +146,8 @@ function handleStreamWrite(chunk: string | Buffer): void {
 function patchStdStreams(): void {
   process.stdout.write = ((
     chunk: string | Uint8Array,
-    encodingOrCallback?: BufferEncoding | ((err?: Error) => void),
-    callback?: (err?: Error) => void,
+    encodingOrCallback?: BufferEncoding | ((err?: Error | null) => void),
+    callback?: (err?: Error | null) => void,
   ): boolean => {
     handleStreamWrite(chunk as string | Buffer);
     if (typeof encodingOrCallback === 'function') {
@@ -160,8 +158,8 @@ function patchStdStreams(): void {
 
   process.stderr.write = ((
     chunk: string | Uint8Array,
-    encodingOrCallback?: BufferEncoding | ((err?: Error) => void),
-    callback?: (err?: Error) => void,
+    encodingOrCallback?: BufferEncoding | ((err?: Error | null) => void),
+    callback?: (err?: Error | null) => void,
   ): boolean => {
     handleStreamWrite(chunk as string | Buffer);
     if (typeof encodingOrCallback === 'function') {
@@ -172,30 +170,35 @@ function patchStdStreams(): void {
 }
 
 function subscribeToLogger(): void {
-  if (process.env.NODE_ENV === 'test') return;
-
-  try {
-    const {
-      logger,
-    } = require('../../../platform/primitives/observability/logger');
-    logger.subscribe(
-      (level: string, message: string, data?: Record<string, unknown>) => {
-        const logLevel = parsePinoLevel(level);
-        const dataStr =
-          data && Object.keys(data).length > 0
-            ? ` ${JSON.stringify(data)}`
-            : '';
-        addEntry({
-          id: globalLogId++,
-          timestamp: new Date(),
-          level: logLevel,
-          message: `${message}${dataStr}`,
-        });
-      },
-    );
-  } catch {
-    // Logger not available
-  }
+  // TODO: Re-enable when platform primitives are extracted to a shared package
+  // This function subscribes to the platform Logger for log capture integration.
+  // The logger module was part of the anima-service monorepo at:
+  // '../../../platform/primitives/observability/logger'
+  //
+  // if (process.env.NODE_ENV === 'test') return;
+  //
+  // try {
+  //   const {
+  //     logger,
+  //   } = require('@animahealth/primitives/observability/logger');
+  //   logger.subscribe(
+  //     (level: string, message: string, data?: Record<string, unknown>) => {
+  //       const logLevel = parsePinoLevel(level);
+  //       const dataStr =
+  //         data && Object.keys(data).length > 0
+  //           ? ` ${JSON.stringify(data)}`
+  //           : '';
+  //       addEntry({
+  //         id: globalLogId++,
+  //         timestamp: new Date(),
+  //         level: logLevel,
+  //         message: `${message}${dataStr}`,
+  //       });
+  //     },
+  //   );
+  // } catch {
+  //   // Logger not available
+  // }
 }
 
 export function initLogCapture(): void {
