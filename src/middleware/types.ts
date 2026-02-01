@@ -9,46 +9,47 @@ import type {
   Event,
   Session,
   Runnable,
+  StateSchema,
 } from '../types';
 
-export interface Middleware {
+export interface Middleware<S extends StateSchema = StateSchema> {
   name?: string;
 
   beforeAgent?: (
-    ctx: InvocationContext,
+    ctx: InvocationContext<S>,
   ) => string | void | Promise<string | void>;
 
   afterAgent?: (
-    ctx: InvocationContext,
+    ctx: InvocationContext<S>,
     output: string,
   ) => string | void | Promise<string | void>;
 
   beforeModel?: (
-    ctx: InvocationContext,
-    renderCtx: RenderContext,
+    ctx: InvocationContext<S>,
+    renderCtx: RenderContext<S>,
   ) => ModelStepResult | void | Promise<ModelStepResult | void>;
 
   afterModel?: (
-    ctx: InvocationContext,
+    ctx: InvocationContext<S>,
     result: ModelStepResult,
   ) => ModelStepResult | void | Promise<ModelStepResult | void>;
 
   beforeTool?: (
-    ctx: ToolContext,
+    ctx: ToolContext<S>,
     call: ToolCallEvent,
   ) => ToolResultEvent | void | Promise<ToolResultEvent | void>;
 
   afterTool?: (
-    ctx: ToolContext,
+    ctx: ToolContext<S>,
     result: ToolResultEvent,
   ) => ToolResultEvent | void | Promise<ToolResultEvent | void>;
 
   onStream?: (event: StreamEvent) => void;
 
-  onStep?: (stepEvents: Event[], session: Session, runnable: Runnable) => void;
+  onStep?: (stepEvents: Event[], session: Session<S>, runnable: Runnable<S>) => void;
 }
 
-export interface ComposedObservationHooks {
+export interface ComposedObservationHooks<S extends StateSchema = StateSchema> {
   onStream?: (event: StreamEvent) => void;
-  onStep?: (stepEvents: Event[], session: Session, runnable: Runnable) => void;
+  onStep?: (stepEvents: Event[], session: Session<S>, runnable: Runnable<S>) => void;
 }

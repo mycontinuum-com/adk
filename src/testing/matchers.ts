@@ -6,6 +6,7 @@ import type {
   StateScope,
   Session,
 } from '../types';
+import type { TypedState } from '../types/schema';
 
 declare global {
   namespace jest {
@@ -195,16 +196,14 @@ export const adkMatchers = {
   },
 
   toHaveState(
-    received:
-      | { state: { [key: string]: { get(key: string): unknown } } }
-      | Session,
+    received: Session | { state: TypedState },
     scope: StateScope,
     key: string,
     value: unknown,
   ) {
-    const session = 'state' in received ? received : received;
-    const stateAccessor = session.state[scope];
-    const actualValue = stateAccessor.get(key);
+    const session = received as { state: TypedState };
+    const stateScope = scope === 'session' ? session.state : session.state[scope];
+    const actualValue = stateScope[key];
     const pass = JSON.stringify(actualValue) === JSON.stringify(value);
 
     return {

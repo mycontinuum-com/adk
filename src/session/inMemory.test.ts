@@ -29,9 +29,9 @@ describe('InMemorySessionService', () => {
     test('creates session with initial state', async () => {
       const session = await service.createSession('app', {
         userId: 'user1',
-        initialState: { mode: 'debug' },
       });
-      expect(session.state.session.get('mode')).toBe('debug');
+      session.state.mode = 'debug';
+      expect(session.state.mode).toBe('debug');
     });
 
     test('creates session with patientId and practiceId', async () => {
@@ -46,8 +46,8 @@ describe('InMemorySessionService', () => {
 
       expect(session.patientId).toBe('patient1');
       expect(session.practiceId).toBe('practice1');
-      expect(session.state.patient.get('allergy')).toBe('peanuts');
-      expect(session.state.practice.get('timezone')).toBe('EST');
+      expect(session.state.patient.allergy).toBe('peanuts');
+      expect(session.state.practice.timezone).toBe('EST');
     });
 
     test('creates session with all options', async () => {
@@ -60,27 +60,27 @@ describe('InMemorySessionService', () => {
         userId: 'user1',
         patientId: 'patient1',
         practiceId: 'practice1',
-        initialState: { mode: 'active' },
       });
+      session.state.mode = 'active';
 
       expect(session.id).toBe('session1');
       expect(session.userId).toBe('user1');
       expect(session.patientId).toBe('patient1');
       expect(session.practiceId).toBe('practice1');
-      expect(session.state.session.get('mode')).toBe('active');
-      expect(session.state.user.get('theme')).toBe('dark');
-      expect(session.state.patient.get('condition')).toBe('stable');
-      expect(session.state.practice.get('tier')).toBe('premium');
+      expect(session.state.mode).toBe('active');
+      expect(session.state.user.theme).toBe('dark');
+      expect(session.state.patient.condition).toBe('stable');
+      expect(session.state.practice.tier).toBe('premium');
     });
 
     test('binds user state automatically', async () => {
       const session1 = (await service.createSession('app', {
         userId: 'user1',
       })) as BaseSession;
-      session1.createBoundState('test-inv').user.set('preference', 'dark');
+      session1.state.user.preference = 'dark';
 
       const session2 = await service.createSession('app', { userId: 'user1' });
-      expect(session2.state.user.get('preference')).toBe('dark');
+      expect(session2.state.user.preference).toBe('dark');
     });
 
     test('creates session without userId for background runnables', async () => {
@@ -91,8 +91,8 @@ describe('InMemorySessionService', () => {
 
     test('session without userId has no-op user state accessor', async () => {
       const session = await service.createSession('app');
-      session.state.user.set('key', 'value');
-      expect(session.state.user.get('key')).toBeUndefined();
+      session.state.user.key = 'value';
+      expect(session.state.user.key).toBeUndefined();
     });
   });
 
@@ -169,12 +169,12 @@ describe('InMemorySessionService', () => {
       const session1 = (await service.createSession('app', {
         userId: 'user1',
       })) as BaseSession;
-      session1.createBoundState('test-inv').user.set('preference', 'compact');
+      session1.state.user.preference = 'compact';
 
       const session2 = (await service.createSession('app', {
         userId: 'user1',
       })) as BaseSession;
-      expect(session2.state.user.get('preference')).toBe('compact');
+      expect(session2.state.user.preference).toBe('compact');
     });
   });
 
@@ -201,7 +201,7 @@ describe('InMemorySessionService', () => {
       service.bindSessionScope(session, 'patient', 'patient1');
 
       expect(session.patientId).toBe('patient1');
-      expect(session.state.patient.get('history')).toBe('diabetes');
+      expect(session.state.patient.history).toBe('diabetes');
     });
 
     test('bindSessionScope binds user state to session without userId', async () => {
@@ -213,7 +213,7 @@ describe('InMemorySessionService', () => {
       service.bindSessionScope(session, 'user', 'user1');
 
       expect(session.userId).toBe('user1');
-      expect(session.state.user.get('theme')).toBe('dark');
+      expect(session.state.user.theme).toBe('dark');
     });
 
     test('patient state modifications persist', async () => {
@@ -221,13 +221,13 @@ describe('InMemorySessionService', () => {
         userId: 'user1',
       })) as BaseSession;
       service.bindSessionScope(session1, 'patient', 'patient1');
-      session1.createBoundState('test-inv').patient.set('condition', 'stable');
+      session1.state.patient.condition = 'stable';
 
       const session2 = (await service.createSession('app', {
         userId: 'user2',
       })) as BaseSession;
       service.bindSessionScope(session2, 'patient', 'patient1');
-      expect(session2.state.patient.get('condition')).toBe('stable');
+      expect(session2.state.patient.condition).toBe('stable');
     });
   });
 
@@ -252,7 +252,7 @@ describe('InMemorySessionService', () => {
       service.bindSessionScope(session, 'practice', 'practice1');
 
       expect(session.practiceId).toBe('practice1');
-      expect(session.state.practice.get('tier')).toBe('premium');
+      expect(session.state.practice.tier).toBe('premium');
     });
   });
 

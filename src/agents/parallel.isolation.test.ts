@@ -13,8 +13,8 @@ describe('Parallel - Cloned Session Isolation', () => {
       description: 'Set a value',
       schema: z.object({ key: z.string(), value: z.number() }),
       execute: (ctx) => {
-        ctx.state.set(ctx.args.key, ctx.args.value);
-        stateValues.push(ctx.state.toObject());
+        ctx.state[ctx.args.key] = ctx.args.value;
+        stateValues.push({ ...ctx.state });
         return { set: true };
       },
     });
@@ -50,7 +50,7 @@ describe('Parallel - Cloned Session Isolation', () => {
     });
 
     const session = createTestSession('Test');
-    session.state.session.set('initial', 'value');
+    session.state.initial = 'value';
 
     await customRunner.run(fanout, session);
 

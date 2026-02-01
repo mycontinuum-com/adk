@@ -177,27 +177,35 @@ model: claude('claude-sonnet-4-5', {
 Sessions manage conversation history and typed state across scopes:
 
 ```typescript
-import { session, run } from '@animahealth/adk';
+import { z } from 'zod';
+import { session, run, type StateSchema } from '@animahealth/adk';
+
+// Define a schema for type-safe state
+const stateSchema = {
+  session: {
+    mode: z.enum(['triage', 'consultation']),
+    count: z.number(),
+  },
+  user: { theme: z.string() },
+} satisfies StateSchema;
 
 // Create a session
 const s = await session('my-app', { userId: 'user-123' });
 
-// Set state before running
-s.state.update({
-  session: { mode: 'triage' },
-  user: { preferences: { theme: 'dark' } },
-});
-// or
-s.state.session.set('mode', 'dark');
+// Set state with property access (session scope is default)
+s.state.mode = 'triage'; // session state
+s.state.count = 0;
+s.state.user.theme = 'dark'; // other scopes explicit
 
 // Run with the session
 const result = await run(myAgent, { session: s, input: 'Hello!' });
 
-// State scopes in tool/hook contexts
-ctx.state.set('key', value); // session scope (default)
-ctx.state.user.set('theme', 'dark'); // persists across user sessions
-ctx.state.patient.get('diagnoses'); // persists across patient encounters
-ctx.state.temp.set('scratch', data); // cleared each model step
+// State access in tool/hook contexts
+ctx.state.mode; // read session state
+ctx.state.mode = 'consultation'; // write session state
+ctx.state.user.theme; // read user state
+ctx.state.patient.id; // read patient state
+ctx.state.temp.scratch = data; // temp state (cleared each step)
 ```
 
 ### Human-in-the-Loop

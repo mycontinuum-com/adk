@@ -6,6 +6,13 @@ import type {
   RunStatus,
   ToolCallEvent,
 } from '../types';
+
+interface StateChanges {
+  session?: Record<string, unknown>;
+  user?: Record<string, unknown>;
+  patient?: Record<string, unknown>;
+  practice?: Record<string, unknown>;
+}
 import { BaseSession } from '../session';
 import { BaseRunner } from '../core';
 import { MockAdapter } from './mock/adapter';
@@ -62,12 +69,7 @@ export function result(
 }
 
 export interface TestOptions {
-  initialState?: {
-    session?: Record<string, unknown>;
-    user?: Record<string, unknown>;
-    patient?: Record<string, unknown>;
-    practice?: Record<string, unknown>;
-  };
+  initialState?: StateChanges;
   sessionId?: string;
   userId?: string;
   patientId?: string;
@@ -182,28 +184,17 @@ export async function runTest(
   });
 
   if (options?.initialState) {
-    const state = session.createBoundState('test-init');
     if (options.initialState.session) {
-      for (const [key, value] of Object.entries(options.initialState.session)) {
-        state.session.set(key, value);
-      }
+      session.state.update(options.initialState.session);
     }
     if (options.initialState.user) {
-      for (const [key, value] of Object.entries(options.initialState.user)) {
-        state.user.set(key, value);
-      }
+      session.state.user.update(options.initialState.user);
     }
     if (options.initialState.patient) {
-      for (const [key, value] of Object.entries(options.initialState.patient)) {
-        state.patient.set(key, value);
-      }
+      session.state.patient.update(options.initialState.patient);
     }
     if (options.initialState.practice) {
-      for (const [key, value] of Object.entries(
-        options.initialState.practice,
-      )) {
-        state.practice.set(key, value);
-      }
+      session.state.practice.update(options.initialState.practice);
     }
   }
 

@@ -1,33 +1,9 @@
 import type { Event, ToolCallEvent } from './events';
+import type { StateSchema, TypedState } from './schema';
 
 export type SessionStatus = 'active' | 'awaiting_input' | 'completed' | 'error';
 
-export interface StateAccessor {
-  get<T = unknown>(key: string): T | undefined;
-  getMany<K extends string>(keys: K[]): Record<K, unknown>;
-  set(key: string, value: unknown): void;
-  delete(key: string): void;
-  update(changes: Record<string, unknown>): void;
-  toObject(): Record<string, unknown>;
-}
-
-export interface StateAccessorWithScopes extends StateAccessor {
-  readonly session: StateAccessor;
-  readonly user: StateAccessor;
-  readonly patient: StateAccessor;
-  readonly practice: StateAccessor;
-  readonly temp: StateAccessor;
-}
-
-export interface SessionState {
-  session: StateAccessor;
-  user: StateAccessor;
-  patient: StateAccessor;
-  practice: StateAccessor;
-  temp: StateAccessor;
-}
-
-export interface Session {
+export interface Session<S extends StateSchema = StateSchema> {
   id: string;
   appName: string;
   readonly version?: string;
@@ -35,12 +11,12 @@ export interface Session {
   patientId?: string;
   practiceId?: string;
   readonly events: readonly Event[];
-  readonly state: SessionState;
+  readonly state: TypedState<S>;
   readonly status: SessionStatus;
   readonly pendingYieldingCalls: ToolCallEvent[];
   readonly currentAgentName: string | undefined;
-  createBoundState(invocationId: string): StateAccessorWithScopes;
   addToolResult(callId: string, result: unknown): this;
+  addMessage(text: string, invocationId?: string): this;
 }
 
 export interface SessionStoreSnapshot {
@@ -71,7 +47,6 @@ export interface CreateSessionOptions {
   patientId?: string;
   practiceId?: string;
   version?: string;
-  initialState?: Record<string, unknown>;
 }
 
 export interface SessionService {

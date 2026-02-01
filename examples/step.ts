@@ -47,7 +47,6 @@ import {
   type StateSchema,
 } from '../src';
 
-
 const processedProductSchema = z.object({
   id: z.number(),
   name: z.string(),
@@ -88,8 +87,8 @@ const authGate = step({
   name: 'auth_gate',
   description: 'Verifies user authentication before proceeding',
   execute: (ctx) => {
-    const authenticated = ctx.state.get<boolean>('authenticated');
-    const role = ctx.state.get<string>('role');
+    const authenticated = ctx.state.authenticated as boolean | undefined;
+    const role = ctx.state.role as string | undefined;
 
     if (!authenticated) {
       return ctx.fail('Authentication required. Please log in first.');
@@ -108,8 +107,8 @@ const fetchStep = step({
   description: 'Fetches product data from the database',
   execute: async (ctx) => {
     await new Promise((resolve) => setTimeout(resolve, 100));
-    ctx.state.set('rawProducts', mockDatabase.products);
-    ctx.state.set('fetchedAt', new Date().toISOString());
+    ctx.state.rawProducts = mockDatabase.products;
+    ctx.state.fetchedAt = new Date().toISOString();
   },
 });
 
@@ -118,7 +117,7 @@ const processStep = step({
   description: 'Transforms and enriches the raw data',
   execute: (ctx) => {
     const products =
-      ctx.state.get<typeof mockDatabase.products>('rawProducts') || [];
+      (ctx.state.rawProducts as typeof mockDatabase.products) || [];
 
     const processed = products.map((p) => ({
       ...p,
@@ -139,8 +138,8 @@ const processStep = step({
       },
     };
 
-    ctx.state.set('products', processed);
-    ctx.state.set('summary', summary);
+    ctx.state.products = processed;
+    ctx.state.summary = summary;
   },
 });
 
@@ -189,7 +188,7 @@ const modeRouter = step({
   name: 'mode_router',
   description: 'Routes to appropriate agent based on analysis mode',
   execute: (ctx) => {
-    const mode = ctx.state.get<string>('mode');
+    const mode = ctx.state.mode as string | undefined;
 
     switch (mode) {
       case 'analyze':

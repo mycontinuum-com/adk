@@ -16,53 +16,54 @@ import type {
   Event,
   OutputConfig,
   ToolChoice,
+  StateSchema,
 } from '../types';
 import type { Middleware } from '../middleware/types';
 import type { ErrorHandler } from '../errors/types';
 
-export interface AgentConfig<TOutput = unknown> {
+export interface AgentConfig<TOutput = unknown, S extends StateSchema = StateSchema> {
   name: string;
   description?: string;
   model: ModelConfig;
-  context: ContextRenderer[];
-  tools?: Tool[];
-  output?: OutputConfig<TOutput>;
+  context: ContextRenderer<S>[];
+  tools?: Tool<S>[];
+  output?: OutputConfig<TOutput, S>;
   toolChoice?: ToolChoice;
   maxSteps?: number;
-  hooks?: Hooks;
-  middleware?: Middleware[];
+  hooks?: Hooks<S>;
+  middleware?: Middleware<S>[];
   errorHandlers?: ErrorHandler[];
 }
 
-export interface SequenceConfig {
+export interface SequenceConfig<S extends StateSchema = StateSchema> {
   name: string;
   description?: string;
-  runnables: Runnable[];
+  runnables: Runnable<S>[];
 }
 
-export interface ParallelConfig {
+export interface ParallelConfig<S extends StateSchema = StateSchema> {
   name: string;
   description?: string;
-  runnables: Runnable[];
-  merge?: (ctx: ParallelMergeContext) => Event[];
+  runnables: Runnable<S>[];
+  merge?: (ctx: ParallelMergeContext<S>) => Event[];
   failFast?: boolean;
   branchTimeout?: number;
   minSuccessful?: number;
 }
 
-export interface LoopConfig {
+export interface LoopConfig<S extends StateSchema = StateSchema> {
   name: string;
   description?: string;
-  runnable: Runnable;
+  runnable: Runnable<S>;
   maxIterations: number;
-  while: (ctx: LoopContext) => boolean | Promise<boolean>;
+  while: (ctx: LoopContext<S>) => boolean | Promise<boolean>;
   yields?: boolean;
 }
 
-export interface StepConfig {
+export interface StepConfig<S extends StateSchema = StateSchema> {
   name: string;
   description?: string;
-  execute: (ctx: StepContext) => StepResult | Promise<StepResult>;
+  execute: (ctx: StepContext<S>) => StepResult<S> | Promise<StepResult<S>>;
 }
 
 /**
@@ -84,9 +85,9 @@ export interface StepConfig {
  *   tools: [myTool],
  * });
  */
-export function agent<TOutput = unknown>(
-  config: AgentConfig<TOutput>,
-): Agent<TOutput> {
+export function agent<TOutput = unknown, S extends StateSchema = StateSchema>(
+  config: AgentConfig<TOutput, S>,
+): Agent<TOutput, S> {
   return {
     kind: 'agent',
     name: config.name,
@@ -115,7 +116,9 @@ export function agent<TOutput = unknown>(
  *   runnables: [fetchStep, analyzerAgent, summarizerAgent],
  * });
  */
-export function sequence(config: SequenceConfig): Sequence {
+export function sequence<S extends StateSchema = StateSchema>(
+  config: SequenceConfig<S>,
+): Sequence<S> {
   return {
     kind: 'sequence',
     name: config.name,
@@ -141,7 +144,9 @@ export function sequence(config: SequenceConfig): Sequence {
  *   minSuccessful: 2,
  * });
  */
-export function parallel(config: ParallelConfig): Parallel {
+export function parallel<S extends StateSchema = StateSchema>(
+  config: ParallelConfig<S>,
+): Parallel<S> {
   return {
     kind: 'parallel',
     name: config.name,
@@ -170,10 +175,12 @@ export function parallel(config: ParallelConfig): Parallel {
  *   runnable: chatAgent,
  *   maxIterations: 100,
  *   yields: true,
- *   while: (ctx) => !ctx.state.get('exitRequested'),
+ *   while: (ctx) => !ctx.state.exitRequested,
  * });
  */
-export function loop(config: LoopConfig): Loop {
+export function loop<S extends StateSchema = StateSchema>(
+  config: LoopConfig<S>,
+): Loop<S> {
   return {
     kind: 'loop',
     name: config.name,
@@ -202,8 +209,7 @@ export function loop(config: LoopConfig): Loop {
  * const loadData = step({
  *   name: 'load_data',
  *   execute: async (ctx) => {
- *     const data = await fetchFromAPI();
- *     ctx.state.set('data', data);
+ *     ctx.state.data = await fetchFromAPI();
  *   },
  * });
  *
@@ -211,7 +217,7 @@ export function loop(config: LoopConfig): Loop {
  * const authGate = step({
  *   name: 'auth_gate',
  *   execute: (ctx) => {
- *     if (!ctx.state.get('authenticated')) {
+ *     if (!ctx.state.authenticated) {
  *       return ctx.fail('Not authenticated');
  *     }
  *   },
@@ -221,14 +227,15 @@ export function loop(config: LoopConfig): Loop {
  * const priorityRouter = step({
  *   name: 'priority_router',
  *   execute: (ctx) => {
- *     const priority = ctx.state.get('priority');
- *     if (priority === 'urgent') return urgentAgent;
- *     if (priority === 'normal') return normalAgent;
+ *     if (ctx.state.priority === 'urgent') return urgentAgent;
+ *     if (ctx.state.priority === 'normal') return normalAgent;
  *     return ctx.respond('Unknown priority');
  *   },
  * });
  */
-export function step(config: StepConfig): Step {
+export function step<S extends StateSchema = StateSchema>(
+  config: StepConfig<S>,
+): Step<S> {
   return {
     kind: 'step',
     name: config.name,

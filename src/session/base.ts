@@ -6,9 +6,7 @@ import type {
   Event,
   UserEvent,
   StateChangeEvent,
-  SessionState,
-  StateAccessor,
-  StateAccessorWithScopes,
+  StateChangeSource,
   StateScope,
   ToolCallEvent,
   ToolYieldEvent,
@@ -18,6 +16,7 @@ import type {
   InvocationYieldEvent,
   InvocationResumeEvent,
 } from '../types';
+import type { StateSchema, TypedState, ScopeState } from '../types/schema';
 import {
   snapshotAt,
   findEventIndex,
@@ -83,49 +82,105 @@ function computeStateFromEvents(
   }, {});
 }
 
-function createStateAccessor(
-  getState: () => Record<string, unknown>,
-  setState: (key: string, oldValue: unknown, newValue: unknown) => void,
-  validateWrite?: () => void,
-): StateAccessor {
-  return {
-    get<T = unknown>(key: string): T | undefined {
-      return getState()[key] as T | undefined;
-    },
-    getMany<K extends string>(keys: K[]): Record<K, unknown> {
-      const state = getState();
-      return Object.fromEntries(keys.map((k) => [k, state[k]])) as Record<
-        K,
-        unknown
-      >;
-    },
-    set(key: string, value: unknown): void {
-      validateWrite?.();
-      const current = getState();
-      const oldValue = current[key];
-      if (isEqual(oldValue, value)) return;
-      setState(key, oldValue, value);
-    },
-    delete(key: string): void {
-      validateWrite?.();
-      const current = getState();
-      const oldValue = current[key];
-      if (oldValue === undefined) return;
-      setState(key, oldValue, undefined);
-    },
-    update(changes: Record<string, unknown>): void {
-      validateWrite?.();
-      const current = getState();
-      for (const [key, newValue] of Object.entries(changes)) {
-        const oldValue = current[key];
-        if (isEqual(oldValue, newValue)) continue;
-        setState(key, oldValue, newValue);
+interface ScopeProxyConfig {
+  scopeName: StateScope;
+  getStorage: () => Record<string, unknown>;
+  onChange: (key: string, oldValue: unknown, newValue: unknown) => void;
+  onRead?: (key: string, value: unknown) => void;
+}
+
+function createScopeProxy<T extends Record<string, unknown>>(
+  config: ScopeProxyConfig,
+): T {
+  const { scopeName, getStorage, onChange, onRead } = config;
+
+  const updateFn = (changes: Record<string, unknown>) => {
+    const storage = getStorage();
+    for (const [key, newValue] of Object.entries(changes)) {
+      const oldValue = storage[key];
+      if (isEqual(oldValue, newValue)) continue;
+
+      if (newValue === undefined) {
+        delete storage[key];
+      } else {
+        storage[key] = newValue;
       }
-    },
-    toObject(): Record<string, unknown> {
-      return { ...getState() };
-    },
+
+      onChange(key, oldValue, newValue);
+    }
   };
+
+  return new Proxy({} as T, {
+    get(_target, prop: string | symbol) {
+      if (typeof prop === 'symbol') return undefined;
+      if (prop === 'update') return updateFn;
+      const storage = getStorage();
+      const value = storage[prop];
+      onRead?.(prop, value);
+      return value;
+    },
+
+    set(_target, prop: string | symbol, value: unknown) {
+      if (typeof prop === 'symbol') return false;
+      if (prop === 'update') return false;
+      const storage = getStorage();
+      const oldValue = storage[prop];
+      if (isEqual(oldValue, value)) return true;
+
+      if (value === undefined) {
+        delete storage[prop];
+      } else {
+        storage[prop] = value;
+      }
+
+      onChange(prop, oldValue, value);
+      return true;
+    },
+
+    deleteProperty(_target, prop: string | symbol) {
+      if (typeof prop === 'symbol') return false;
+      const storage = getStorage();
+      const oldValue = storage[prop];
+      if (oldValue === undefined) return true;
+      delete storage[prop];
+      onChange(String(prop), oldValue, undefined);
+      return true;
+    },
+
+    has(_target, prop: string | symbol) {
+      if (typeof prop === 'symbol') return false;
+      if (prop === 'update') return true;
+      const storage = getStorage();
+      return prop in storage;
+    },
+
+    ownKeys() {
+      const storage = getStorage();
+      return Object.keys(storage);
+    },
+
+    getOwnPropertyDescriptor(_target, prop: string | symbol) {
+      if (typeof prop === 'symbol') return undefined;
+      if (prop === 'update') {
+        return {
+          enumerable: false,
+          configurable: true,
+          value: updateFn,
+          writable: false,
+        };
+      }
+      const storage = getStorage();
+      if (prop in storage) {
+        return {
+          enumerable: true,
+          configurable: true,
+          value: storage[prop],
+          writable: true,
+        };
+      }
+      return undefined;
+    },
+  });
 }
 
 interface SharedStateBinding {
@@ -300,30 +355,6 @@ export class BaseSession implements Session {
     );
   }
 
-  setSessionState(key: string, value: unknown, invocationId: string): void {
-    if (!invocationId) {
-      throw new Error(
-        'invocationId is required to set session state. Use session.createBoundState(invocationId) for state access.',
-      );
-    }
-
-    const currentState = computeStateFromEvents(this._events, 'session');
-    const oldValue = currentState[key];
-    if (isEqual(oldValue, value)) return;
-
-    const event: StateChangeEvent = {
-      id: randomUUID(),
-      type: 'state_change',
-      scope: 'session',
-      source: 'mutation',
-      createdAt: Date.now(),
-      invocationId,
-      changes: [{ key, oldValue, newValue: value }],
-    };
-    this.appendEvent(event);
-    this.stateChangeCallback?.(event);
-  }
-
   private getLastRecordedValue(
     scope: StateScope,
     key: string,
@@ -340,20 +371,16 @@ export class BaseSession implements Session {
     return undefined;
   }
 
-  private createSharedAccessor(
+  private createSharedScopeProxy<T extends Record<string, unknown>>(
     scope: 'user' | 'patient' | 'practice',
     invocationId?: string,
-  ): StateAccessor {
+    writeSource: StateChangeSource = 'direct',
+  ): T {
     const binding = this.sharedStates.get(scope);
-    if (!binding) {
-      return createStateAccessor(
-        () => ({}),
-        () => {},
-      );
-    }
+    const emptyStorage: Record<string, unknown> = {};
 
     const logStateChange = (
-      source: 'observation' | 'mutation',
+      source: StateChangeSource,
       key: string,
       oldValue: unknown,
       newValue: unknown,
@@ -371,127 +398,61 @@ export class BaseSession implements Session {
       this.stateChangeCallback?.(event);
     };
 
-    const logObservation = (key: string, currentValue: unknown) => {
-      if (!invocationId) return;
-      const lastValue = this.getLastRecordedValue(scope, key);
-      if (lastValue === currentValue) return;
-      logStateChange('observation', key, lastValue, currentValue);
-    };
-
-    const logMutation = (key: string, oldValue: unknown, newValue: unknown) => {
-      logStateChange('mutation', key, oldValue, newValue);
-    };
-
-    const requireInvocationId = () => {
-      if (!invocationId) {
-        throw new Error(
-          `Cannot modify ${scope} state without invocationId. Use session.createBoundState(invocationId) instead.`,
-        );
-      }
-    };
-
-    return {
-      get<T = unknown>(key: string): T | undefined {
-        const value = binding.ref[key] as T | undefined;
-        logObservation(key, value);
-        return value;
+    return createScopeProxy<T>({
+      scopeName: scope,
+      getStorage: () => binding?.ref ?? emptyStorage,
+      onChange: (key, oldValue, newValue) => {
+        logStateChange(writeSource, key, oldValue, newValue);
+        binding?.onChange?.(key, newValue);
       },
-      getMany<K extends string>(keys: K[]): Record<K, unknown> {
-        const result = {} as Record<K, unknown>;
-        for (const key of keys) {
-          const value = binding.ref[key];
-          logObservation(key, value);
-          result[key] = value;
-        }
-        return result;
-      },
-      set(key: string, value: unknown): void {
-        requireInvocationId();
-        const oldValue = binding.ref[key];
-        if (isEqual(oldValue, value)) return;
-
-        logMutation(key, oldValue, value);
-
-        if (value === undefined) {
-          delete binding.ref[key];
-        } else {
-          binding.ref[key] = value;
-        }
-        binding.onChange?.(key, value);
-      },
-      delete(key: string): void {
-        requireInvocationId();
-        const oldValue = binding.ref[key];
-        if (oldValue === undefined) return;
-
-        logMutation(key, oldValue, undefined);
-
-        delete binding.ref[key];
-        binding.onChange?.(key, undefined);
-      },
-      update(changes: Record<string, unknown>): void {
-        requireInvocationId();
-        for (const [key, newValue] of Object.entries(changes)) {
-          const oldValue = binding.ref[key];
-          if (isEqual(oldValue, newValue)) continue;
-
-          logMutation(key, oldValue, newValue);
-
-          if (newValue === undefined) {
-            delete binding.ref[key];
-          } else {
-            binding.ref[key] = newValue;
+      onRead: invocationId
+        ? (key, currentValue) => {
+            const lastValue = this.getLastRecordedValue(scope, key);
+            if (lastValue !== currentValue) {
+              logStateChange('observation', key, lastValue, currentValue);
+            }
           }
-          binding.onChange?.(key, newValue);
-        }
-      },
-      toObject(): Record<string, unknown> {
-        return { ...binding.ref };
-      },
-    };
+        : undefined,
+    });
   }
 
-  get state(): SessionState {
-    const throwTempUnbound = (): Record<string, unknown> => {
-      throw new Error(
-        'Cannot access temp state without invocationId. Use session.createBoundState(invocationId) instead.',
-      );
-    };
+  private _sessionStateCache: Record<string, unknown> | null = null;
 
-    const throwSessionWriteUnbound = (): void => {
-      throw new Error(
-        'Cannot modify session state without invocationId. Use session.createBoundState(invocationId) instead.',
-      );
-    };
-
-    return {
-      session: createStateAccessor(
-        () => computeStateFromEvents(this._events, 'session'),
-        throwSessionWriteUnbound,
-        throwSessionWriteUnbound,
-      ),
-      user: this.createSharedAccessor('user'),
-      patient: this.createSharedAccessor('patient'),
-      practice: this.createSharedAccessor('practice'),
-      temp: createStateAccessor(throwTempUnbound, throwTempUnbound),
-    };
-  }
-
-  createBoundState(invocationId: string): StateAccessorWithScopes {
-    if (!invocationId) {
-      throw new Error(
-        'invocationId is required to create bound state accessor.',
-      );
+  private getSessionState(): Record<string, unknown> {
+    if (!this._sessionStateCache) {
+      this._sessionStateCache = computeStateFromEvents(this._events, 'session');
     }
+    return this._sessionStateCache;
+  }
 
-    const sessionAccessor = createStateAccessor(
-      () => computeStateFromEvents(this._events, 'session'),
-      (key, oldValue, newValue) => {
+  private invalidateSessionStateCache(): void {
+    this._sessionStateCache = null;
+  }
+
+  get state(): TypedState {
+    return this.createTypedState();
+  }
+
+  private createTypedState<S extends StateSchema = StateSchema>(
+    invocationId?: string,
+    writeSource: StateChangeSource = 'direct',
+  ): TypedState<S> {
+    const sessionProxy = createScopeProxy<ScopeState<S['session']>>({
+      scopeName: 'session',
+      getStorage: () => this.getSessionState(),
+      onChange: (key, oldValue, newValue) => {
+        const storage = this.getSessionState();
+        if (newValue === undefined) {
+          delete storage[key];
+        } else {
+          storage[key] = newValue;
+        }
+
         const event: StateChangeEvent = {
           id: randomUUID(),
           type: 'state_change',
           scope: 'session',
-          source: 'mutation',
+          source: writeSource,
           createdAt: Date.now(),
           invocationId,
           changes: [{ key, oldValue, newValue }],
@@ -499,49 +460,95 @@ export class BaseSession implements Session {
         this.appendEvent(event);
         this.stateChangeCallback?.(event);
       },
-    );
+    });
 
-    const userAccessor = this.createSharedAccessor('user', invocationId);
-    const patientAccessor = this.createSharedAccessor('patient', invocationId);
-    const practiceAccessor = this.createSharedAccessor(
+    const userProxy = this.createSharedScopeProxy<ScopeState<S['user']>>(
+      'user',
+      invocationId,
+      writeSource,
+    );
+    const patientProxy = this.createSharedScopeProxy<ScopeState<S['patient']>>(
+      'patient',
+      invocationId,
+      writeSource,
+    );
+    const practiceProxy = this.createSharedScopeProxy<ScopeState<S['practice']>>(
       'practice',
       invocationId,
-    );
-    const tempAccessor = createStateAccessor(
-      () => this.getTempScopeForInvocation(invocationId),
-      (key, _oldValue, newValue) => {
-        const scope = this.getTempScopeForInvocation(invocationId);
-        if (newValue === undefined) {
-          delete scope[key];
-        } else {
-          scope[key] = newValue;
-        }
-      },
+      writeSource,
     );
 
-    return {
-      get: sessionAccessor.get.bind(sessionAccessor),
-      getMany: sessionAccessor.getMany.bind(sessionAccessor),
-      set: sessionAccessor.set.bind(sessionAccessor),
-      delete: sessionAccessor.delete.bind(sessionAccessor),
-      update: sessionAccessor.update.bind(sessionAccessor),
-      toObject: sessionAccessor.toObject.bind(sessionAccessor),
-      get session() {
-        return sessionAccessor;
+    const tempProxy = createScopeProxy<ScopeState<S['temp']>>({
+      scopeName: 'temp',
+      getStorage: () => {
+        if (!invocationId) {
+          throw new Error(
+            'Temp state requires an invocation context. Use ctx.state.temp inside tools or hooks.',
+          );
+        }
+        return this.getTempScopeForInvocation(invocationId);
       },
-      get user() {
-        return userAccessor;
-      },
-      get patient() {
-        return patientAccessor;
-      },
-      get practice() {
-        return practiceAccessor;
-      },
-      get temp() {
-        return tempAccessor;
-      },
+      onChange: () => {},
+    });
+
+    const scopes = {
+      user: userProxy,
+      patient: patientProxy,
+      practice: practiceProxy,
+      temp: tempProxy,
     };
+
+    return new Proxy(scopes as TypedState<S>, {
+      get(target, prop: string | symbol) {
+        if (typeof prop === 'symbol') return undefined;
+        if (prop in scopes) {
+          return scopes[prop as keyof typeof scopes];
+        }
+        return sessionProxy[prop as keyof typeof sessionProxy];
+      },
+      set(_target, prop: string | symbol, value: unknown) {
+        if (typeof prop === 'symbol') return false;
+        if (prop in scopes) return false;
+        (sessionProxy as Record<string, unknown>)[prop as string] = value;
+        return true;
+      },
+      has(target, prop: string | symbol) {
+        if (typeof prop === 'symbol') return false;
+        if (prop in scopes) return true;
+        return prop in sessionProxy;
+      },
+      ownKeys() {
+        return Object.keys(sessionProxy);
+      },
+      getOwnPropertyDescriptor(target, prop: string | symbol) {
+        if (typeof prop === 'symbol') return undefined;
+        if (prop in scopes) {
+          return {
+            enumerable: false,
+            configurable: true,
+            value: scopes[prop as keyof typeof scopes],
+            writable: false,
+          };
+        }
+        const value = sessionProxy[prop as keyof typeof sessionProxy];
+        if (value !== undefined || prop in sessionProxy) {
+          return {
+            enumerable: true,
+            configurable: true,
+            value,
+            writable: true,
+          };
+        }
+        return undefined;
+      },
+    });
+  }
+
+  boundState<S extends StateSchema = StateSchema>(invocationId: string): TypedState<S> {
+    if (!invocationId) {
+      throw new Error('invocationId is required for bound state.');
+    }
+    return this.createTypedState<S>(invocationId, 'mutation');
   }
 
   onStateChange(callback: (event: StateChangeEvent) => void): this {
@@ -759,10 +766,10 @@ export class BaseSession implements Session {
       practiceId: this.practiceId,
       createdAt: this.createdAt,
       events: [...this._events],
-      state: this.state.session.toObject(),
-      userState: this.state.user.toObject(),
-      patientState: this.state.patient.toObject(),
-      practiceState: this.state.practice.toObject(),
+      state: { ...this.state },
+      userState: { ...this.state.user },
+      patientState: { ...this.state.patient },
+      practiceState: { ...this.state.practice },
     };
   }
 

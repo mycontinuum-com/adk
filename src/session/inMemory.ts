@@ -65,8 +65,7 @@ export class InMemorySessionService implements SessionService {
     appName: string,
     options?: CreateSessionOptions,
   ): Promise<Session> {
-    const { sessionId, userId, patientId, practiceId, initialState, version } =
-      options ?? {};
+    const { sessionId, userId, patientId, practiceId, version } = options ?? {};
     const session = new BaseSession(appName, {
       id: sessionId,
       userId,
@@ -79,10 +78,6 @@ export class InMemorySessionService implements SessionService {
     this.bindScope(session, 'patient', patientId);
     this.bindScope(session, 'practice', practiceId);
 
-    if (initialState && Object.keys(initialState).length > 0) {
-      const state = session.createBoundState('__session_init__');
-      state.session.update(initialState);
-    }
     this.sessions.set(this.sessionKey(appName, session.id), session);
     return session;
   }

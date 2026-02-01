@@ -67,11 +67,11 @@ function matchesStateCondition(
     }
 
     const stateAccessor =
-      scope === 'session' ? session.state.session : session.state[scope];
+      scope === 'session' ? session.state : session.state[scope];
     const conditionObj = conditions as Record<string, unknown>;
 
     for (const [key, expected] of Object.entries(conditionObj)) {
-      const value = stateAccessor.get(key);
+      const value = stateAccessor[key];
 
       if (typeof expected === 'object' && expected !== null) {
         const op = expected as Record<string, unknown>;
@@ -262,7 +262,18 @@ async function handleYield(
   );
 
   if (Object.keys(stateChanges).length > 0) {
-    mainSession.state.update(stateChanges);
+    if (stateChanges.session) {
+      mainSession.state.update(stateChanges.session);
+    }
+    if (stateChanges.user) {
+      mainSession.state.user.update(stateChanges.user);
+    }
+    if (stateChanges.patient) {
+      mainSession.state.patient.update(stateChanges.patient);
+    }
+    if (stateChanges.practice) {
+      mainSession.state.practice.update(stateChanges.practice);
+    }
   }
 
   const response = await bridge.formatResponse(

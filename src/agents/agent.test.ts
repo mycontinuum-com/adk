@@ -473,7 +473,7 @@ describe('structured output', () => {
       }),
     ]);
 
-    expect(session.state.session.get('currentProduct')).toEqual({
+    expect(session.state.currentProduct).toEqual({
       name: 'Tool',
       price: 15.0,
       inStock: true,
@@ -488,7 +488,7 @@ describe('tool state modification', () => {
       description: 'Set state',
       schema: z.object({ v: z.number() }),
       execute: (ctx) => {
-        ctx.state.set('val', ctx.args.v);
+        ctx.state.val = ctx.args.v;
         return { set: true };
       },
     });

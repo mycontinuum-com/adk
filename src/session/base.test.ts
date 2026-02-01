@@ -90,8 +90,7 @@ describe('BaseSession', () => {
         practiceId: 'practice1',
       });
       original.addMessage('Hello');
-      const state = original.createBoundState('test-inv');
-      state.session.set('key', 'value');
+      original.state.key = 'value';
 
       const cloned = original.clone();
 
@@ -99,9 +98,7 @@ describe('BaseSession', () => {
       expect(cloned.userId).toBe(original.userId);
       expect(cloned.events).toHaveLength(original.events.length);
       expect(cloned.events).not.toBe(original.events);
-      expect(cloned.createBoundState('test-inv').session.get('key')).toBe(
-        'value',
-      );
+      expect(cloned.state.key).toBe('value');
     });
 
     test('cloned session events are independent', () => {
@@ -117,50 +114,61 @@ describe('BaseSession', () => {
   });
 
   describe('session state', () => {
-    test('set and get state values via bound state', () => {
+    test('set and get state values via property access', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('test-inv');
-      state.session.set('key', 'value');
-      expect(state.session.get('key')).toBe('value');
+      session.state.key = 'value';
+      expect(session.state.key).toBe('value');
     });
 
     test('get returns undefined for missing keys', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('test-inv');
-      expect(state.session.get('missing')).toBeUndefined();
+      expect(session.state.missing).toBeUndefined();
     });
 
-    test('update sets multiple values', () => {
+    test('Object.assign sets multiple values', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('test-inv');
-      state.session.update({ a: 1, b: 2, c: 3 });
+      Object.assign(session.state, { a: 1, b: 2, c: 3 });
 
-      expect(state.session.get('a')).toBe(1);
-      expect(state.session.get('b')).toBe(2);
-      expect(state.session.get('c')).toBe(3);
+      expect(session.state.a).toBe(1);
+      expect(session.state.b).toBe(2);
+      expect(session.state.c).toBe(3);
     });
 
-    test('delete removes values', () => {
+    test('setting undefined removes values', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('test-inv');
-      state.session.set('key', 'value');
-      state.session.delete('key');
+      session.state.key = 'value';
+      session.state.key = undefined;
 
-      expect(state.session.get('key')).toBeUndefined();
+      expect(session.state.key).toBeUndefined();
     });
 
-    test('toObject returns state snapshot', () => {
+    test('spread returns state snapshot', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('test-inv');
-      state.session.update({ a: 1, b: 'two' });
+      Object.assign(session.state, { a: 1, b: 'two' });
 
-      expect(state.session.toObject()).toEqual({ a: 1, b: 'two' });
+      expect({ ...session.state }).toEqual({ a: 1, b: 'two' });
     });
 
-    test('state changes create events', () => {
+    test('direct state changes use direct source', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('test-inv');
-      state.session.set('key', 'value');
+      session.state.key = 'value';
+
+      const stateEvents = session.events.filter(
+        (e) => e.type === 'state_change',
+      );
+      expect(stateEvents).toHaveLength(1);
+      expect(stateEvents[0]).toMatchObject({
+        type: 'state_change',
+        scope: 'session',
+        source: 'direct',
+        changes: [{ key: 'key', oldValue: undefined, newValue: 'value' }],
+      });
+    });
+
+    test('bound state changes use mutation source', () => {
+      const session = new BaseSession('app', { id: 'test' });
+      const state = session.boundState('test-inv');
+      state.key = 'value';
 
       const stateEvents = session.events.filter(
         (e) => e.type === 'state_change',
@@ -170,15 +178,15 @@ describe('BaseSession', () => {
         type: 'state_change',
         scope: 'session',
         source: 'mutation',
+        invocationId: 'test-inv',
         changes: [{ key: 'key', oldValue: undefined, newValue: 'value' }],
       });
     });
 
     test('no event when setting same value', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('test-inv');
-      state.session.set('key', 'value');
-      state.session.set('key', 'value');
+      session.state.key = 'value';
+      session.state.key = 'value';
 
       const stateEvents = session.events.filter(
         (e) => e.type === 'state_change',
@@ -188,57 +196,32 @@ describe('BaseSession', () => {
 
     test('state is computed from events (event-sourced)', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('test-inv');
-      state.session.set('a', 1);
-      state.session.set('b', 2);
-      state.session.set('a', 10);
-      state.session.delete('b');
+      session.state.a = 1;
+      session.state.b = 2;
+      session.state.a = 10;
+      session.state.b = undefined;
 
-      expect(state.session.toObject()).toEqual({ a: 10 });
-    });
-
-    test('unbound session.state throws on write', () => {
-      const session = new BaseSession('app', { id: 'test' });
-      expect(() => session.state.session.set('key', 'value')).toThrow(
-        'Cannot modify session state without invocationId',
-      );
-    });
-
-    test('unbound session.state.session throws on all write methods', () => {
-      const session = new BaseSession('app', { id: 'test' });
-      expect(() => session.state.session.set('key', 'value')).toThrow();
-      expect(() => session.state.session.update({ key: 'value' })).toThrow();
-      expect(() => session.state.session.delete('key')).toThrow();
-    });
-
-    test('unbound session.state.session allows read operations', () => {
-      const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('init');
-      state.session.set('key', 'value');
-
-      expect(session.state.session.get('key')).toBe('value');
-      expect(session.state.session.toObject()).toEqual({ key: 'value' });
-      expect(session.state.session.getMany(['key'])).toEqual({ key: 'value' });
+      expect({ ...session.state }).toEqual({ a: 10 });
     });
   });
 
   describe('temp state', () => {
-    test('temp state is scoped to invocation via createBoundState', () => {
+    test('temp state is scoped to invocation via boundState', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state1 = session.createBoundState('inv-1');
-      state1.temp.set('key', 'value');
-      expect(state1.temp.get('key')).toBe('value');
+      const state1 = session.boundState('inv-1');
+      state1.temp.key = 'value';
+      expect(state1.temp.key).toBe('value');
 
-      const state2 = session.createBoundState('inv-2');
-      expect(state2.temp.get('key')).toBeUndefined();
+      const state2 = session.boundState('inv-2');
+      expect(state2.temp.key).toBeUndefined();
 
-      expect(state1.temp.get('key')).toBe('value');
+      expect(state1.temp.key).toBe('value');
     });
 
     test('temp state is not logged as events', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('inv-1');
-      state.temp.set('key', 'value');
+      const state = session.boundState('inv-1');
+      state.temp.key = 'value';
 
       const stateEvents = session.events.filter(
         (e) => e.type === 'state_change',
@@ -248,94 +231,90 @@ describe('BaseSession', () => {
 
     test('clearTempState clears specific invocation scope', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('inv-1');
-      state.temp.set('key', 'value');
-      expect(state.temp.get('key')).toBe('value');
+      const state = session.boundState('inv-1');
+      state.temp.key = 'value';
+      expect(state.temp.key).toBe('value');
 
       session.clearTempState('inv-1');
-      expect(state.temp.get('key')).toBeUndefined();
+      expect(state.temp.key).toBeUndefined();
     });
 
     test('clearTempState without invocationId clears all scopes', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state1 = session.createBoundState('inv-1');
-      state1.temp.set('key1', 'value1');
-      const state2 = session.createBoundState('inv-2');
-      state2.temp.set('key2', 'value2');
+      const state1 = session.boundState('inv-1');
+      state1.temp.key1 = 'value1';
+      const state2 = session.boundState('inv-2');
+      state2.temp.key2 = 'value2';
 
       session.clearTempState();
 
-      expect(state1.temp.get('key1')).toBeUndefined();
-      expect(state2.temp.get('key2')).toBeUndefined();
+      expect(state1.temp.key1).toBeUndefined();
+      expect(state2.temp.key2).toBeUndefined();
     });
 
     test('inheritTempState copies parent state to child', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const parentState = session.createBoundState('parent');
-      parentState.temp.set('shared', 'data');
-      parentState.temp.set('config', 'value');
+      const parentState = session.boundState('parent');
+      parentState.temp.shared = 'data';
+      parentState.temp.config = 'value';
 
       session.inheritTempState('parent', 'child');
 
-      const childState = session.createBoundState('child');
-      expect(childState.temp.get('shared')).toBe('data');
-      expect(childState.temp.get('config')).toBe('value');
+      const childState = session.boundState('child');
+      expect(childState.temp.shared).toBe('data');
+      expect(childState.temp.config).toBe('value');
     });
 
     test('inheritTempState merges overrides on top of parent state', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const parentState = session.createBoundState('parent');
-      parentState.temp.set('shared', 'data');
-      parentState.temp.set('config', 'original');
+      const parentState = session.boundState('parent');
+      parentState.temp.shared = 'data';
+      parentState.temp.config = 'original';
 
       session.inheritTempState('parent', 'child', {
         config: 'overridden',
         extra: 'new',
       });
 
-      const childState = session.createBoundState('child');
-      expect(childState.temp.get('shared')).toBe('data');
-      expect(childState.temp.get('config')).toBe('overridden');
-      expect(childState.temp.get('extra')).toBe('new');
+      const childState = session.boundState('child');
+      expect(childState.temp.shared).toBe('data');
+      expect(childState.temp.config).toBe('overridden');
+      expect(childState.temp.extra).toBe('new');
     });
 
     test('child modifications do not affect parent', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const parentState = session.createBoundState('parent');
-      parentState.temp.set('shared', 'original');
+      const parentState = session.boundState('parent');
+      parentState.temp.shared = 'original';
 
       session.inheritTempState('parent', 'child');
 
-      const childState = session.createBoundState('child');
-      childState.temp.set('shared', 'modified');
+      const childState = session.boundState('child');
+      childState.temp.shared = 'modified';
 
-      expect(parentState.temp.get('shared')).toBe('original');
+      expect(parentState.temp.shared).toBe('original');
     });
 
-    test('unbound session.state.temp throws error', () => {
+    test('session.state.temp throws without invocation context', () => {
       const session = new BaseSession('app', { id: 'test' });
-      expect(() => session.state.temp.toObject()).toThrow(
-        'Cannot access temp state without invocationId',
+      expect(() => ({ ...session.state.temp })).toThrow(
+        'Temp state requires an invocation context',
       );
     });
 
-    test('unbound session.state.temp throws on all access methods', () => {
+    test('session.state.temp throws on property access', () => {
       const session = new BaseSession('app', { id: 'test' });
-      expect(() => session.state.temp.get('key')).toThrow();
-      expect(() => session.state.temp.set('key', 'value')).toThrow();
-      expect(() => session.state.temp.update({ key: 'value' })).toThrow();
-      expect(() => session.state.temp.delete('key')).toThrow();
-      expect(() => session.state.temp.toObject()).toThrow();
-      expect(() => session.state.temp.getMany(['key'])).toThrow();
+      expect(() => session.state.temp.key).toThrow();
+      expect(() => { session.state.temp.key = 'value'; }).toThrow();
     });
   });
 
   describe('shared state scopes (user, patient, practice)', () => {
     test('unbound shared state returns empty', () => {
       const session = new BaseSession('app', { id: 'test' });
-      expect(session.state.user.toObject()).toEqual({});
-      expect(session.state.patient.toObject()).toEqual({});
-      expect(session.state.practice.toObject()).toEqual({});
+      expect({ ...session.state.user }).toEqual({});
+      expect({ ...session.state.patient }).toEqual({});
+      expect({ ...session.state.practice }).toEqual({});
     });
 
     test('bindSharedState connects external state', () => {
@@ -344,27 +323,46 @@ describe('BaseSession', () => {
 
       session.bindSharedState('user', userState);
 
-      expect(session.state.user.get('preference')).toBe('dark');
+      expect(session.state.user.preference).toBe('dark');
     });
 
-    test('shared state modifications update external reference', () => {
+    test('direct shared state modifications update external reference', () => {
       const session = new BaseSession('app', { id: 'test' });
       const userState: Record<string, unknown> = {};
 
       session.bindSharedState('user', userState);
-      const state = session.createBoundState('test-inv');
-      state.user.set('preference', 'light');
+      session.state.user.preference = 'light';
 
       expect(userState.preference).toBe('light');
     });
 
-    test('shared state changes create events', () => {
+    test('direct shared state changes use direct source', () => {
       const session = new BaseSession('app', { id: 'test' });
       const patientState: Record<string, unknown> = {};
 
       session.bindSharedState('patient', patientState);
-      const state = session.createBoundState('test-inv');
-      state.patient.set('diagnosis', 'diabetes');
+      session.state.patient.diagnosis = 'diabetes';
+
+      const stateEvents = session.events.filter(
+        (e) => e.type === 'state_change',
+      );
+      expect(stateEvents).toHaveLength(1);
+      expect(stateEvents[0]).toMatchObject({
+        type: 'state_change',
+        scope: 'patient',
+        source: 'direct',
+        changes: [
+          { key: 'diagnosis', oldValue: undefined, newValue: 'diabetes' },
+        ],
+      });
+    });
+
+    test('bound shared state changes use mutation source', () => {
+      const session = new BaseSession('app', { id: 'test' });
+      const patientState: Record<string, unknown> = {};
+
+      session.bindSharedState('patient', patientState);
+      session.boundState('test-inv').patient.diagnosis = 'diabetes';
 
       const stateEvents = session.events.filter(
         (e) => e.type === 'state_change',
@@ -387,27 +385,9 @@ describe('BaseSession', () => {
       const onChange = jest.fn();
 
       session.bindSharedState('user', userState, onChange);
-      const state = session.createBoundState('test-inv');
-      state.user.set('theme', 'dark');
+      session.state.user.theme = 'dark';
 
       expect(onChange).toHaveBeenCalledWith('theme', 'dark');
-    });
-
-    test('unbound shared state throws on write', () => {
-      const session = new BaseSession('app', { id: 'test' });
-      session.bindSharedState('user', {});
-      session.bindSharedState('patient', {});
-      session.bindSharedState('practice', {});
-
-      expect(() => session.state.user.set('k', 'v')).toThrow(
-        'Cannot modify user state without invocationId',
-      );
-      expect(() => session.state.patient.set('k', 'v')).toThrow(
-        'Cannot modify patient state without invocationId',
-      );
-      expect(() => session.state.practice.set('k', 'v')).toThrow(
-        'Cannot modify practice state without invocationId',
-      );
     });
   });
 
@@ -417,14 +397,13 @@ describe('BaseSession', () => {
       const callback = jest.fn();
 
       session.onStateChange(callback);
-      const state = session.createBoundState('test-invocation');
-      state.session.set('key', 'value');
+      session.state.key = 'value';
 
       expect(callback).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'state_change',
           scope: 'session',
-          source: 'mutation',
+          source: 'direct',
           changes: [{ key: 'key', oldValue: undefined, newValue: 'value' }],
         }),
       );
@@ -440,8 +419,7 @@ describe('BaseSession', () => {
         practiceId: 'practice1',
       });
       session.addMessage('Hello');
-      const state = session.createBoundState('test-invocation');
-      state.session.set('key', 'value');
+      session.state.key = 'value';
 
       const json = session.toJSON();
 
@@ -488,9 +466,9 @@ describe('BaseSession', () => {
       expect(session.id).toBe('restored');
       expect(session.userId).toBe('user1');
       expect(session.events).toHaveLength(2);
-      expect(session.state.session.get('restored')).toBe(true);
-      expect(session.state.user.get('pref')).toBe('dark');
-      expect(session.state.patient.get('condition')).toBe('stable');
+      expect(session.state.restored).toBe(true);
+      expect(session.state.user.pref).toBe('dark');
+      expect(session.state.patient.condition).toBe('stable');
     });
   });
 });

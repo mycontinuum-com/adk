@@ -9,9 +9,9 @@ describe('Shared State Observation Pattern', () => {
     });
     const externalUserState = { preference: 'dark', language: 'en' };
     session.bindSharedState('user', externalUserState);
-    const state = session.createBoundState('test-invocation');
+    const state = session.boundState('test-invocation');
 
-    const pref = state.user.get('preference');
+    const pref = state.user.preference;
     expect(pref).toBe('dark');
 
     const stateEvents = session.events.filter((e) => e.type === 'state_change');
@@ -31,11 +31,11 @@ describe('Shared State Observation Pattern', () => {
     });
     const externalUserState = { preference: 'dark' };
     session.bindSharedState('user', externalUserState);
-    const state = session.createBoundState('test-invocation');
+    const state = session.boundState('test-invocation');
 
-    state.user.get('preference');
-    state.user.get('preference');
-    state.user.get('preference');
+    void state.user.preference;
+    void state.user.preference;
+    void state.user.preference;
 
     const observationEvents = session.events.filter(
       (e) => e.type === 'state_change' && e.source === 'observation',
@@ -50,13 +50,13 @@ describe('Shared State Observation Pattern', () => {
     });
     const externalUserState = { preference: 'dark' };
     session.bindSharedState('user', externalUserState);
-    const state = session.createBoundState('test-invocation');
+    const state = session.boundState('test-invocation');
 
-    state.user.get('preference');
+    void state.user.preference;
 
     externalUserState.preference = 'light';
 
-    state.user.get('preference');
+    void state.user.preference;
 
     const observationEvents = session.events.filter(
       (e) => e.type === 'state_change' && e.source === 'observation',
@@ -77,9 +77,9 @@ describe('Shared State Observation Pattern', () => {
     });
     const externalUserState = { preference: 'dark' };
     session.bindSharedState('user', externalUserState);
-    const state = session.createBoundState('test-invocation');
+    const state = session.boundState('test-invocation');
 
-    state.user.set('preference', 'light');
+    state.user.preference = 'light';
 
     const mutationEvents = session.events.filter(
       (e) => e.type === 'state_change' && e.source === 'mutation',
@@ -100,11 +100,11 @@ describe('Shared State Observation Pattern', () => {
     });
     const externalUserState = { preference: 'dark' };
     session.bindSharedState('user', externalUserState);
-    const state = session.createBoundState('test-invocation');
+    const state = session.boundState('test-invocation');
 
-    state.user.set('preference', 'light');
+    state.user.preference = 'light';
 
-    state.user.get('preference');
+    void state.user.preference;
 
     const events = session.events.filter(
       (e): e is StateChangeEvent => e.type === 'state_change',
@@ -120,21 +120,21 @@ describe('Shared State Observation Pattern', () => {
       patientId: 'patient456',
     });
 
-    const externalPatientState = {
+    const externalPatientState: Record<string, unknown> = {
       diagnosis: 'diabetes',
       lastVisit: '2024-01-01',
     };
     session.bindSharedState('patient', externalPatientState);
-    const state = session.createBoundState('test-invocation');
+    const state = session.boundState('test-invocation');
 
-    const diagnosis = state.patient.get('diagnosis');
+    const diagnosis = state.patient.diagnosis;
     expect(diagnosis).toBe('diabetes');
 
     externalPatientState.diagnosis = 'diabetes,hypertension';
 
-    state.patient.update({ medication: 'metformin' });
+    state.patient.medication = 'metformin';
 
-    const diagnosis2 = state.patient.get('diagnosis');
+    const diagnosis2 = state.patient.diagnosis;
     expect(diagnosis2).toBe('diabetes,hypertension');
 
     const events = session.events.filter(
@@ -163,9 +163,9 @@ describe('Shared State Observation Pattern', () => {
     });
     const externalUserState = { preference: 'dark', theme: 'blue' };
     session.bindSharedState('user', externalUserState);
-    const state = session.createBoundState('test-invocation');
+    const state = session.boundState('test-invocation');
 
-    state.user.delete('theme');
+    state.user.theme = undefined;
 
     const mutationEvents = session.events.filter(
       (e) => e.type === 'state_change' && e.source === 'mutation',
@@ -176,16 +176,16 @@ describe('Shared State Observation Pattern', () => {
     });
   });
 
-  test('update() logs multiple mutations', () => {
+  test('Object.assign logs multiple mutations', () => {
     const session = new BaseSession('test-app', {
       id: 'test-session',
       userId: 'user123',
     });
     const externalUserState = { a: 1, b: 2 };
     session.bindSharedState('user', externalUserState);
-    const state = session.createBoundState('test-invocation');
+    const state = session.boundState('test-invocation');
 
-    state.user.update({ a: 10, c: 30 });
+    Object.assign(state.user, { a: 10, c: 30 });
 
     const mutationEvents = session.events.filter(
       (e): e is StateChangeEvent =>
@@ -196,11 +196,11 @@ describe('Shared State Observation Pattern', () => {
     expect(mutationEvents[1].changes[0].key).toBe('c');
   });
 
-  test('session scope changes are always mutations via bound state', () => {
+  test('session scope changes are mutations via bound state', () => {
     const session = new BaseSession('test-app', { id: 'test-session' });
-    const state = session.createBoundState('test-invocation');
+    const state = session.boundState('test-invocation');
 
-    state.session.set('count', 1);
+    state.count = 1;
 
     const events = session.events.filter((e) => e.type === 'state_change');
     expect(events).toHaveLength(1);
@@ -210,7 +210,20 @@ describe('Shared State Observation Pattern', () => {
     });
   });
 
-  test('toObject does not trigger observations', () => {
+  test('direct state access uses direct source', () => {
+    const session = new BaseSession('test-app', { id: 'test-session' });
+
+    session.state.count = 1;
+
+    const events = session.events.filter((e) => e.type === 'state_change');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      scope: 'session',
+      source: 'direct',
+    });
+  });
+
+  test('spread does not trigger observations', () => {
     const session = new BaseSession('test-app', {
       id: 'test-session',
       userId: 'user123',
@@ -218,7 +231,7 @@ describe('Shared State Observation Pattern', () => {
     const externalUserState = { preference: 'dark', theme: 'blue' };
     session.bindSharedState('user', externalUserState);
 
-    const snapshot = session.state.user.toObject();
+    const snapshot = { ...session.state.user };
     expect(snapshot).toEqual({ preference: 'dark', theme: 'blue' });
 
     const events = session.events.filter((e) => e.type === 'state_change');

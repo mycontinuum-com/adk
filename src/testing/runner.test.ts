@@ -107,7 +107,7 @@ describe('runTest() runner', () => {
         description: 'Set a value',
         schema: z.object({ value: z.number() }),
         execute: (ctx) => {
-          ctx.state.set('myValue', ctx.args.value);
+          ctx.state.myValue = ctx.args.value;
           return { stored: true };
         },
       });
@@ -127,8 +127,8 @@ describe('runTest() runner', () => {
         description: 'Increment counter',
         schema: z.object({}),
         execute: (ctx) => {
-          const current = ctx.state.get<number>('counter') ?? 0;
-          ctx.state.set('counter', current + 1);
+          const current = (ctx.state.counter as number) ?? 0;
+          ctx.state.counter = current + 1;
           return { counter: current + 1 };
         },
       });
@@ -139,7 +139,7 @@ describe('runTest() runner', () => {
         model({ text: 'Done' }),
       ]);
 
-      const counter = session.state.session.get('counter');
+      const counter = session.state.counter;
       expect(counter).toBeGreaterThan(0);
     });
   });
@@ -199,7 +199,7 @@ describe('runTest() runner', () => {
         description: 'Read state',
         schema: z.object({}),
         execute: (ctx) => ({
-          value: ctx.state.get('preset'),
+          value: ctx.state.preset,
         }),
       });
 
@@ -217,7 +217,7 @@ describe('runTest() runner', () => {
         },
       );
 
-      expect(session.state.session.get('preset')).toBe('initial value');
+      expect(session.state.preset).toBe('initial value');
     });
   });
 });

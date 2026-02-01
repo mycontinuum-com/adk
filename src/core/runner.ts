@@ -714,7 +714,7 @@ function applyYieldResponse(
 
 function applyStateChanges(session: BaseSession, changes: StateChanges): void {
   if (changes.session) {
-    session.state.session.update(changes.session);
+    session.state.update(changes.session);
   }
   if (changes.user) {
     session.state.user.update(changes.user);

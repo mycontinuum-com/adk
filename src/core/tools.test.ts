@@ -107,7 +107,7 @@ describe('tool', () => {
       description: 'Modifies state',
       schema: z.object({ value: z.number() }),
       execute: (ctx) => {
-        ctx.state.set('computed', ctx.args.value * 2);
+        ctx.state['computed'] = ctx.args.value * 2;
         return { stored: true };
       },
     });
@@ -118,7 +118,7 @@ describe('tool', () => {
       args: { value: 21 },
     } as FunctionToolHookContext<{ value: number }, never>;
     await myTool.execute!(hookCtx);
-    expect(session.state.session.get('computed')).toBe(42);
+    expect(session.state['computed']).toBe(42);
   });
 
   test('schema validates input', () => {
@@ -258,7 +258,7 @@ describe('tool lifecycle hooks', () => {
       schema: z.object({ value: z.number() }),
       execute: (ctx) => ({ result: ctx.args.value }),
       finalize: (ctx) => {
-        ctx.state.set('logged', ctx.result!.result);
+        ctx.state['logged'] = ctx.result!.result;
       },
     });
 
@@ -268,7 +268,7 @@ describe('tool lifecycle hooks', () => {
       mockCtx(session),
     );
     expect(result).toEqual({ result: 42 });
-    expect(session.state.session.get('logged')).toBe(42);
+    expect(session.state['logged']).toBe(42);
   });
 
   test('prepare and finalize hooks work together', async () => {

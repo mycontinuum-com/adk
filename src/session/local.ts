@@ -36,8 +36,7 @@ export class LocalSessionService implements SessionService {
     appName: string,
     options?: CreateSessionOptions,
   ): Promise<Session> {
-    const { sessionId, userId, patientId, practiceId, initialState, version } =
-      options ?? {};
+    const { sessionId, userId, patientId, practiceId, version } = options ?? {};
 
     const session = new BaseSession(appName, {
       id: sessionId,
@@ -48,11 +47,6 @@ export class LocalSessionService implements SessionService {
     });
 
     this.bindSharedStates(session, { userId, patientId, practiceId });
-
-    if (initialState && Object.keys(initialState).length > 0) {
-      const state = session.createBoundState('__session_init__');
-      state.session.update(initialState);
-    }
 
     this.saveSession(session);
     return session;

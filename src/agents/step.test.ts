@@ -58,8 +58,8 @@ describe('step composition', () => {
       const stateStep = step({
         name: 'state_step',
         execute: (ctx) => {
-          const input = ctx.state.get<string>('input');
-          ctx.state.set('output', `processed: ${input}`);
+          const input = ctx.state.input as string;
+          ctx.state.output = `processed: ${input}`;
         },
       });
 
@@ -155,7 +155,7 @@ describe('step composition', () => {
       const setupStep = step({
         name: 'setup',
         execute: (ctx) => {
-          ctx.state.set('configured', true);
+          ctx.state.configured = true;
         },
       });
 
@@ -181,7 +181,7 @@ describe('step composition', () => {
       const cleanupStep = step({
         name: 'cleanup',
         execute: (ctx) => {
-          ctx.state.set('cleaned', true);
+          ctx.state.cleaned = true;
         },
       });
 
@@ -205,7 +205,7 @@ describe('step composition', () => {
       const transformStep = step({
         name: 'transform',
         execute: (ctx) => {
-          ctx.state.set('transformed', true);
+          ctx.state.transformed = true;
         },
       });
 
@@ -231,10 +231,10 @@ describe('step composition', () => {
           const result = await ctx.call(innerAgent, {
             message: 'Hello from step',
           });
-          ctx.state.set('callResult', {
+          ctx.state.callResult = {
             status: result.status,
             hasResponse: result.output !== undefined,
-          });
+          };
         },
       });
 
@@ -264,7 +264,7 @@ describe('step composition', () => {
         execute: async (ctx) => {
           const handle = ctx.spawn(innerAgent);
           const result = await handle.wait();
-          ctx.state.set('spawnResult', result.status);
+          ctx.state.spawnResult = result.status;
         },
       });
 
@@ -287,7 +287,7 @@ describe('step composition', () => {
         name: 'dispatch_step',
         execute: (ctx) => {
           const handle = ctx.dispatch(innerAgent);
-          ctx.state.set('dispatchId', handle.invocationId);
+          ctx.state.dispatchId = handle.invocationId;
         },
       });
 
@@ -298,7 +298,7 @@ describe('step composition', () => {
 
       const { session } = await runTest(pipeline, [user('Go')]);
 
-      const dispatchId = session.state.session.get('dispatchId');
+      const dispatchId = session.state.dispatchId;
       expect(dispatchId).toBeDefined();
     });
   });
@@ -309,10 +309,10 @@ describe('step composition', () => {
         name: 'fetch_data',
         execute: async (ctx) => {
           await new Promise((resolve) => setTimeout(resolve, 10));
-          ctx.state.set('data', {
+          ctx.state.data = {
             items: ['a', 'b', 'c'],
             count: 3,
-          });
+          };
         },
       });
 
@@ -361,11 +361,11 @@ describe('step composition', () => {
       const initStep = step({
         name: 'init',
         execute: (ctx) => {
-          ctx.state.set('config', {
+          ctx.state.config = {
             maxRetries: 3,
             timeout: 5000,
             features: ['a', 'b'],
-          });
+          };
         },
       });
 

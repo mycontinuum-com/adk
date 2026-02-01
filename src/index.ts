@@ -133,7 +133,13 @@ export { InMemoryChannel } from './channels';
 export type { EventChannel, ProducerResult, ChannelResult } from './channels';
 
 // Schema helpers
-export type { StateSchema, InferStateSchema, StateValues } from './types';
+export type {
+  StateSchema,
+  InferStateSchema,
+  StateValues,
+  ScopeState,
+  TypedState,
+} from './types';
 export { output } from './types';
 
 // Provider adapters (for advanced use)
@@ -233,9 +239,6 @@ export type {
   PartialOutputState,
   ParsedOutput,
   SessionStatus,
-  StateAccessor,
-  StateAccessorWithScopes,
-  ScopedStateChanges,
   Session,
   SessionStoreSnapshot,
   SessionStore,

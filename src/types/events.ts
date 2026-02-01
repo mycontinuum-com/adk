@@ -125,7 +125,7 @@ export interface ToolResultEvent extends EventBase {
   timedOut?: boolean;
 }
 
-export type StateChangeSource = 'observation' | 'mutation';
+export type StateChangeSource = 'observation' | 'mutation' | 'direct';
 
 export type StateChangeEvent = Omit<EventBase, 'invocationId' | 'agentName'> & {
   type: 'state_change';

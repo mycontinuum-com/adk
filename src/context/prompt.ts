@@ -21,16 +21,24 @@ export interface EnrichmentPromptContext<T extends StateSchema> {
   message: string;
 }
 
+function extractScopeData(scope: Record<string, unknown>): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  for (const key of Object.keys(scope)) {
+    data[key] = scope[key];
+  }
+  return data;
+}
+
 function buildStateValues<T extends StateSchema>(
   session: Session,
   invocationId: string,
 ): StateValues<T> {
   const bound = (session as BaseSession).boundState(invocationId);
-  const sessionState = bound.session.toObject();
-  const userState = bound.user.toObject();
-  const patientState = bound.patient.toObject();
-  const practiceState = bound.practice.toObject();
-  const tempState = bound.temp.toObject();
+  const sessionState = extractScopeData(bound);
+  const userState = extractScopeData(bound.user);
+  const patientState = extractScopeData(bound.patient);
+  const practiceState = extractScopeData(bound.practice);
+  const tempState = extractScopeData(bound.temp);
 
   return {
     ...sessionState,

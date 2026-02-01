@@ -122,7 +122,7 @@ const transferToSpecialist = tool({
     info: z.string().describe('Context for specialist'),
   }),
   execute: (ctx) => {
-    ctx.state.set('transferContext', ctx.args.info);
+    ctx.state.transferContext = ctx.args.info;
     return specialistAgent;
   },
 });

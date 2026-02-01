@@ -231,8 +231,8 @@ describe('EvalSessionService', () => {
       patient: { age: 55 },
     });
 
-    expect(session.state.session.get('mode')).toBe('triage');
-    expect(session.state.patient.get('age')).toBe(55);
+    expect(session.state.mode).toBe('triage');
+    expect(session.state.patient.age).toBe(55);
   });
 });
 

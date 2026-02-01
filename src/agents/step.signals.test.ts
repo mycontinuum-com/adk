@@ -36,7 +36,7 @@ describe('step routing and signals', () => {
       const gate = step({
         name: 'gate',
         execute: (ctx) => {
-          const route = ctx.state.get<string>('route');
+          const route = ctx.state.route as string | undefined;
           return route === 'a' ? agentA : agentB;
         },
       });
@@ -107,7 +107,7 @@ describe('step routing and signals', () => {
       const conditionalStep = step({
         name: 'maybe_run',
         execute: (ctx) => {
-          const shouldSkip = ctx.state.get<boolean>('skip');
+          const shouldSkip = ctx.state.skip as boolean | undefined;
           return shouldSkip
             ? ctx.skip()
             : mockAgent('middle', { responses: [{ text: 'Middle' }] });
@@ -144,7 +144,7 @@ describe('step routing and signals', () => {
       const gate = step({
         name: 'gate',
         execute: (ctx) => {
-          const name = ctx.state.get<string>('userName');
+          const name = ctx.state.userName as string | undefined;
           return ctx.respond(`Hello, ${name ?? 'guest'}!`);
         },
       });
@@ -178,7 +178,7 @@ describe('step routing and signals', () => {
       const authGate = step({
         name: 'auth_gate',
         execute: (ctx) => {
-          const role = ctx.state.user.get<string>('role');
+          const role = ctx.state.user.role as string | undefined;
           if (!role) return ctx.fail('Not authenticated');
           if (role !== 'admin') return ctx.respond('Admin access required');
           return protectedAgent;
@@ -212,7 +212,7 @@ describe('step routing and signals', () => {
       const cacheGate = step({
         name: 'cache_gate',
         execute: (ctx) => {
-          const cached = ctx.state.get<object>('cachedResult');
+          const cached = ctx.state.cachedResult as object | undefined;
           if (cached) return ctx.complete(cached, 'result');
           return computeAgent;
         },
@@ -311,7 +311,7 @@ describe('step routing and signals', () => {
       const validationGate = step({
         name: 'validation',
         execute: (ctx) => {
-          const input = ctx.state.get<{ email?: string }>('input');
+          const input = ctx.state.input as { email?: string } | undefined;
           if (!input?.email) {
             return ctx.respond('Please provide an email address.');
           }
@@ -336,7 +336,7 @@ describe('step routing and signals', () => {
       const featureStep = step({
         name: 'feature_router',
         execute: (ctx) => {
-          const flags = ctx.state.get<string[]>('featureFlags') ?? [];
+          const flags = (ctx.state.featureFlags as string[] | undefined) ?? [];
           return flags.includes('new_ui') ? newFeature : oldFeature;
         },
       });

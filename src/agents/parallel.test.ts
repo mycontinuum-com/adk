@@ -191,7 +191,7 @@ describe('parallel composition', () => {
         description: 'Set state value',
         schema: z.object({ key: z.string(), value: z.string() }),
         execute: (ctx) => {
-          ctx.state.set(ctx.args.key, ctx.args.value);
+          ctx.state[ctx.args.key] = ctx.args.value;
           return { set: ctx.args.key };
         },
       });

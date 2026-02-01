@@ -221,8 +221,8 @@ describe('Integration', () => {
       description: 'Inc',
       schema: z.object({}),
       execute: (ctx) => {
-        const c = (ctx.state.get<number>('c') ?? 0) + 1;
-        ctx.state.set('c', c);
+        const c = ((ctx.state.c as number) ?? 0) + 1;
+        ctx.state.c = c;
         return { c };
       },
     });
@@ -238,7 +238,7 @@ describe('Integration', () => {
     ]);
     session.addMessage('Inc');
     await runner.run(testAgent({ tools: [incTool] }), session);
-    expect(session.state.session.get('c')).toBe(1);
+    expect(session.state.c).toBe(1);
 
     mockAdapter.reset();
     mockAdapter.setResponses([
@@ -247,7 +247,7 @@ describe('Integration', () => {
     ]);
     session.addMessage('Inc');
     await runner.run(testAgent({ tools: [incTool] }), session);
-    expect(session.state.session.get('c')).toBe(2);
+    expect(session.state.c).toBe(2);
   });
 
   test('user state persists across sessions', async () => {
@@ -256,7 +256,7 @@ describe('Integration', () => {
       description: 'Set',
       schema: z.object({ k: z.string(), v: z.string() }),
       execute: (ctx) => {
-        ctx.state.user.set(ctx.args.k, ctx.args.v);
+        ctx.state.user[ctx.args.k] = ctx.args.v;
         return {};
       },
     });
@@ -274,7 +274,7 @@ describe('Integration', () => {
     const s2 = (await sessionService.createSession('app', {
       userId: 'user1',
     })) as BaseSession;
-    expect(s2.state.user.get('theme')).toBe('dark');
+    expect(s2.state.user.theme).toBe('dark');
   });
 
   test('error recovery with errorHandlers', async () => {

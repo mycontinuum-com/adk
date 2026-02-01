@@ -749,7 +749,7 @@ function processAgentOutput(
   const state = session.boundState(invocationId);
 
   if (typeof outputConfig === 'string') {
-    state.session.set(outputConfig, rawOutput);
+    state[outputConfig] = rawOutput;
     return { value: rawOutput };
   }
 
@@ -759,7 +759,7 @@ function processAgentOutput(
 
     if (result.success) {
       if (outputConfig.key) {
-        state.session.set(outputConfig.key, result.value);
+        state[outputConfig.key] = result.value;
       }
       return {
         value: result.value,
@@ -780,7 +780,7 @@ function processAgentOutput(
     );
   }
 
-  state.session.set(outputConfig.key, rawOutput);
+  state[outputConfig.key] = rawOutput;
   return { value: rawOutput };
 }
 

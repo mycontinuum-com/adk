@@ -33,7 +33,7 @@ describe('yielding tool lifecycle', () => {
         yieldSchema: z.object({ answer: z.string() }),
         prepare: (ctx) => {
           prepareCalls.push({ args: ctx.args });
-          ctx.state.set('pendingQuestion', ctx.args.question);
+          ctx.state.pendingQuestion = ctx.args.question;
           return ctx.args;
         },
         finalize: (ctx) => ({
@@ -61,7 +61,7 @@ describe('yielding tool lifecycle', () => {
       expect(result.status).toBe('yielded');
       expect(prepareCalls).toHaveLength(1);
       expect(prepareCalls[0].args).toEqual({ question: 'How are you?' });
-      expect(session.state.session.get('pendingQuestion')).toBe('How are you?');
+      expect(session.state.pendingQuestion).toBe('How are you?');
     });
 
     test('finalize is called with user input on resume', async () => {
@@ -127,7 +127,7 @@ describe('yielding tool lifecycle', () => {
         },
         finalize: (ctx) => {
           callOrder.push('finalize');
-          ctx.state.set('finalAnswer', ctx.input);
+          ctx.state.finalAnswer = ctx.input;
           return { question: ctx.args.question, answer: ctx.input!.answer };
         },
       });
@@ -158,7 +158,7 @@ describe('yielding tool lifecycle', () => {
       await runner.run(testAgent, session);
 
       expect(callOrder).toEqual(['prepare', 'finalize']);
-      expect(session.state.session.get('finalAnswer')).toEqual({
+      expect(session.state.finalAnswer).toEqual({
         answer: 'Good',
       });
     });
@@ -233,7 +233,7 @@ describe('yielding tool lifecycle', () => {
         }),
         prepare: (ctx) => {
           callOrder.push('prepare');
-          ctx.state.set('pendingAction', ctx.args.action);
+          ctx.state.pendingAction = ctx.args.action;
           return ctx.args;
         },
         execute: (ctx) => {
@@ -246,8 +246,8 @@ describe('yielding tool lifecycle', () => {
         },
         finalize: (ctx) => {
           callOrder.push('finalize');
-          ctx.state.delete('pendingAction');
-          ctx.state.set('lastApproval', ctx.result);
+          ctx.state.pendingAction = undefined;
+          ctx.state.lastApproval = ctx.result;
           finalResult = ctx.result;
           return ctx.result;
         },
@@ -283,7 +283,7 @@ describe('yielding tool lifecycle', () => {
       await runner.run(testAgent, session);
 
       expect(callOrder).toEqual(['prepare', 'execute', 'finalize']);
-      expect(session.state.session.get('pendingAction')).toBeUndefined();
+      expect(session.state.pendingAction).toBeUndefined();
       expect(finalResult).toMatchObject({
         action: 'deploy',
         approved: true,

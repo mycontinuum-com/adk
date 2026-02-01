@@ -385,10 +385,10 @@ describe('BaseSession time-travel methods', () => {
   describe('stateAt', () => {
     test('returns snapshot at event index', () => {
       const session = new BaseSession('app', { id: 'test' });
-      const state = session.createBoundState('inv-1');
+      const state = session.boundState('inv-1');
       session.pushEvent(createInvocationStartEvent('1', 'inv-1', 'agent'));
-      state.session.set('key', 'first');
-      state.session.set('key', 'second');
+      state.key = 'first';
+      state.key = 'second';
 
       const snapshot = session.stateAt(1);
       expect(snapshot.sessionState).toEqual({ key: 'first' });
@@ -434,11 +434,11 @@ describe('BaseSession time-travel methods', () => {
         userId: 'user-1',
         patientId: 'patient-1',
       });
-      const state = session.createBoundState('inv-1');
+      const state = session.boundState('inv-1');
       session.pushEvent(createInvocationStartEvent('1', 'inv-1', 'agent'));
-      state.session.set('step', 1);
-      state.session.set('step', 2);
-      state.session.set('step', 3);
+      state.step = 1;
+      state.step = 2;
+      state.step = 3;
 
       const forked = session.forkAt(2);
 
@@ -446,34 +446,34 @@ describe('BaseSession time-travel methods', () => {
       expect(forked.userId).toBe('user-1');
       expect(forked.patientId).toBe('patient-1');
       expect(forked.events).toHaveLength(3);
-      expect(forked.createBoundState('inv-1').session.get('step')).toBe(2);
-      expect(state.session.get('step')).toBe(3);
+      expect(forked.boundState('inv-1').step).toBe(2);
+      expect(state.step).toBe(3);
     });
 
     test('forked session has isolated shared state', () => {
       const session = new BaseSession('app', { id: 'original' });
       const userState = { preference: 'dark' };
       session.bindSharedState('user', userState);
-      const state = session.createBoundState('inv-1');
+      const state = session.boundState('inv-1');
       session.pushEvent(createInvocationStartEvent('1', 'inv-1', 'agent'));
-      state.user.set('preference', 'light');
+      state.user.preference = 'light';
 
       const forked = session.forkAt(1);
 
-      const forkedState = forked.createBoundState('inv-2');
-      forkedState.user.set('preference', 'system');
+      const forkedState = forked.boundState('inv-2');
+      forkedState.user.preference = 'system';
 
-      expect(state.user.get('preference')).toBe('light');
-      expect(forkedState.user.get('preference')).toBe('system');
+      expect(state.user.preference).toBe('light');
+      expect(forkedState.user.preference).toBe('system');
       expect(userState.preference).toBe('light');
     });
 
     test('forked session can continue execution independently', () => {
       const session = new BaseSession('app', { id: 'original' });
-      const state = session.createBoundState('inv-1');
+      const state = session.boundState('inv-1');
       session.pushEvent(createInvocationStartEvent('1', 'inv-1', 'agent'));
       session.addMessage('First question');
-      state.session.set('answered', 1);
+      state.answered = 1;
 
       const forked = session.forkAt(1);
 

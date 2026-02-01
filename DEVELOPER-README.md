@@ -72,12 +72,14 @@ const pipeline = sequence({
   runnables: [
     step({
       name: 'load',
-      execute: (ctx) => ctx.state.set('ticket', fetchTicket()),
+      execute: (ctx) => {
+        ctx.state.ticket = fetchTicket();
+      },
     }),
     step({
       name: 'route',
       execute: (ctx) =>
-        ctx.state.get('ticket.priority') === 'urgent'
+        ctx.state.ticket?.priority === 'urgent'
           ? urgentAgent
           : standardAgent,
     }),
@@ -207,19 +209,16 @@ Execute TypeScript code as part of a workflow. Steps can execute side effects, r
 const fetchStep = step({
   name: 'fetch_data',
   execute: async (ctx) => {
-    const data = await fetchFromApi('/data');
-    ctx.state.set('data', data);
+    ctx.state.data = await fetchFromApi('/data');
   },
 });
 
 const router = step({
   name: 'router',
   execute: (ctx) => {
-    const priority = ctx.state.get<string>('priority');
-    if (priority === 'urgent') return urgentHandler;
-    if (!ctx.state.get('authenticated')) return ctx.fail('Not authenticated');
-    if (ctx.state.get('cached'))
-      return ctx.complete(ctx.state.get('cached'), 'result');
+    if (ctx.state.priority === 'urgent') return urgentHandler;
+    if (!ctx.state.authenticated) return ctx.fail('Not authenticated');
+    if (ctx.state.cached) return ctx.complete(ctx.state.cached, 'result');
     return standardHandler;
   },
 });
@@ -281,7 +280,7 @@ const chat = loop({
   runnable: assistant,
   maxIterations: 100,
   yields: true,
-  while: (ctx) => !ctx.state.get('completed'),
+  while: (ctx) => !ctx.state.completed,
 });
 ```
 
@@ -454,7 +453,7 @@ const calculator = tool({
   description: 'Evaluate a math expression',
   schema: z.object({ expr: z.string().describe('Expression to evaluate') }),
   execute: (ctx) => {
-    ctx.state.set('lastCalculation', ctx.args.expr);
+    ctx.state.lastCalculation = ctx.args.expr;
     return { result: Function(`"use strict"; return (${ctx.args.expr})`)() };
   },
 });
@@ -554,7 +553,7 @@ const orchestrate = tool({
 **Transfers** are triggered by returning a `Runnable` from a tool's execute function or from agent hooks (`beforeAgent`, `beforeModel`, `afterModel`). To pass context to the target agent, set state before returning:
 
 ```typescript
-ctx.state.set('handoffContext', { reason: 'escalation', data: ... });
+ctx.state.handoffContext = { reason: 'escalation', data: ... };
 return targetAgent;
 ```
 
@@ -673,7 +672,18 @@ const myAgent = agent({
 Sessions manage the event ledger and provide typed state access:
 
 ```typescript
-import { session } from '@animahealth/adk';
+import { z } from 'zod';
+import { session, type StateSchema } from '@animahealth/adk';
+
+// Optional: Define schema for type-safe state
+const stateSchema = {
+  session: {
+    mode: z.enum(['triage', 'consultation', 'followup']),
+    count: z.number(),
+  },
+  user: { theme: z.string() },
+  patient: { id: z.string() },
+} satisfies StateSchema;
 
 const sess = await session('my-app', {
   id: 'session-123',
@@ -682,7 +692,10 @@ const sess = await session('my-app', {
   practiceId: 'practice-012',
 });
 
-sess.state.update({ session: { mode: 'standard' } });
+// Property-access state API (session scope is default)
+sess.state.mode = 'triage';        // session state (shorthand)
+sess.state.count = 0;
+sess.state.user.theme = 'dark';    // other scopes explicit
 sess.addMessage('Hello!');
 ```
 
@@ -768,10 +781,21 @@ State is organized into scopes with different persistence characteristics:
 | `temp`     | Cleared each model step   | Intermediate calculations  | ❌ Not logged |
 
 ```typescript
-ctx.state.set('key', value);
+// Session state (shorthand - no .session prefix needed)
+ctx.state.mode = 'triage';
+ctx.state.count = 42;
+const { mode, count } = ctx.state;  // destructuring
+const allSession = { ...ctx.state }; // spread to get all keys
+
+// Bulk updates with .update()
+ctx.state.update({ mode: 'consultation', count: 100 });
 ctx.state.user.update({ theme: 'dark', notifications: true });
-const diagnoses = ctx.state.patient.get<string[]>('diagnoses');
-ctx.state.practice.delete('oldSetting');
+
+// Other scopes (explicit prefix required)
+ctx.state.user.theme = 'dark';
+const diagnoses = ctx.state.patient.diagnoses;
+ctx.state.practice.oldSetting = undefined; // delete
+ctx.state.temp.scratch = { intermediate: 'data' };
 ```
 
 ### State Change Auditing
@@ -1057,12 +1081,12 @@ Hooks provide lifecycle interception points for guardrails, logging, transfers, 
 const myAgent = agent({
   hooks: {
     beforeAgent: (ctx) => {
-      if (ctx.state.get('blocked')) return 'Request blocked';
-      if (ctx.state.get('needsEscalation')) return escalationAgent;
+      if (ctx.state.blocked) return 'Request blocked';
+      if (ctx.state.needsEscalation) return escalationAgent;
     },
     afterAgent: (ctx, output) => output.toUpperCase(),
     beforeModel: (ctx, renderCtx) => {
-      if (ctx.state.get('shouldTransfer')) return targetAgent;
+      if (ctx.state.shouldTransfer) return targetAgent;
       if (containsPII(renderCtx.events)) {
         return {
           stepEvents: [{ type: 'assistant', text: 'PII detected' }],
@@ -1118,10 +1142,8 @@ const costTracker: Middleware = {
     }
   },
   afterModel: (ctx, result) => {
-    ctx.state.set(
-      'tokenCount',
-      (ctx.state.get('tokenCount') ?? 0) + (result.usage?.totalTokens ?? 0),
-    );
+    ctx.state.tokenCount = 
+      ((ctx.state.tokenCount as number) ?? 0) + (result.usage?.totalTokens ?? 0);
   },
 };
 ```

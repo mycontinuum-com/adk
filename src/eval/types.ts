@@ -3,15 +3,14 @@ import type {
   FunctionTool,
   Runnable,
   Session,
-  ScopedStateChanges,
-  StateAccessorWithScopes,
+  TypedState,
 } from '../types';
 
 export interface MockToolContext {
   readonly callId: string;
   readonly toolName: string;
   readonly invocationId: string;
-  readonly state: StateAccessorWithScopes;
+  readonly state: TypedState;
   now(): number;
 }
 
@@ -81,7 +80,7 @@ export interface EvalCase {
   toolMocks?: ToolMocks;
   userAgents: UserAgents;
   bridge?: Bridge;
-  initialState?: ScopedStateChanges;
+  initialState?: StateChanges;
   firstMessage?: string;
   terminateWhen?: TerminateWhen;
   metrics?: Metric[];

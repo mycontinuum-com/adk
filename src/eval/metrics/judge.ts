@@ -117,8 +117,9 @@ ${transcript}`;
           const runner = new BaseRunner();
           const result = await runner.run(judgeAgent, session);
 
-          const judgment =
-            result.session.state.session.get<Judgment>('judgment');
+          const judgment = result.session.state.judgment as
+            | Judgment
+            | undefined;
 
           if (!judgment) {
             lastError = new Error(

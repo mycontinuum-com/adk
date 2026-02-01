@@ -39,11 +39,10 @@ describe('LocalSessionService', () => {
     });
 
     test('createSession with initial state', async () => {
-      const session = await service.createSession('test-app', {
-        initialState: { key: 'value' },
-      });
+      const session = await service.createSession('test-app');
+      session.state.key = 'value';
 
-      expect(session.state.session.get('key')).toBe('value');
+      expect(session.state.key).toBe('value');
     });
 
     test('getSession loads existing session', async () => {
@@ -117,11 +116,10 @@ describe('LocalSessionService', () => {
         userId: 'user-1',
       })) as BaseSession;
 
-      const state = session.createBoundState('test-inv');
-      state.user.set('theme', 'light');
+      session.state.user.theme = 'light';
 
       const loaded = await service.getSession('test-app', 'shared-test');
-      expect(loaded!.state.user.get('theme')).toBe('light');
+      expect(loaded!.state.user.theme).toBe('light');
 
       const userState = await service.getUserState('test-app', 'user-1');
       expect(userState.theme).toBe('light');
@@ -138,7 +136,7 @@ describe('LocalSessionService', () => {
       service.bindSessionScope(session, 'patient', 'patient-new');
 
       expect(session.patientId).toBe('patient-new');
-      expect(session.state.patient.get('existing')).toBe('data');
+      expect(session.state.patient.existing).toBe('data');
     });
   });
 
@@ -183,14 +181,13 @@ describe('LocalSessionService', () => {
         patientId: 'patient-1',
       });
 
-      const state = session.createBoundState('test-inv');
-      state.session.update({ counter: 42, nested: { a: 1 } });
+      Object.assign(session.state, { counter: 42, nested: { a: 1 } });
 
       service.save(session as BaseSession);
       const loaded = await service.getSession('test-app', 'persist-test');
 
-      expect(loaded!.state.session.get('counter')).toBe(42);
-      expect(loaded!.state.session.get('nested')).toEqual({ a: 1 });
+      expect(loaded!.state.counter).toBe(42);
+      expect(loaded!.state.nested).toEqual({ a: 1 });
     });
 
     test('events persist correctly', async () => {

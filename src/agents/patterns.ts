@@ -57,25 +57,23 @@ export function cached<T extends Runnable>(
   const scope = options.scope ?? 'session';
 
   return gated(runnable, (ctx) => {
-    let stateScope;
+    let value: unknown;
     switch (scope) {
       case 'user':
-        stateScope = ctx.state.user;
+        value = ctx.state.user[options.key];
         break;
       case 'patient':
-        stateScope = ctx.state.patient;
+        value = ctx.state.patient[options.key];
         break;
       case 'practice':
-        stateScope = ctx.state.practice;
+        value = ctx.state.practice[options.key];
         break;
       case 'temp':
-        stateScope = ctx.state.temp;
+        value = ctx.state.temp[options.key];
         break;
       default:
-        stateScope = ctx.state;
+        value = ctx.state[options.key];
     }
-
-    const value = stateScope.get(options.key);
 
     if (value === undefined) {
       return;

@@ -180,7 +180,7 @@ export async function* runStep(
 
           case 'complete': {
             if (result.key) {
-              session.boundState(invocationId).session.set(result.key, result.value);
+              session.boundState(invocationId)[result.key] = result.value;
             }
             return createTerminalResult(
               runnable,

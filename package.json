@@ -41,7 +41,8 @@
     "test": "jest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "prepublishOnly": "npm run build"
+    "ci": "npm run typecheck && npm run test",
+    "prepublishOnly": "npm run typecheck && npm run build"
   },
   "keywords": [
     "ai",

@@ -67,7 +67,7 @@ const createTransferTool = (targetAgent: ReturnType<typeof createSpecialist>) =>
     description: `Transfer to ${targetAgent.name}`,
     schema: z.object({ info: z.string() }),
     execute: (ctx) => {
-      ctx.state.set('transferContext', ctx.args.info);
+      ctx.state.transferContext = ctx.args.info;
       return targetAgent;
     },
   });
@@ -277,7 +277,7 @@ describe('transfer pattern', () => {
       model({ text: 'Specialist response' }),
     ]);
 
-    expect(session.state.session.get('transferContext')).toBe(
+    expect(session.state.transferContext).toBe(
       'Rare genetic conditions',
     );
   });

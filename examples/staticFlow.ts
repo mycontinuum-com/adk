@@ -69,7 +69,6 @@ import {
   type StateSchema,
 } from '../src';
 
-
 const MAX_REVISIONS = 3;
 const QUALITY_THRESHOLD = 8;
 
@@ -324,7 +323,7 @@ const writingPhase = loop({
   runnable: writeEditCycle,
   maxIterations: MAX_REVISIONS,
   while: (ctx: LoopContext) => {
-    const decision = ctx.state.get<EditorDecision>('editorDecision');
+    const decision = ctx.state.editorDecision;
     return decision?.decision !== 'approve';
   },
 });

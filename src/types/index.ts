@@ -4,6 +4,7 @@ export type {
   InvocationOutcome,
   InvocationKind,
   StateScope,
+  StateChangeSource,
   ProviderContext,
   EventBase,
   SystemEvent,
@@ -38,9 +39,6 @@ export type {
 
 export type {
   SessionStatus,
-  StateAccessor,
-  StateAccessorWithScopes,
-  SessionState,
   Session,
   SessionStoreSnapshot,
   SessionStore,
@@ -72,6 +70,7 @@ export type {
   OutputConfig,
   OutputKeyConfig,
   OutputSchemaConfig,
+  SessionKeyOf,
   Agent,
   Sequence,
   ParallelMergeContext,
@@ -111,7 +110,13 @@ export type {
   Runner,
 } from './runtime';
 
-export type { StateSchema, InferStateSchema, StateValues } from './schema';
+export type {
+  StateSchema,
+  InferStateSchema,
+  StateValues,
+  ScopeState,
+  TypedState,
+} from './schema';
 export { output } from './schema';
 
 export type {

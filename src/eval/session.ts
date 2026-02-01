@@ -1,15 +1,16 @@
-import type { Session, ScopedStateChanges } from '../types';
+import type { Session } from '../types';
+import type { StateChanges } from './types';
 import { BaseSession, InMemorySessionService } from '../session';
 
 export class EvalSessionService extends InMemorySessionService {
   async createEvalSession(
     appName: string,
-    initialState?: ScopedStateChanges,
+    initialState?: StateChanges,
   ): Promise<Session> {
     const session = await this.createSession(appName);
     if (initialState) {
       if (initialState.session) {
-        session.state.session.update(initialState.session);
+        session.state.update(initialState.session);
       }
       if (initialState.user) {
         (session as BaseSession).bindSharedState('user', { ...initialState.user });

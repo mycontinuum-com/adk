@@ -1,10 +1,10 @@
-import type { StateAccessorWithScopes } from '../types';
+import type { StateSchema, TypedState } from '../types/schema';
 import type { BaseSession } from '../session/base';
 
-export function createStateAccessor(
+export function createStateAccessor<S extends StateSchema = StateSchema>(
   session: BaseSession,
   invocationId: string,
-): StateAccessorWithScopes {
+): TypedState<S> {
   if (!invocationId) {
     throw new Error(
       'invocationId is required to create a state accessor. ' +
@@ -12,5 +12,5 @@ export function createStateAccessor(
     );
   }
 
-  return session.boundState(invocationId);
+  return session.boundState<S>(invocationId);
 }

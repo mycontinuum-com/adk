@@ -7,11 +7,8 @@ import type {
   ModelUsage,
   ModelEndEvent,
 } from './events';
-import type {
-  Session,
-  SessionService,
-  StateAccessorWithScopes,
-} from './session';
+import type { Session, SessionService } from './session';
+import type { StateSchema, TypedState } from './schema';
 import type { RunResult, RunConfig } from './runtime';
 import type { Middleware } from '../middleware/types';
 import type { ErrorHandler } from '../errors/types';
@@ -78,7 +75,8 @@ export interface FunctionToolHookContext<
   TInput = unknown,
   TYield = unknown,
   TResult = unknown,
-> extends Omit<ToolContext, 'args'> {
+  S extends StateSchema = StateSchema,
+> extends Omit<ToolContext<S>, 'args'> {
   readonly args: TInput;
   readonly input?: TYield;
   readonly result?: TResult;
@@ -88,25 +86,27 @@ export type ToolHookContext<
   TInput = unknown,
   TYield = unknown,
   TResult = unknown,
-> = FunctionToolHookContext<TInput, TYield, TResult>;
+  S extends StateSchema = StateSchema,
+> = FunctionToolHookContext<TInput, TYield, TResult, S>;
 
 export interface FunctionTool<
   TInput = unknown,
   TOutput = unknown,
   TYield = unknown,
+  S extends StateSchema = StateSchema,
 > {
   name: string;
   description: string;
   schema: z.ZodType<TInput>;
   yieldSchema?: z.ZodType<TYield>;
   prepare?(
-    ctx: FunctionToolHookContext<TInput>,
+    ctx: FunctionToolHookContext<TInput, unknown, unknown, S>,
   ): TInput | void | Promise<TInput | void>;
   execute?(
-    ctx: FunctionToolHookContext<TInput, TYield>,
+    ctx: FunctionToolHookContext<TInput, TYield, unknown, S>,
   ): TOutput | Promise<TOutput>;
   finalize?(
-    ctx: FunctionToolHookContext<TInput, TYield, TOutput>,
+    ctx: FunctionToolHookContext<TInput, TYield, TOutput, S>,
   ): TOutput | void | Promise<TOutput | void>;
   timeout?: number;
   retry?: RetryConfig;
@@ -126,16 +126,16 @@ export interface WebSearchTool {
 
 export type ProviderTool = WebSearchTool;
 
-export type Tool = FunctionTool | ProviderTool;
+export type Tool<S extends StateSchema = StateSchema> = FunctionTool<unknown, unknown, unknown, S> | ProviderTool;
 
-export interface RenderContext {
+export interface RenderContext<S extends StateSchema = StateSchema> {
   readonly invocationId: string;
   readonly agentName: string;
-  readonly session: Session;
-  readonly state: StateAccessorWithScopes;
-  readonly agent: Agent;
+  readonly session: Session<S>;
+  readonly state: TypedState<S>;
+  readonly agent: Agent<unknown, S>;
   events: Event[];
-  functionTools: FunctionTool[];
+  functionTools: FunctionTool<unknown, unknown, unknown, S>[];
   providerTools: ProviderTool[];
   outputSchema?: z.ZodType;
   outputMode?: OutputMode;
@@ -143,7 +143,7 @@ export interface RenderContext {
   allowedTools?: string[];
 }
 
-export type ContextRenderer = (ctx: RenderContext) => RenderContext;
+export type ContextRenderer<S extends StateSchema = StateSchema> = (ctx: RenderContext<S>) => RenderContext<S>;
 
 export interface ModelStepResult {
   stepEvents: Event[];
@@ -153,24 +153,24 @@ export interface ModelStepResult {
   finishReason?: ModelEndEvent['finishReason'];
 }
 
-export interface Hooks {
+export interface Hooks<S extends StateSchema = StateSchema> {
   beforeAgent?: (
-    ctx: InvocationContext,
+    ctx: InvocationContext<S>,
   ) => string | Runnable | void | Promise<string | Runnable | void>;
   afterAgent?: (
-    ctx: InvocationContext,
+    ctx: InvocationContext<S>,
     output: string,
   ) => string | void | Promise<string | void>;
   beforeModel?: (
-    ctx: InvocationContext,
-    renderCtx: RenderContext,
+    ctx: InvocationContext<S>,
+    renderCtx: RenderContext<S>,
   ) =>
     | ModelStepResult
     | Runnable
     | void
     | Promise<ModelStepResult | Runnable | void>;
   afterModel?: (
-    ctx: InvocationContext,
+    ctx: InvocationContext<S>,
     result: ModelStepResult,
   ) =>
     | ModelStepResult
@@ -178,82 +178,88 @@ export interface Hooks {
     | void
     | Promise<ModelStepResult | Runnable | void>;
   beforeTool?: (
-    ctx: ToolContext,
+    ctx: ToolContext<S>,
     call: ToolCallEvent,
   ) => ToolResultEvent | void | Promise<ToolResultEvent | void>;
   afterTool?: (
-    ctx: ToolContext,
+    ctx: ToolContext<S>,
     result: ToolResultEvent,
   ) => ToolResultEvent | void | Promise<ToolResultEvent | void>;
 }
 
-export interface OutputKeyConfig {
-  key: string;
+export type SessionKeyOf<S extends StateSchema> = S['session'] extends Record<string, z.ZodType>
+  ? keyof S['session'] & string
+  : string;
+
+export interface OutputKeyConfig<S extends StateSchema = StateSchema> {
+  key: SessionKeyOf<S>;
 }
 
 export type OutputMode = 'native' | 'prompt';
 
-export interface OutputSchemaConfig<T = unknown> {
-  key?: string;
+export interface OutputSchemaConfig<T = unknown, S extends StateSchema = StateSchema> {
+  key?: SessionKeyOf<S>;
   schema: z.ZodType<T>;
   mode?: OutputMode;
 }
 
-export type OutputConfig<T = unknown> = OutputKeyConfig | OutputSchemaConfig<T>;
+export type OutputConfig<T = unknown, S extends StateSchema = StateSchema> = 
+  | OutputKeyConfig<S> 
+  | OutputSchemaConfig<T, S>;
 
 interface RunnableBase {
   name: string;
   description?: string;
 }
 
-export interface Agent<TOutput = unknown> extends RunnableBase {
+export interface Agent<TOutput = unknown, S extends StateSchema = StateSchema> extends RunnableBase {
   kind: 'agent';
   model: ModelConfig;
-  context: ContextRenderer[];
-  tools: Tool[];
-  output?: OutputConfig<TOutput>;
+  context: ContextRenderer<S>[];
+  tools: Tool<S>[];
+  output?: OutputConfig<TOutput, S>;
   toolChoice?: ToolChoice;
   maxSteps?: number;
-  hooks?: Hooks;
-  middleware?: Middleware[];
+  hooks?: Hooks<S>;
+  middleware?: Middleware<S>[];
   errorHandlers?: ErrorHandler[];
 }
 
-export interface Sequence extends RunnableBase {
+export interface Sequence<S extends StateSchema = StateSchema> extends RunnableBase {
   kind: 'sequence';
-  runnables: Runnable[];
+  runnables: Runnable<S>[];
 }
 
-export interface ParallelMergeContext {
+export interface ParallelMergeContext<S extends StateSchema = StateSchema> {
   results: RunResult[];
-  session: Session;
-  state: StateAccessorWithScopes;
+  session: Session<S>;
+  state: TypedState<S>;
   successfulBranches: number[];
   failedBranches: Array<{ index: number; error: string }>;
 }
 
-export interface Parallel extends RunnableBase {
+export interface Parallel<S extends StateSchema = StateSchema> extends RunnableBase {
   kind: 'parallel';
-  runnables: Runnable[];
-  merge?: (ctx: ParallelMergeContext) => Event[];
+  runnables: Runnable<S>[];
+  merge?: (ctx: ParallelMergeContext<S>) => Event[];
   failFast?: boolean;
   branchTimeout?: number;
   minSuccessful?: number;
 }
 
-export interface LoopContext {
+export interface LoopContext<S extends StateSchema = StateSchema> {
   invocationId: string;
-  session: Session;
-  state: StateAccessorWithScopes;
+  session: Session<S>;
+  state: TypedState<S>;
   iteration: number;
   lastResult: RunResult | null;
 }
 
-export interface Loop extends RunnableBase {
+export interface Loop<S extends StateSchema = StateSchema> extends RunnableBase {
   kind: 'loop';
-  runnable: Runnable;
+  runnable: Runnable<S>;
   maxIterations: number;
-  while: (ctx: LoopContext) => boolean | Promise<boolean>;
+  while: (ctx: LoopContext<S>) => boolean | Promise<boolean>;
   yields?: boolean;
 }
 
@@ -263,32 +269,39 @@ export type StepSignal =
   | { signal: 'fail'; message: string }
   | { signal: 'complete'; value: unknown; key?: string };
 
-export type StepResult = StepSignal | Runnable | void;
+export type StepResult<S extends StateSchema = StateSchema> = StepSignal | Runnable<S> | void;
 
-export interface StepContext extends OrchestrationContext {
+export interface StepContext<S extends StateSchema = StateSchema>
+  extends OrchestrationContext<S> {
   readonly invocationId: string;
-  readonly session: Session;
-  readonly state: StateAccessorWithScopes;
+  readonly session: Session<S>;
+  readonly state: TypedState<S>;
   skip(): StepSignal;
   fail(message: string): StepSignal;
   respond(text: string): StepSignal;
-  complete<T>(value: T, key?: string): StepSignal;
+  complete<T>(value: T, key?: SessionKeyOf<S>): StepSignal;
 }
 
-export interface Step extends RunnableBase {
+export interface Step<S extends StateSchema = StateSchema> extends RunnableBase {
   kind: 'step';
-  execute: (ctx: StepContext) => StepResult | Promise<StepResult>;
+  execute: (ctx: StepContext<S>) => StepResult<S> | Promise<StepResult<S>>;
 }
 
-export type Runnable = Agent | Step | Sequence | Parallel | Loop;
+export type Runnable<S extends StateSchema = StateSchema> = 
+  | Agent<unknown, S> 
+  | Step<S> 
+  | Sequence<S> 
+  | Parallel<S> 
+  | Loop<S>;
 
-export interface InvocationContext extends OrchestrationContext {
+export interface InvocationContext<S extends StateSchema = StateSchema>
+  extends OrchestrationContext<S> {
   readonly invocationId: string;
   readonly parentInvocationId?: string;
-  readonly runnable: Runnable;
-  readonly session: Session;
+  readonly runnable: Runnable<S>;
+  readonly session: Session<S>;
   readonly sessionService: SessionService;
-  readonly state: StateAccessorWithScopes;
+  readonly state: TypedState<S>;
   readonly signal?: AbortSignal;
   readonly onStream?: (event: StreamEvent) => void;
   endInvocation: boolean;
@@ -300,15 +313,15 @@ export interface SubRunConfig {
   handoffOrigin?: import('./events').HandoffOrigin;
 }
 
-export interface SubRunner {
+export interface SubRunner<S extends StateSchema = StateSchema> {
   run(
-    runnable: Runnable,
+    runnable: Runnable<S>,
     parentInvocationId?: string,
     config?: SubRunConfig,
   ): AsyncGenerator<StreamEvent, RunResult>;
   runToChannel?(
-    runnable: Runnable,
-    session: Session,
+    runnable: Runnable<S>,
+    session: Session<S>,
     channel: EventChannel,
     config?: RunConfig & SubRunConfig,
   ): Promise<RunResult>;
@@ -381,7 +394,7 @@ export type DispatchOptions = HandoffOptions;
  * - From beforeAgent/beforeModel/afterModel hooks: `return targetAgent;`
  * - From tool execute: `return targetAgent;`
  */
-export interface OrchestrationContext {
+export interface OrchestrationContext<S extends StateSchema = StateSchema> {
   /**
    * Synchronously call a sub-agent and wait for its completion.
    * The called agent runs in the same process and shares the session.
@@ -389,7 +402,7 @@ export interface OrchestrationContext {
    * @throws Error if the called agent yields (use yielding tools directly for HITL patterns)
    * @returns CallResult with the agent's output, response text, and status
    */
-  call(agent: Runnable, options?: CallOptions): Promise<CallResult>;
+  call(agent: Runnable<S>, options?: CallOptions): Promise<CallResult>;
 
   /**
    * Spawn an agent to run in parallel (same process).
@@ -397,7 +410,7 @@ export interface OrchestrationContext {
    * Child inherits parent's temp state, merged with any provided tempState overrides.
    * Errors in spawned agents don't crash the parent; retrieve via handle.wait().
    */
-  spawn(agent: Runnable, options?: SpawnOptions): SpawnHandle;
+  spawn(agent: Runnable<S>, options?: SpawnOptions): SpawnHandle;
 
   /**
    * Dispatch an agent as fire-and-forget (no waiting).
@@ -405,14 +418,15 @@ export interface OrchestrationContext {
    * Child inherits parent's temp state, merged with any provided tempState overrides.
    * The dispatched agent runs independently; errors are logged but not retrievable.
    */
-  dispatch(agent: Runnable, options?: DispatchOptions): DispatchHandle;
+  dispatch(agent: Runnable<S>, options?: DispatchOptions): DispatchHandle;
 }
 
-export interface ToolContext extends InvocationContext {
+export interface ToolContext<S extends StateSchema = StateSchema>
+  extends InvocationContext<S> {
   readonly callId: ToolCallEvent['callId'];
   readonly toolName: ToolCallEvent['name'];
   readonly args: ToolCallEvent['args'];
-  readonly subRunner?: SubRunner;
+  readonly subRunner?: SubRunner<S>;
 }
 
 export interface ModelAdapter {
