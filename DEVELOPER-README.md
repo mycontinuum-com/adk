@@ -23,11 +23,11 @@ import { z } from 'zod';
 import {
   agent,
   tool,
-  BaseRunner,
+  run,
   openai,
   injectSystemMessage,
   includeHistory,
-} from '@anima/adk';
+} from '@animahealth/adk';
 
 const calculator = tool({
   name: 'calculate',
@@ -55,7 +55,7 @@ const assistant = agent({
 });
 
 async function main() {
-  const result = await BaseRunner.run(assistant, 'What is 134 divided by 4?');
+  const result = await run(assistant, 'What is 134 divided by 4?');
   console.log(result.session.events);
 }
 
@@ -159,7 +159,7 @@ npx tsx scripts/adk/examples/document-researcher/main.ts
 The ADK includes an interactive terminal UI for developing and testing agents. It provides real-time event visualization, navigation through the event trace, log capture, and automatic handling of yield/resume flows.
 
 ```typescript
-import { cli } from 'modules/adk/cli';
+import { cli } from '@animahealth/adk';
 
 cli(myAgent, 'Hello!');
 ```
@@ -344,7 +344,9 @@ export GEMINI_API_KEY=...
 Or pass directly to the adapter:
 
 ```typescript
-const runner = new BaseRunner({
+import { runner, GeminiAdapter } from '@animahealth/adk';
+
+const r = runner({
   adapters: { gemini: new GeminiAdapter('your-api-key') },
 });
 ```
@@ -598,7 +600,7 @@ import {
   enrichment,
   injectSystemMessage,
   enrichUserMessages,
-} from 'modules/adk';
+} from '@animahealth/adk';
 
 const stateSchema = {
   session: { analysis: analysisSchema },
@@ -666,21 +668,22 @@ const myAgent = agent({
 
 ## Session & State
 
-### BaseSession
+### Creating Sessions
 
 Sessions manage the event ledger and provide typed state access:
 
 ```typescript
-const sessionService = new InMemorySessionService();
-const session = await sessionService.createSession('my-app', {
-  sessionId: 'session-123',
+import { session } from '@animahealth/adk';
+
+const sess = await session('my-app', {
+  id: 'session-123',
   userId: 'user-456',
   patientId: 'patient-789',
   practiceId: 'practice-012',
-  initialState: { mode: 'standard' },
 });
 
-session.addMessage('Hello!');
+sess.state.update({ session: { mode: 'standard' } });
+sess.addMessage('Hello!');
 ```
 
 ### Session Methods
@@ -725,7 +728,8 @@ session.invocationBoundary(invocationId); // Start/end of invocation
 For production use, `PersistentSessionService` provides DynamoDB-backed persistence with optional OpenSearch indexing:
 
 ```typescript
-import { PersistentSessionService } from 'modules/adk/persistence';
+import { session } from '@animahealth/adk';
+import { PersistentSessionService } from '@animahealth/adk/persistence';
 
 const sessionService = new PersistentSessionService({
   appName: 'my-app',
@@ -736,8 +740,9 @@ const sessionService = new PersistentSessionService({
   },
 });
 
-const session = await sessionService.createSession('my-app', {
-  sessionId: 'session-123',
+const sess = await session('my-app', {
+  sessionService,
+  id: 'session-123',
   userId: 'user-456',
 });
 
@@ -745,7 +750,7 @@ const retrieved = await sessionService.getSession('my-app', 'session-123');
 
 await sessionService.deleteSession('my-app', 'session-123');
 
-await sessionService.bindSessionScope(session, 'patient', 'patient-789');
+await sessionService.bindSessionScope(sess, 'patient', 'patient-789');
 ```
 
 Shared state (`user`, `patient`, `practice`) is persisted separately and automatically bound to sessions. State updates use optimistic concurrency control.
@@ -859,7 +864,7 @@ import {
   snapshotAt,
   findEventIndex,
   findInvocationBoundary,
-} from 'modules/adk';
+} from '@animahealth/adk';
 
 const state = computeStateAtEvent(events, 42, 'session'); // Single scope
 const snapshot = snapshotAt(events, 42); // Full snapshot
@@ -872,37 +877,40 @@ const boundary = findInvocationBoundary(events, 'inv-xyz789'); // Invocation spa
 ### Simple API
 
 ```typescript
-const result = await BaseRunner.run(myAgent, 'Hello!', {
+import { run } from '@animahealth/adk';
+
+const result = await run(myAgent, 'Hello!');
+
+// With options
+const result = await run(myAgent, {
+  input: 'Hello!',
   timeout: 30000,
   onStream: (event) => console.log(event),
   onStep: (events, session, runnable) => console.log('Step completed'),
 });
 ```
 
-### Instance API
+### With Session Control
 
 ```typescript
-const sessionService = new InMemorySessionService();
-const session = await sessionService.createSession('app', { sessionId: 'id' });
-session.addMessage('Hello!');
+import { run, session, runner } from '@animahealth/adk';
 
-const runner = new BaseRunner({
-  sessionService,
-  adapters: { openai: new OpenAIAdapter(), gemini: new GeminiAdapter() },
-  middleware: [loggingMiddleware()],
-  errorHandlers: [retryHandler(), rateLimitHandler()],
+const sess = await session('app', { id: 'session-123' });
+sess.state.update({ session: { mode: 'debug' } });
+
+const r = runner({ middleware: [loggingMiddleware()] });
+
+const result = await run(myAgent, {
+  session: sess,
+  runner: r,
+  input: 'Hello!',
 });
-
-const stream = runner.run(myAgent, session, { timeout: 30000 });
-const result = await stream;
-
-stream.abort();
 ```
 
 ### Streaming
 
 ```typescript
-for await (const event of BaseRunner.run(myAgent, 'Hello!')) {
+for await (const event of run(myAgent, 'Hello!')) {
   switch (event.type) {
     case 'thought_delta':
       process.stdout.write(event.delta);
@@ -925,16 +933,16 @@ for await (const event of BaseRunner.run(myAgent, 'Hello!')) {
 The ADK supports yields for serverless and human-in-the-loop workflows:
 
 ```typescript
-const result = await runner.run(agent, session);
+const result = await run(agent, { session: sess });
 
 if (result.status === 'yielded') {
   if (result.pendingCalls.length > 0) {
     const call = result.pendingCalls[0];
-    session.addToolInput(call.callId, await askUser(call.args));
+    sess.addToolInput(call.callId, await askUser(call.args));
   } else if (result.awaitingInput) {
-    session.addMessage(await getNextMessage(), result.yieldedInvocationId);
+    sess.addMessage(await getNextMessage(), result.yieldedInvocationId);
   }
-  await runner.run(agent, session);
+  await run(agent, { session: sess });
 }
 ```
 
@@ -980,8 +988,8 @@ export const main = commonMiddleware(handler);
 
 ```typescript
 // handlers/conversation/services/runConversation.ts
-import { BaseRunner, BaseSession } from '@anima/adk';
-import { PersistentSessionService } from '@anima/adk/session';
+import { run, session } from '@animahealth/adk';
+import { PersistentSessionService } from '@animahealth/adk/persistence';
 import { conversationAgent } from '../agent';
 
 const sessionService = new PersistentSessionService();
@@ -993,29 +1001,28 @@ interface Input {
 }
 
 export async function runConversation(input: Input) {
-  const session = input.sessionId
-    ? ((await sessionService.get(input.sessionId)) as BaseSession)
-    : new BaseSession('conversation');
+  const s = input.sessionId
+    ? await sessionService.get(input.sessionId)
+    : await session('conversation', { sessionService });
 
   if (input.yieldResponse?.callId) {
-    session.addToolInput(input.yieldResponse.callId, input.yieldResponse.input);
+    s.addToolInput(input.yieldResponse.callId, input.yieldResponse.input);
   } else if (input.yieldResponse?.invocationId) {
-    session.addMessage(
+    s.addMessage(
       String(input.yieldResponse.input),
       input.yieldResponse.invocationId,
     );
   } else if (input.message) {
-    session.addMessage(input.message);
+    s.addMessage(input.message);
   }
 
-  const runner = new BaseRunner({ sessionService });
-  const result = await runner.run(conversationAgent, session);
-  await sessionService.save(session);
+  const result = await run(conversationAgent, { session: s });
+  await sessionService.save(s);
 
   if (result.status === 'yielded') {
     const pending = result.pendingCalls?.[0];
     return {
-      sessionId: session.id,
+      sessionId: s.id,
       status: 'awaiting_input',
       pendingYield: pending
         ? {
@@ -1028,11 +1035,9 @@ export async function runConversation(input: Input) {
     };
   }
 
-  const lastAssistant = session.events
-    .filter((e) => e.type === 'assistant')
-    .pop();
+  const lastAssistant = s.events.filter((e) => e.type === 'assistant').pop();
   return {
-    sessionId: session.id,
+    sessionId: s.id,
     status: result.status,
     message: lastAssistant?.text,
   };
@@ -1091,9 +1096,9 @@ const myAgent = agent({
 Middleware provides composable cross-cutting concerns that wrap the entire agent lifecycle:
 
 ```typescript
-import { loggingMiddleware } from 'modules/adk';
+import { runner, loggingMiddleware } from '@animahealth/adk';
 
-const runner = new BaseRunner({
+const r = runner({
   middleware: [loggingMiddleware({ onLog: customLogger })],
 });
 
@@ -1134,13 +1139,14 @@ Error handlers define recovery strategies for failures:
 
 ```typescript
 import {
+  runner,
   retryHandler,
   rateLimitHandler,
   timeoutHandler,
   loggingHandler,
-} from 'modules/adk';
+} from '@animahealth/adk';
 
-const runner = new BaseRunner({
+const r = runner({
   errorHandlers: [
     loggingHandler({ onError: (ctx) => logger.error(ctx) }),
     rateLimitHandler({ maxRetries: 5, baseDelay: 1000 }),
@@ -1183,7 +1189,7 @@ const customHandler: ErrorHandler = {
 Use `output()` for type-safe output configuration coupled to your state schema:
 
 ```typescript
-import { output, type StateSchema } from 'modules/adk';
+import { output, type StateSchema } from '@animahealth/adk';
 
 const stateSchema = {
   session: {
@@ -1254,7 +1260,7 @@ import {
   input,
   result,
   setupAdkMatchers,
-} from 'modules/adk/testing';
+} from '@animahealth/adk/testing';
 
 setupAdkMatchers();
 
@@ -1302,7 +1308,7 @@ expect(result).toHaveStatus('completed');
 For advanced testing and CLI/eval scenarios, the ADK provides User primitives:
 
 ```typescript
-import { scriptedUser, humanUser, agentUser } from 'modules/adk';
+import { scriptedUser, humanUser, agentUser } from '@animahealth/adk';
 
 // scriptedUser - for automated testing with runner
 const user = scriptedUser({
@@ -1337,14 +1343,15 @@ import {
   testAgent,
   createTestSession,
   collectStream,
-} from 'modules/adk/testing';
+} from '@animahealth/adk/testing';
+import { runner } from '@animahealth/adk';
 
 const mockAdapter = new MockAdapter({
   responses: [{ text: 'Hello' }],
   defaultResponse: { text: 'Default' },
 });
 
-const runner = new BaseRunner({ adapters: { openai: mockAdapter } });
+const r = runner({ adapters: { openai: mockAdapter } });
 ```
 
 ### Running Tests

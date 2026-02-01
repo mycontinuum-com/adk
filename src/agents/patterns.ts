@@ -19,7 +19,7 @@ function getStateSetAt(
     if (
       event.type === 'state_change' &&
       event.scope === scope &&
-      event.source === 'mutation' &&
+      (event.source === 'mutation' || event.source === 'direct') &&
       (event as StateChangeEvent).changes.some((c) => c.key === key)
     ) {
       return event.createdAt;

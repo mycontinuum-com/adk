@@ -18,8 +18,9 @@ import {
   claude,
   injectSystemMessage,
   includeHistory,
+  cli,
 } from '../src';
-import { cli } from '../src/cli';
+
 
 type Provider = 'openai' | 'gemini' | 'gemini-vertex' | 'claude-vertex';
 

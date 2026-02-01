@@ -8,7 +8,7 @@ export {
   type LogLevel,
 } from './logger';
 
-export { EvalSessionService, applyStateChanges } from './session';
+export { EvalSessionService } from './session';
 
 export {
   withStateChange,
@@ -76,7 +76,6 @@ export type {
   YieldInfo,
   StateChanges,
   StateChangeResult,
-  InitialState,
   TerminateWhen,
   TerminationReason,
 } from './types';

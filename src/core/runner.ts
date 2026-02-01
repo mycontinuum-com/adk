@@ -8,6 +8,7 @@ import type {
   StreamEvent,
   StreamResult,
   Runner,
+  Session,
   SubRunConfig,
   HandoffOrigin,
   InvocationStartEvent,
@@ -712,25 +713,49 @@ function applyYieldResponse(
 }
 
 function applyStateChanges(session: BaseSession, changes: StateChanges): void {
-  const state = session.createBoundState('user-state-change');
   if (changes.session) {
-    for (const [key, value] of Object.entries(changes.session)) {
-      state.session.set(key, value);
-    }
+    session.state.session.update(changes.session);
   }
   if (changes.user) {
-    for (const [key, value] of Object.entries(changes.user)) {
-      state.user.set(key, value);
-    }
+    session.state.user.update(changes.user);
   }
   if (changes.patient) {
-    for (const [key, value] of Object.entries(changes.patient)) {
-      state.patient.set(key, value);
-    }
+    session.state.patient.update(changes.patient);
   }
   if (changes.practice) {
-    for (const [key, value] of Object.entries(changes.practice)) {
-      state.practice.set(key, value);
-    }
+    session.state.practice.update(changes.practice);
   }
+}
+
+export interface RunnerOptions {
+  sessionService?: SessionService;
+  adapters?: Partial<Record<Provider, ModelAdapter>>;
+  middleware?: Middleware[];
+  errorHandlers?: ErrorHandler[];
+}
+
+export interface FullRunConfig extends RunConfig {
+  input?: string;
+  session?: Session;
+  runner?: Runner;
+}
+
+export function runner(options?: RunnerOptions): Runner {
+  return new BaseRunner(options);
+}
+
+export function run(runnable: Runnable): StreamResult;
+export function run(runnable: Runnable, input: string): StreamResult;
+export function run(runnable: Runnable, config: FullRunConfig): StreamResult;
+export function run(
+  runnable: Runnable,
+  inputOrConfig?: string | FullRunConfig,
+): StreamResult {
+  const config = typeof inputOrConfig === 'string' 
+    ? { input: inputOrConfig } 
+    : (inputOrConfig ?? {});
+  const sess = (config.session ?? new BaseSession(runnable.name)) as BaseSession;
+  if (config.input) sess.addMessage(config.input);
+  const r = (config.runner ?? new BaseRunner()) as BaseRunner;
+  return r.run(runnable, sess, config);
 }

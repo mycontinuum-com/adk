@@ -2,7 +2,7 @@ import { z } from 'zod';
 import {
   agent,
   tool,
-  BaseRunner,
+  run,
   openai,
   injectSystemMessage,
   includeHistory,
@@ -34,7 +34,7 @@ const assistant = agent({
 });
 
 async function main() {
-  const result = await BaseRunner.run(assistant, 'What is 134 divided by 4?');
+  const result = await run(assistant, 'What is 134 divided by 4?');
   console.log(result.session.events);
 }
 

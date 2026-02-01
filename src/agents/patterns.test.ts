@@ -115,9 +115,7 @@ describe('cached', () => {
 
     const expiredSession = new BaseSession('test-app', { id: 'expired' });
     expiredSession.addMessage('Go');
-    expiredSession
-      .createBoundState('test-init')
-      .session.set('result', 'old_value');
+    expiredSession.state.session.set('result', 'old_value');
     const stateEvent = expiredSession.events.find(
       (e) => e.type === 'state_change',
     );
@@ -130,9 +128,7 @@ describe('cached', () => {
     executed = false;
     const validSession = new BaseSession('test-app', { id: 'valid' });
     validSession.addMessage('Go');
-    validSession
-      .createBoundState('test-init')
-      .session.set('result', 'recent_value');
+    validSession.state.session.set('result', 'recent_value');
 
     await createRunner().run(pipeline, validSession);
     expect(executed).toBe(false);

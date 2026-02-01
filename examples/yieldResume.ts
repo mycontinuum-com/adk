@@ -16,8 +16,9 @@ import {
   openai,
   injectSystemMessage,
   includeHistory,
+  cli,
 } from '../src';
-import { cli } from '../src/cli';
+
 
 const approvalTool = tool({
   name: 'request_approval',

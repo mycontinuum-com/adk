@@ -8,7 +8,7 @@ import type {
 } from '../types';
 import { BaseSession } from '../session';
 import { EvalRunner } from './runner';
-import { EvalSessionService, applyStateChanges } from './session';
+import { EvalSessionService } from './session';
 import { createBridge, collectStateChanges, unwrapStateChange } from './bridge';
 import { EvalUserAgentError } from './errors';
 import type { Middleware } from '../middleware/types';
@@ -32,8 +32,8 @@ import type {
 interface EvalContext {
   evalCase: EvalCase;
   runner: EvalRunner;
-  mainSession: BaseSession;
-  userAgentSession: BaseSession;
+  mainSession: Session;
+  userAgentSession: Session;
   bridge: Required<Bridge>;
   sessionService: EvalSessionService;
   middleware?: Middleware[];
@@ -210,7 +210,7 @@ async function runUserAgent(
   sessionService: EvalSessionService,
   middleware?: Middleware[],
 ): Promise<{ output: unknown; stateChanges: StateChanges }> {
-  (userAgentSession as BaseSession).addMessage(prompt);
+  userAgentSession.addMessage(prompt);
 
   const runner = new EvalRunner({ sessionService, middleware });
   const result = await runner.run(userAgent, userAgentSession as BaseSession);
@@ -262,7 +262,7 @@ async function handleYield(
   );
 
   if (Object.keys(stateChanges).length > 0) {
-    applyStateChanges(mainSession, stateChanges, yieldInfo.invocationId);
+    mainSession.state.update(stateChanges);
   }
 
   const response = await bridge.formatResponse(
@@ -273,7 +273,7 @@ async function handleYield(
   const unwrappedResponse = unwrapStateChange(response);
 
   if (yieldInfo.type === 'loop') {
-    (mainSession as BaseSession).addMessage(
+    mainSession.addMessage(
       String(unwrappedResponse ?? ''),
       yieldInfo.invocationId,
     );
@@ -314,14 +314,14 @@ async function createEvalContext(
 ): Promise<EvalContext> {
   const sessionService = new EvalSessionService();
 
-  const mainSession = (await sessionService.createEvalSession(
+  const mainSession = await sessionService.createEvalSession(
     'eval',
     evalCase.initialState,
-  )) as BaseSession;
+  );
 
-  const userAgentSession = (await sessionService.createUserAgentSession(
+  const userAgentSession = await sessionService.createUserAgentSession(
     'eval-user-agent',
-  )) as BaseSession;
+  );
 
   const bridge = createBridge(evalCase.bridge);
 
@@ -352,7 +352,7 @@ async function createEvalContext(
 }
 
 async function runSimulationStep(ctx: EvalContext): Promise<StepResult> {
-  const result = await ctx.runner.run(ctx.evalCase.runnable, ctx.mainSession);
+  const result = await ctx.runner.run(ctx.evalCase.runnable, ctx.mainSession as BaseSession);
 
   ctx.state.tokenUsage = extractTokenUsage(ctx.mainSession.events);
 

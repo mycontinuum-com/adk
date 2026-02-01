@@ -1,7 +1,7 @@
 import { initLogCapture, repatchConsole } from './logCapture';
 import React from 'react';
 import { render } from 'ink';
-import type { Runnable, RunResult } from '../types';
+import type { Runnable, RunResult, Session, Runner } from '../types';
 import type { CLIOptions, CLIConfig, CLIHandle } from './types';
 import { BaseRunner } from '../core';
 import { BaseSession } from '../session';
@@ -19,8 +19,8 @@ const SHOW_CURSOR = '\x1b[?25h';
 
 function createCLIHandle(
   runnable: Runnable,
-  runner: BaseRunner,
-  session: BaseSession,
+  runner: Runner,
+  session: Session,
   resultPromise: Promise<RunResult>,
 ): CLIHandle {
   return {
@@ -40,37 +40,23 @@ function createCLIHandle(
   };
 }
 
-export function cli(
-  runnable: Runnable,
-  prompt?: string,
-  options?: CLIOptions,
-): CLIHandle;
+export function cli(runnable: Runnable): CLIHandle;
+export function cli(runnable: Runnable, input: string): CLIHandle;
 export function cli(runnable: Runnable, config: CLIConfig): CLIHandle;
-export function cli(runnable: Runnable, options?: CLIOptions): CLIHandle;
 export function cli(
   runnable: Runnable,
-  promptOrConfigOrOptions?: string | CLIConfig | CLIOptions,
-  maybeOptions?: CLIOptions,
+  inputOrConfig?: string | CLIConfig,
 ): CLIHandle {
   initLogCapture();
 
-  let prompt: string | undefined;
+  let input: string | undefined;
   let config: CLIConfig = {};
 
-  if (typeof promptOrConfigOrOptions === 'string') {
-    prompt = promptOrConfigOrOptions;
-    config = { options: maybeOptions };
-  } else if (promptOrConfigOrOptions !== undefined) {
-    if (
-      'runner' in promptOrConfigOrOptions ||
-      'session' in promptOrConfigOrOptions ||
-      'prompt' in promptOrConfigOrOptions
-    ) {
-      config = promptOrConfigOrOptions as CLIConfig;
-      prompt = config.prompt;
-    } else {
-      config = { options: promptOrConfigOrOptions as CLIOptions };
-    }
+  if (typeof inputOrConfig === 'string') {
+    input = inputOrConfig;
+  } else if (inputOrConfig !== undefined) {
+    config = inputOrConfig;
+    input = config.input;
   }
 
   const options = config.options ?? {};
@@ -89,7 +75,7 @@ export function cli(
       sessionService: config.sessionService,
       middleware: resolvedOptions.middleware,
     });
-  const session = config.session ?? new BaseSession('cli');
+  const session = config.session ?? new BaseSession(runnable.name);
 
   process.stdout.write(ENTER_ALT_SCREEN);
   process.stdout.write(HIDE_CURSOR);
@@ -120,9 +106,9 @@ export function cli(
         null,
         React.createElement(App, {
           runnable,
-          runner,
-          session,
-          initialPrompt: prompt,
+          runner: runner as BaseRunner,
+          session: session as BaseSession,
+          initialInput: input,
           options: resolvedOptions,
           onResult: (result: RunResult) => resolveResult(result),
         }),
@@ -138,24 +124,4 @@ export function cli(
   });
 
   return createCLIHandle(runnable, runner, session, resultPromise);
-}
-
-/** @deprecated Use `cli()` instead */
-export function runCLI(
-  runnable: Runnable,
-  prompt?: string,
-  options?: CLIOptions,
-): CLIHandle;
-/** @deprecated Use `cli()` instead */
-export function runCLI(runnable: Runnable, options?: CLIOptions): CLIHandle;
-/** @deprecated Use `cli()` instead */
-export function runCLI(
-  runnable: Runnable,
-  promptOrOptions?: string | CLIOptions,
-  maybeOptions?: CLIOptions,
-): CLIHandle {
-  if (typeof promptOrOptions === 'string') {
-    return cli(runnable, promptOrOptions, maybeOptions);
-  }
-  return cli(runnable, promptOrOptions);
 }

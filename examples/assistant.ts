@@ -15,9 +15,9 @@ import {
   openai,
   injectSystemMessage,
   includeHistory,
+  cli,
   type LoopContext,
 } from '../src';
-import { cli } from '../src/cli';
 
 const calculate = tool({
   name: 'calculate',

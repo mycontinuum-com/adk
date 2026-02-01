@@ -64,10 +64,11 @@ import {
   output,
   injectSystemMessage,
   includeHistory,
+  cli,
   type LoopContext,
   type StateSchema,
 } from '../src';
-import { cli } from '../src/cli';
+
 
 const MAX_REVISIONS = 3;
 const QUALITY_THRESHOLD = 8;

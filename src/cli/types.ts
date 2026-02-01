@@ -1,7 +1,5 @@
 import type { Middleware } from '../middleware/types';
-import type { Runnable, RunResult, SessionService } from '../types';
-import type { BaseRunner } from '../core';
-import type { BaseSession } from '../session';
+import type { Runnable, RunResult, SessionService, Session, Runner } from '../types';
 
 export type CLIStatus = 'idle' | 'running' | 'yielded' | 'completed' | 'error';
 
@@ -17,15 +15,15 @@ export interface CLIOptions {
 }
 
 export interface CLIConfig {
-  runner?: BaseRunner;
-  session?: BaseSession;
+  runner?: Runner;
+  session?: Session;
   sessionService?: SessionService;
-  prompt?: string;
+  input?: string;
   options?: CLIOptions;
 }
 
 export interface CLIHandle extends PromiseLike<RunResult> {
-  readonly runner: BaseRunner;
-  readonly session: BaseSession;
+  readonly runner: Runner;
+  readonly session: Session;
   readonly runnable: Runnable;
 }

@@ -1,18 +1,14 @@
+// Execution
+export { run, runner } from './core';
+export type { RunnerOptions, FullRunConfig } from './core';
+export { session } from './session';
+export type { SessionOptions } from './session';
+export { cli } from './cli';
+export type { CLIOptions, CLIConfig, CLIHandle, DisplayMode } from './cli';
+
+// Runnables
 export { agent, step, sequence, parallel, loop } from './agents';
 export { tool } from './core';
-
-export {
-  scriptedUser,
-  humanUser,
-  agentUser,
-  AgentUserError,
-  ScriptedUserExhaustedError,
-  ScriptedUserNoHandlerError,
-  type Bridge as UserBridge,
-  type AgentUserConfig,
-} from './users';
-
-export { gated, cached, type CachedOptions } from './agents/patterns';
 
 export { openai, gemini, claude } from './providers';
 
@@ -36,45 +32,64 @@ export {
   createRenderContext,
 } from './context';
 
-export { BaseRunner, type BaseRunnerConfig } from './core';
+// Patterns
+export { gated, cached, type CachedOptions } from './agents/patterns';
 
-export { InMemoryChannel } from './channels';
-export type { EventChannel, ProducerResult, ChannelResult } from './channels';
-
+// Users
 export {
-  BaseSession,
+  scriptedUser,
+  humanUser,
+  agentUser,
+  AgentUserError,
+  ScriptedUserExhaustedError,
+  ScriptedUserNoHandlerError,
+  type Bridge as UserBridge,
+  type AgentUserConfig,
+} from './users';
+
+// Web
+export {
+  webSearch,
+  fetchPage,
+  fetchPages,
+  SerperProvider,
+  linkedInPipeline,
+  closeBrowser,
+} from './web';
+export type {
+  WebSearchConfig,
+  FetchPageConfig,
+  SearchProvider,
+  SearchResult,
+  FetchPageResult,
+  FetchPipeline,
+  ProxyConfig,
+} from './web';
+
+// Session services (for advanced use)
+export {
   InMemorySessionService,
   LocalSessionService,
-  type BaseSessionOptions,
-  createEventId,
-  createCallId,
-  computePipelineFingerprint,
-  snapshotAt,
-  computeStateAtEvent,
-  computeAllStatesAtEvent,
-  findEventIndex,
-  findInvocationBoundary,
-  SnapshotError,
+  BaseSession,
 } from './session';
+export type { BaseSessionOptions } from './session';
 
-export { createStateAccessor } from './context';
+// Runner (for advanced use)
+export { BaseRunner, type BaseRunnerConfig } from './core';
 
-export {
-  buildInvocationTree,
-  computeResumeContext,
-  validateResumeState,
-  assertReadyToResume,
-} from './session';
-
+// Middleware
 export {
   composeMiddleware,
   composeObservationHooks,
   loggingMiddleware,
   cliMiddleware,
 } from './middleware';
+export type {
+  ComposedObservationHooks,
+  CliMiddlewareOptions,
+} from './middleware';
 
-export { extractCurrentThoughtBlock } from './cli/event-display';
-
+// Error handling
 export {
   composeErrorHandlers,
   retryHandler,
@@ -86,47 +101,7 @@ export {
   OutputParseError,
 } from './errors';
 
-export {
-  OpenAIAdapter,
-  GeminiAdapter,
-  ClaudeAdapter,
-  getDefaultEndpoints,
-  resolveModelName,
-} from './providers';
-
-export {
-  CONTROL,
-  isControlSignal,
-  isYieldSignal,
-  isRunnable,
-  signalYield,
-  withRetry,
-  withStreamRetry,
-  withInvocationBoundary,
-  createInvocationId,
-} from './core';
-
-export { buildInvocationBlocks } from './cli/blocks';
-
-export {
-  webSearch,
-  fetchPage,
-  fetchPages,
-  SerperProvider,
-  linkedInPipeline,
-  closeBrowser,
-} from './web';
-
-export type {
-  WebSearchConfig,
-  FetchPageConfig,
-  SearchProvider,
-  SearchResult,
-  FetchPageResult,
-  FetchPipeline,
-  ProxyConfig,
-} from './web';
-
+// Parsing
 export {
   parse,
   parsePartial,
@@ -139,7 +114,6 @@ export {
   createStreamParser,
   parseStreamChunks,
 } from './parser';
-
 export type {
   SchemaAwareParser,
   JsonishResult,
@@ -154,6 +128,62 @@ export type {
   StreamParseState,
 } from './parser';
 
+// Channels
+export { InMemoryChannel } from './channels';
+export type { EventChannel, ProducerResult, ChannelResult } from './channels';
+
+// Schema helpers
+export type { StateSchema, InferStateSchema, StateValues } from './types';
+export { output } from './types';
+
+// Provider adapters (for advanced use)
+export { OpenAIAdapter, GeminiAdapter, ClaudeAdapter } from './providers';
+export { getDefaultEndpoints, resolveModelName } from './providers';
+export type { OpenAIEndpoint } from './providers';
+
+// Session utilities (for advanced use)
+export {
+  createEventId,
+  createCallId,
+  computePipelineFingerprint,
+  snapshotAt,
+  computeStateAtEvent,
+  computeAllStatesAtEvent,
+  findEventIndex,
+  findInvocationBoundary,
+  SnapshotError,
+  buildInvocationTree,
+  computeResumeContext,
+  validateResumeState,
+  assertReadyToResume,
+} from './session';
+
+// CLI utilities
+export { extractCurrentThoughtBlock } from './cli/event-display';
+export { buildInvocationBlocks } from './cli/blocks';
+export type { InvocationBlock } from './cli/blocks';
+
+// Core utilities (for advanced use)
+export {
+  CONTROL,
+  isControlSignal,
+  isYieldSignal,
+  isRunnable,
+  signalYield,
+  withRetry,
+  withStreamRetry,
+  withInvocationBoundary,
+  createInvocationId,
+} from './core';
+export type {
+  ControlSignal,
+  YieldSignal,
+  InvocationBoundaryOptions,
+  YieldInfo,
+  ResumeContext,
+} from './core';
+
+// Types - Configs
 export type {
   AgentConfig,
   StepConfig,
@@ -173,35 +203,7 @@ export type {
   Prompt,
 } from './context';
 
-export type { StateSchema, InferStateSchema, StateValues } from './types';
-export { output } from './types';
-
-export type {
-  ComposedObservationHooks,
-  CliMiddlewareOptions,
-} from './middleware';
-
-export type { OpenAIEndpoint } from './providers';
-
-export type {
-  InvocationBoundaryOptions,
-  YieldInfo,
-  ResumeContext,
-} from './core';
-
-export type { ControlSignal, YieldSignal } from './core';
-
-export type {
-  InvocationNode,
-  InvocationState,
-  RunnableResumeContext,
-  SpawnedTaskStatus,
-  SessionSnapshot,
-  InvocationBoundary,
-} from './session';
-
-export type { InvocationBlock } from './cli/blocks';
-
+// Types - Core interfaces
 export type {
   EventType,
   InvocationEndReason,
@@ -233,7 +235,7 @@ export type {
   SessionStatus,
   StateAccessor,
   StateAccessorWithScopes,
-  SessionState,
+  ScopedStateChanges,
   Session,
   SessionStoreSnapshot,
   SessionStore,
@@ -290,3 +292,12 @@ export type {
   HumanUserOptions,
   ToolHandler,
 } from './types';
+
+export type {
+  InvocationNode,
+  InvocationState,
+  RunnableResumeContext,
+  SpawnedTaskStatus,
+  SessionSnapshot,
+  InvocationBoundary,
+} from './session';

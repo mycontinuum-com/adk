@@ -17,7 +17,7 @@ interface AppProps {
   runnable: Runnable;
   runner: BaseRunner;
   session: BaseSession;
-  initialPrompt?: string;
+  initialInput?: string;
   options: CLIOptions;
   onResult?: (result: RunResult) => void;
 }
@@ -133,7 +133,7 @@ const FIXED_UI_LINES =
 
 const PROMPT_INPUT_HEIGHT = LAYOUT.promptInputMarginTop + LAYOUT.promptInputLines;
 
-export function App({ runnable, runner, session, initialPrompt, options, onResult }: AppProps): React.ReactElement {
+export function App({ runnable, runner, session, initialInput, options, onResult }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const terminalHeightRef = useRef(stdout?.rows ?? DEFAULT_TERMINAL_HEIGHT);
@@ -336,8 +336,8 @@ export function App({ runnable, runner, session, initialPrompt, options, onResul
 
 
   useEffect(() => {
-    if (initialPrompt) {
-      run(initialPrompt);
+    if (initialInput) {
+      run(initialInput);
     }
   }, []);
 

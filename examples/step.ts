@@ -43,10 +43,10 @@ import {
   injectSystemMessage,
   includeHistory,
   InMemorySessionService,
-  BaseSession,
+  cli,
   type StateSchema,
 } from '../src';
-import { cli } from '../src/cli';
+
 
 const processedProductSchema = z.object({
   id: z.number(),
@@ -209,17 +209,14 @@ const dataPipeline = sequence({
 
 (async () => {
   const sessionService = new InMemorySessionService();
-  const session = (await sessionService.createSession(dataPipeline.name, {
-    initialState: {
-      authenticated: true,
-      role: 'user',
-      mode: 'analyze',
-    },
-  })) as BaseSession;
+  const session = await sessionService.createSession(dataPipeline.name);
+  session.state.update({
+    session: { authenticated: true, role: 'user', mode: 'analyze' },
+  });
 
   cli(dataPipeline, {
     sessionService,
     session,
-    prompt: 'Give me an overview of the inventory',
+    input: 'Give me an overview of the inventory',
   });
 })();

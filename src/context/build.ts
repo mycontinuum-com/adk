@@ -1,6 +1,5 @@
 import type {
   RenderContext,
-  Session,
   Agent,
   ModelStartEvent,
   ModelEndEvent,
@@ -12,9 +11,9 @@ import type {
   OutputMode,
 } from '../types';
 import type { z } from 'zod';
-import { createEventId } from '../session';
+import { createEventId, type BaseSession } from '../session';
 import { zodResponsesFunction } from 'openai/helpers/zod';
-import { createBoundStateAccessor } from './state';
+import { createStateAccessor } from './state';
 import { partitionTools } from '../core/tools';
 
 function isObjectSchema(schema: unknown): boolean {
@@ -149,7 +148,7 @@ export function createEndEvent(options: CreateEndEventOptions): ModelEndEvent {
 }
 
 export function createRenderContext(
-  session: Session,
+  session: BaseSession,
   agent: Agent,
   invocationId: string,
 ): RenderContext {
@@ -159,7 +158,7 @@ export function createRenderContext(
     invocationId,
     agentName: agent.name,
     session,
-    state: createBoundStateAccessor(session, invocationId),
+    state: createStateAccessor(session, invocationId),
     agent,
     events: [],
     functionTools,
@@ -170,7 +169,7 @@ export function createRenderContext(
 }
 
 export function buildContext(
-  session: Session,
+  session: BaseSession,
   agent: Agent,
   invocationId: string,
 ): RenderContext {

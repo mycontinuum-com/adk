@@ -18,8 +18,9 @@ import {
   injectSystemMessage,
   includeHistory,
   excludeChildInvocationEvents,
+  cli,
 } from '../src';
-import { cli } from '../src/cli';
+
 
 const pythonAgent = agent({
   name: 'python_agent',

@@ -3,6 +3,7 @@ import type {
   FunctionTool,
   Runnable,
   Session,
+  ScopedStateChanges,
   StateAccessorWithScopes,
 } from '../types';
 
@@ -54,12 +55,6 @@ export interface UserAgents {
   tools?: Record<string, Runnable>;
 }
 
-export interface InitialState {
-  session?: Record<string, unknown>;
-  user?: Record<string, unknown>;
-  patient?: Record<string, unknown>;
-  practice?: Record<string, unknown>;
-}
 
 export interface TerminateWhen {
   maxTurns?: number;
@@ -86,7 +81,7 @@ export interface EvalCase {
   toolMocks?: ToolMocks;
   userAgents: UserAgents;
   bridge?: Bridge;
-  initialState?: InitialState;
+  initialState?: ScopedStateChanges;
   firstMessage?: string;
   terminateWhen?: TerminateWhen;
   metrics?: Metric[];

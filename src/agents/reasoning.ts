@@ -27,7 +27,7 @@ import type { ComposedErrorHandler, ErrorRecovery } from '../errors/types';
 import { OutputParseError } from '../errors/types';
 import { createParser } from '../parser';
 import { BaseSession, createEventId } from '../session';
-import { createBoundStateAccessor } from '../context';
+import { createStateAccessor } from '../context';
 import { buildContext, createStartEvent, createEndEvent } from '../context';
 import {
   withRetry,
@@ -131,7 +131,7 @@ function createInvocationContext(
     parentInvocationId,
     runnable: agent,
     session,
-    state: createBoundStateAccessor(session, invocationId),
+    state: createStateAccessor(session, invocationId),
     sessionService: config.sessionService,
     signal: config.signal,
     onStream,
@@ -146,8 +146,9 @@ function createToolContext(
   runnerConfig: AgentRunnerConfig,
   onStream?: (event: StreamEvent) => void,
 ): ToolContext {
+  const session = ctx.session as BaseSession;
   const orchestration = createOrchestrationContext({
-    session: ctx.session as BaseSession,
+    session,
     sessionService: runnerConfig.sessionService,
     invocationId: ctx.invocationId,
     subRunner: runnerConfig.subRunner,
@@ -159,7 +160,7 @@ function createToolContext(
 
   return {
     ...ctx,
-    state: createBoundStateAccessor(ctx.session, ctx.invocationId),
+    state: createStateAccessor(session, ctx.invocationId),
     callId: call.callId,
     toolName: call.name,
     args: call.args,
@@ -745,8 +746,10 @@ function processAgentOutput(
 
   const outputConfig = agent.output;
 
+  const state = session.boundState(invocationId);
+
   if (typeof outputConfig === 'string') {
-    session.setSessionState(outputConfig, rawOutput, invocationId);
+    state.session.set(outputConfig, rawOutput);
     return { value: rawOutput };
   }
 
@@ -756,7 +759,7 @@ function processAgentOutput(
 
     if (result.success) {
       if (outputConfig.key) {
-        session.setSessionState(outputConfig.key, result.value, invocationId);
+        state.session.set(outputConfig.key, result.value);
       }
       return {
         value: result.value,
@@ -777,7 +780,7 @@ function processAgentOutput(
     );
   }
 
-  session.setSessionState(outputConfig.key, rawOutput, invocationId);
+  state.session.set(outputConfig.key, rawOutput);
   return { value: rawOutput };
 }
 

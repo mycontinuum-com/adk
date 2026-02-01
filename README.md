@@ -57,12 +57,12 @@ This package is published to npm as a **private package** under the `@animahealt
        runs-on: ubuntu-latest
        steps:
          - uses: actions/checkout@v4
-         
+
          - uses: actions/setup-node@v4
            with:
              node-version: '20'
              cache: 'npm'
-         
+
          - name: Install dependencies
            run: npm ci
            env:
@@ -86,7 +86,7 @@ npm install @animahealth/adk
 
 # Install provider SDKs as needed
 npm install openai           # For OpenAI models
-npm install @google/genai    # For Gemini models  
+npm install @google/genai    # For Gemini models
 npm install @anthropic-ai/vertex-sdk  # For Claude via Vertex AI
 ```
 
@@ -97,7 +97,7 @@ import { z } from 'zod';
 import {
   agent,
   tool,
-  BaseRunner,
+  run,
   openai,
   injectSystemMessage,
   includeHistory,
@@ -120,14 +120,16 @@ const assistant = agent({
   name: 'math_assistant',
   model: openai('gpt-4o-mini'),
   context: [
-    injectSystemMessage('You are a helpful math assistant. Use the calculator tool for arithmetic.'),
+    injectSystemMessage(
+      'You are a helpful math assistant. Use the calculator tool for arithmetic.',
+    ),
     includeHistory(),
   ],
   tools: [calculator],
 });
 
 async function main() {
-  const result = await BaseRunner.run(assistant, 'What is 134 divided by 4?');
+  const result = await run(assistant, 'What is 134 divided by 4?');
   console.log(result.session.events);
 }
 
@@ -140,13 +142,13 @@ main().catch(console.error);
 
 The ADK provides five composable primitives:
 
-| Primitive | Purpose |
-|-----------|---------|
-| `agent()` | LLM-powered reasoning with tools |
-| `step()` | Deterministic code execution |
-| `sequence()` | Run runnables in order |
-| `parallel()` | Run runnables concurrently |
-| `loop()` | Iterate until condition met |
+| Primitive    | Purpose                          |
+| ------------ | -------------------------------- |
+| `agent()`    | LLM-powered reasoning with tools |
+| `step()`     | Deterministic code execution     |
+| `sequence()` | Run runnables in order           |
+| `parallel()` | Run runnables concurrently       |
+| `loop()`     | Iterate until condition met      |
 
 ### Providers
 
@@ -156,18 +158,18 @@ Swap between LLM providers with one line:
 import { openai, gemini, claude } from '@animahealth/adk';
 
 // OpenAI
-model: openai('gpt-4o-mini', { temperature: 0.7 })
+model: openai('gpt-4o-mini', { temperature: 0.7 });
 
 // Gemini (via AI Studio or Vertex AI)
-model: gemini('gemini-2.0-flash', { 
-  thinkingConfig: { thinkingBudget: 4096 } 
-})
+model: gemini('gemini-2.5-flash', {
+  thinkingConfig: { thinkingBudget: 4096 },
+});
 
 // Claude (via Vertex AI)
-model: claude('claude-sonnet-4-5', { 
-  project: 'my-project', 
-  region: 'europe-west1' 
-})
+model: claude('claude-sonnet-4-5', {
+  project: 'my-project',
+  region: 'europe-west1',
+});
 ```
 
 ### Session & State
@@ -175,11 +177,27 @@ model: claude('claude-sonnet-4-5', {
 Sessions manage conversation history and typed state across scopes:
 
 ```typescript
-// State scopes
-ctx.state.set('key', value);           // session scope (default)
-ctx.state.user.set('theme', 'dark');   // persists across user sessions
-ctx.state.patient.get('diagnoses');    // persists across patient encounters
-ctx.state.temp.set('scratch', data);   // cleared each model step
+import { session, run } from '@animahealth/adk';
+
+// Create a session
+const s = await session('my-app', { userId: 'user-123' });
+
+// Set state before running
+s.state.update({
+  session: { mode: 'triage' },
+  user: { preferences: { theme: 'dark' } },
+});
+// or
+s.state.session.set('mode', 'dark');
+
+// Run with the session
+const result = await run(myAgent, { session: s, input: 'Hello!' });
+
+// State scopes in tool/hook contexts
+ctx.state.set('key', value); // session scope (default)
+ctx.state.user.set('theme', 'dark'); // persists across user sessions
+ctx.state.patient.get('diagnoses'); // persists across patient encounters
+ctx.state.temp.set('scratch', data); // cleared each model step
 ```
 
 ### Human-in-the-Loop
@@ -203,15 +221,22 @@ const approval = tool({
 The package includes two built-in session services:
 
 ```typescript
-import { InMemorySessionService, LocalSessionService } from '@animahealth/adk/persistence';
+import {
+  session,
+  InMemorySessionService,
+  LocalSessionService,
+} from '@animahealth/adk';
 
-// In-memory (for testing/development)
+// In-memory (default, for testing/development)
+const s = await session('my-app');
+
+// With explicit service
 const memoryService = new InMemorySessionService();
+const s = await session('my-app', { sessionService: memoryService });
 
 // SQLite-based (for local persistence)
-const localService = new LocalSessionService({ 
-  dbPath: './sessions.db' 
-});
+const localService = new LocalSessionService('./sessions.db');
+const s = await session('my-app', { sessionService: localService });
 ```
 
 For production DynamoDB persistence with OpenSearch, see the implementation in anima-service.
@@ -219,7 +244,12 @@ For production DynamoDB persistence with OpenSearch, see the implementation in a
 ## Testing
 
 ```typescript
-import { runTest, user, model, setupAdkMatchers } from '@animahealth/adk/testing';
+import {
+  runTest,
+  user,
+  model,
+  setupAdkMatchers,
+} from '@animahealth/adk/testing';
 
 setupAdkMatchers();
 
@@ -246,17 +276,18 @@ For comprehensive documentation, see:
 
 The package includes standalone examples demonstrating core patterns:
 
-| Example | Description |
-|---------|-------------|
-| `quickstart.ts` | Minimal agent with calculator tool |
-| `assistant.ts` | Interactive chat loop with tools |
-| `yieldResume.ts` | Human-in-the-loop approval workflow |
-| `reasoning.ts` | Multi-provider reasoning models |
+| Example          | Description                                             |
+| ---------------- | ------------------------------------------------------- |
+| `quickstart.ts`  | Minimal agent with calculator tool                      |
+| `assistant.ts`   | Interactive chat loop with tools                        |
+| `yieldResume.ts` | Human-in-the-loop approval workflow                     |
+| `reasoning.ts`   | Multi-provider reasoning models                         |
+| `step.ts`        | Steps with routing, gates, and signals                  |
+| `staticFlow.ts`  | Full content pipeline (parallel, sequence, loop)        |
 | `dynamicFlow.ts` | Dynamic orchestration (call, spawn, dispatch, transfer) |
-| `step.ts` | Steps with routing, gates, and signals |
-| `staticFlow.ts` | Full content pipeline (parallel, sequence, loop) |
 
 Run examples:
+
 ```bash
 npx tsx examples/quickstart.ts
 npx tsx examples/assistant.ts
@@ -285,20 +316,6 @@ For production-style examples with Anima-specific integrations, see anima-servic
 ├── cli/         # Interactive terminal UI
 └── persistence/ # Session storage interfaces
 ```
-
-## Migration from anima-service
-
-If migrating from the embedded `modules/adk` in anima-service:
-
-```typescript
-// Before
-import { agent, tool } from '../../../modules/adk';
-
-// After  
-import { agent, tool } from '@animahealth/adk';
-```
-
-For `PersistentSessionService` (DynamoDB), continue importing from anima-service until that is extracted.
 
 ## Publishing (Maintainers)
 

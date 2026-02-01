@@ -16,9 +16,10 @@ import {
   webSearch,
   fetchPage,
   linkedInPipeline,
+  cli,
   type LoopContext,
 } from '../src';
-import { cli } from '../src/cli';
+
 
 const researcher = agent({
   name: 'researcher',

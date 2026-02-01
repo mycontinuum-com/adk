@@ -6,7 +6,7 @@ import type {
   UserEvent,
 } from '../types';
 import type { StateSchema, StateValues } from '../types/schema';
-import { createEventId } from '../session';
+import { createEventId, type BaseSession } from '../session';
 import { computeAllStatesAtEvent } from '../session/snapshot';
 import { renderSchema } from './renderSchema';
 
@@ -25,7 +25,7 @@ function buildStateValues<T extends StateSchema>(
   session: Session,
   invocationId: string,
 ): StateValues<T> {
-  const bound = session.createBoundState(invocationId);
+  const bound = (session as BaseSession).boundState(invocationId);
   const sessionState = bound.session.toObject();
   const userState = bound.user.toObject();
   const patientState = bound.patient.toObject();

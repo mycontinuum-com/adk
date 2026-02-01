@@ -1,4 +1,11 @@
-export { BaseRunner, type BaseRunnerConfig } from './runner';
+export {
+  BaseRunner,
+  type BaseRunnerConfig,
+  run,
+  runner,
+  type RunnerOptions,
+  type FullRunConfig,
+} from './runner';
 export {
   tool,
   CONTROL,

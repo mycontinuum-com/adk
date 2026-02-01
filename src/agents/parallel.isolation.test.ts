@@ -50,8 +50,7 @@ describe('Parallel - Cloned Session Isolation', () => {
     });
 
     const session = createTestSession('Test');
-    const state = session.createBoundState('test-init');
-    state.session.set('initial', 'value');
+    session.state.session.set('initial', 'value');
 
     await customRunner.run(fanout, session);
 

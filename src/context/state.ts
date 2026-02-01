@@ -1,7 +1,8 @@
-import type { Session, StateAccessorWithScopes } from '../types';
+import type { StateAccessorWithScopes } from '../types';
+import type { BaseSession } from '../session/base';
 
 export function createStateAccessor(
-  session: Session,
+  session: BaseSession,
   invocationId: string,
 ): StateAccessorWithScopes {
   if (!invocationId) {
@@ -11,8 +12,5 @@ export function createStateAccessor(
     );
   }
 
-  return session.createBoundState(invocationId);
+  return session.boundState(invocationId);
 }
-
-/** @deprecated Use createStateAccessor(session, invocationId) instead */
-export const createBoundStateAccessor = createStateAccessor;

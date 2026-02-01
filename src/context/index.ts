@@ -35,4 +35,4 @@ export {
   limitTools,
   setToolChoice,
 } from './filters';
-export { createStateAccessor, createBoundStateAccessor } from './state';
+export { createStateAccessor } from './state';
