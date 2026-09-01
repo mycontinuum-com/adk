@@ -5,8 +5,8 @@
 #   1. Only maintainers can push a v* tag (this repository accepts no outside pushes).
 #   2. The job runs in the `npm-publish` environment, which requires a maintainer's approval.
 # npm trusted publishing (OIDC) is pinned to exactly this repository + this workflow filename, so
-# no fork or other workflow can publish, and no npm token exists to leak. This workflow supersedes
-# the monorepo's adk-publish.yml once npm's trusted publisher config points here.
+# no fork or other workflow can publish, and no npm token exists to leak. This workflow is the only
+# publish path — npm's trusted publisher config names exactly this repository and file.
 name: Release
 
 on:
