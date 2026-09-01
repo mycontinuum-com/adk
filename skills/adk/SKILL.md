@@ -53,7 +53,7 @@ Read only the domain documents needed for the task:
 
 ## Local Example Pointers
 
-Prefer current local examples over stale memory or external snippets — see [examples/README.md](../../../examples/README.md).
+Prefer current local examples over stale memory or external snippets — see [examples/README.md](../../examples/README.md).
 
 ## Validation
 

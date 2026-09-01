@@ -179,7 +179,7 @@ await app.run(visionAgent, {
 
 For document workflows, prefer one user message containing the current page image and concise text instructions. Include previous-page images only when the model contract needs visual continuity; otherwise use compact state/context hints.
 
-Local reference: [examples/vision.ts](../../../../examples/vision.ts).
+Local reference: [examples/vision.ts](../../../examples/vision.ts).
 
 ## Reusable Specs
 
