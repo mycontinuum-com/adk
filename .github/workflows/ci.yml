@@ -1,0 +1,67 @@
+# CI for the public ADK repository. This file is authored in the Serenity monorepo at
+# packages/adk/export/public-files/ and overlaid onto every export — edit it there, never here.
+#
+# The unit suite is keyless by design (providers are mocked); the backed compliance suites run in a
+# second job against service containers — every documented store and vector backend runs its shared
+# contract suite here, so the docs' conformance claims are continuously proven, not asserted.
+# Neither job needs a secret, so both run on fork PRs.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install
+      - run: pnpm run typecheck
+      - run: pnpm run build
+      - run: pnpm run test
+
+  backend-compliance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # pgvector's image is stock Postgres plus the vector extension, so one container backs the
+      # session-store, gateway/artifact, and vector-index suites alike.
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: adk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+
+
+      dynamodb:
+        image: amazon/dynamodb-local
+        ports:
+          - 8000:8000
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/adk
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/adk
+      TEST_PGVECTOR_URL: postgres://postgres:postgres@127.0.0.1:5432/adk
+      TEST_DYNAMODB_ENDPOINT: http://127.0.0.1:8000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install
+      - run: >-
+          pnpm run test -- src/session/compliance.test.ts src/memory/providers/index-compliance.test.ts src/gateway/postgres.test.ts src/artifacts/postgres.test.ts
+

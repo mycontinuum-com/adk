@@ -1,0 +1,353 @@
+{
+  "name": "@animahealth/adk",
+  "version": "0.6.0",
+  "description": "Anima Agent Development Kit - Framework for building production-grade multi-agent AI systems",
+  "keywords": [
+    "agents",
+    "ai",
+    "claude",
+    "gemini",
+    "llm",
+    "multi-agent",
+    "openai",
+    "orchestration"
+  ],
+  "license": "MIT",
+  "author": "Anima Health",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mycontinuum-com/adk.git"
+  },
+  "files": [
+    "dist",
+    "src",
+    "CHANGELOG.md"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "cli": [
+        "dist/cli/index.d.ts"
+      ],
+      "testing": [
+        "dist/testing/index.d.ts"
+      ],
+      "eval": [
+        "dist/eval/index.d.ts"
+      ],
+      "web": [
+        "dist/web/index.d.ts"
+      ],
+      "agui": [
+        "dist/agui/index.d.ts"
+      ],
+      "stores/dynamodb": [
+        "dist/stores/dynamodb.d.ts"
+      ],
+      "stores/postgres": [
+        "dist/stores/postgres.d.ts"
+      ],
+      "stores/sqlite": [
+        "dist/stores/sqlite.d.ts"
+      ],
+      "voice": [
+        "dist/voice/index.d.ts"
+      ],
+      "openai": [
+        "dist/openai/index.d.ts"
+      ],
+      "gemini": [
+        "dist/gemini/index.d.ts"
+      ],
+      "claude": [
+        "dist/claude/index.d.ts"
+      ],
+      "voyage": [
+        "dist/voyage/index.d.ts"
+      ],
+      "qdrant": [
+        "dist/qdrant/index.d.ts"
+      ],
+      "agents/coding": [
+        "dist/agents/coding/index.d.ts"
+      ],
+      "agents/coding/claude-code": [
+        "dist/agents/coding/claude-code/index.d.ts"
+      ],
+      "workflow": [
+        "dist/workflow/index.d.ts"
+      ]
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "import": "./dist/cli/index.mjs",
+      "require": "./dist/cli/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.mjs",
+      "require": "./dist/testing/index.js"
+    },
+    "./eval": {
+      "types": "./dist/eval/index.d.ts",
+      "import": "./dist/eval/index.mjs",
+      "require": "./dist/eval/index.js"
+    },
+    "./web": {
+      "types": "./dist/web/index.d.ts",
+      "import": "./dist/web/index.mjs",
+      "require": "./dist/web/index.js"
+    },
+    "./agui": {
+      "types": "./dist/agui/index.d.ts",
+      "import": "./dist/agui/index.mjs",
+      "require": "./dist/agui/index.js"
+    },
+    "./stores/dynamodb": {
+      "types": "./dist/stores/dynamodb.d.ts",
+      "import": "./dist/stores/dynamodb.mjs",
+      "require": "./dist/stores/dynamodb.js"
+    },
+    "./stores/postgres": {
+      "types": "./dist/stores/postgres.d.ts",
+      "import": "./dist/stores/postgres.mjs",
+      "require": "./dist/stores/postgres.js"
+    },
+    "./stores/sqlite": {
+      "types": "./dist/stores/sqlite.d.ts",
+      "import": "./dist/stores/sqlite.mjs",
+      "require": "./dist/stores/sqlite.js"
+    },
+    "./voice": {
+      "types": "./dist/voice/index.d.ts",
+      "import": "./dist/voice/index.mjs",
+      "require": "./dist/voice/index.js"
+    },
+    "./openai": {
+      "types": "./dist/openai/index.d.ts",
+      "import": "./dist/openai/index.mjs",
+      "require": "./dist/openai/index.js"
+    },
+    "./gemini": {
+      "types": "./dist/gemini/index.d.ts",
+      "import": "./dist/gemini/index.mjs",
+      "require": "./dist/gemini/index.js"
+    },
+    "./claude": {
+      "types": "./dist/claude/index.d.ts",
+      "import": "./dist/claude/index.mjs",
+      "require": "./dist/claude/index.js"
+    },
+    "./voyage": {
+      "types": "./dist/voyage/index.d.ts",
+      "import": "./dist/voyage/index.mjs",
+      "require": "./dist/voyage/index.js"
+    },
+    "./qdrant": {
+      "types": "./dist/qdrant/index.d.ts",
+      "import": "./dist/qdrant/index.mjs",
+      "require": "./dist/qdrant/index.js"
+    },
+    "./agents/coding": {
+      "types": "./dist/agents/coding/index.d.ts",
+      "import": "./dist/agents/coding/index.mjs",
+      "require": "./dist/agents/coding/index.js"
+    },
+    "./agents/coding/claude-code": {
+      "types": "./dist/agents/coding/claude-code/index.d.ts",
+      "import": "./dist/agents/coding/claude-code/index.mjs",
+      "require": "./dist/agents/coding/claude-code/index.js"
+    },
+    "./workflow": {
+      "types": "./dist/workflow/index.d.ts",
+      "import": "./dist/workflow/index.mjs",
+      "require": "./dist/workflow/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsup && tsc -p tsconfig.json --emitDeclarationOnly && node scripts/postbuild-dts-aliases.cjs && node scripts/postbuild-cli-cjs-wrapper.cjs && node scripts/verify-package-exports.cjs",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:postgres": "vitest run src/**/postgres.test.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src/",
+    "ci": "pnpm run typecheck && pnpm run test",
+    "prepublishOnly": "pnpm run typecheck && pnpm run build && node scripts/verify-package-exports.cjs"
+  },
+  "dependencies": {
+    "async-retry": "^1.3.3",
+    "zod-to-json-schema": "^3.24.0"
+  },
+  "devDependencies": {
+    "@ag-ui/core": "0.0.45",
+    "@anthropic-ai/vertex-sdk": "^0.14.2",
+    "@aws-sdk/client-dynamodb": "^3.984.0",
+    "@aws-sdk/lib-dynamodb": "^3.984.0",
+    "@google/genai": "^1.39.0",
+    "@livekit/agents": "^1.4.4",
+    "@livekit/agents-plugin-google": "^1.4.4",
+    "@livekit/agents-plugin-openai": "^1.4.4",
+    "@livekit/noise-cancellation-node": "^0.1.9",
+    "@livekit/rtc-node": "^0.13.28",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@mozilla/readability": "^0.5.0",
+    "@qdrant/js-client-rest": "~1.14.1",
+    "@types/async-retry": "^1.4.9",
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^22.19.19",
+    "@types/pg": "^8.15.2",
+    "@types/react": "^18.0.0",
+    "@types/turndown": "^5.0.5",
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.2.3",
+    "google-auth-library": "^9.15.1",
+    "ink": "^5.2.1",
+    "ink-text-input": "^6.0.0",
+    "jsdom": "^26.0.0",
+    "livekit-server-sdk": "^2.15.0",
+    "openai": "^5.0.0",
+    "pdf-lib": "^1.17.1",
+    "pg": "^8.16.0",
+    "playwright": "^1.58.1",
+    "react": "^18.0.0",
+    "sharp": "^0.33.5",
+    "sqlite-vec": "^0.1.9",
+    "tsup": "^8.0.0",
+    "tsx": "^4.21.0",
+    "turndown": "^7.2.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.2.1",
+    "voyageai": "^0.1.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "peerDependencies": {
+    "@ag-ui/core": "0.0.45",
+    "@anthropic-ai/vertex-sdk": ">=0.14.0",
+    "@aws-sdk/client-dynamodb": ">=3.0.0",
+    "@aws-sdk/client-sagemaker-runtime": ">=3.0.0",
+    "@aws-sdk/lib-dynamodb": ">=3.0.0",
+    "@google/genai": ">=1.0.0",
+    "@livekit/agents": "^1.4.4",
+    "@livekit/agents-plugin-google": "^1.4.4",
+    "@livekit/agents-plugin-openai": "^1.4.4",
+    "@livekit/noise-cancellation-node": "^0.1.9",
+    "@modelcontextprotocol/sdk": ">=1.0.0",
+    "@mozilla/readability": ">=0.5.0",
+    "better-sqlite3": ">=11.0.0",
+    "ink": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "jsdom": ">=24.0.0",
+    "livekit-server-sdk": "^2.15.0",
+    "openai": "^5.0.0",
+    "pdf-lib": ">=1.17.0",
+    "pg": ">=8.0.0",
+    "playwright": ">=1.40.0",
+    "react": "^18.0.0 || ^19.0.0",
+    "sharp": ">=0.33.0",
+    "sqlite-vec": ">=0.1.6",
+    "turndown": ">=7.0.0",
+    "ws": ">=8.0.0",
+    "zod": "^3.25.0"
+  },
+  "peerDependenciesMeta": {
+    "@ag-ui/core": {
+      "optional": true
+    },
+    "@anthropic-ai/vertex-sdk": {
+      "optional": true
+    },
+    "@google/genai": {
+      "optional": true
+    },
+    "@aws-sdk/client-dynamodb": {
+      "optional": true
+    },
+    "@aws-sdk/client-sagemaker-runtime": {
+      "optional": true
+    },
+    "@aws-sdk/lib-dynamodb": {
+      "optional": true
+    },
+    "@livekit/agents": {
+      "optional": true
+    },
+    "@livekit/agents-plugin-google": {
+      "optional": true
+    },
+    "@livekit/agents-plugin-openai": {
+      "optional": true
+    },
+    "@livekit/noise-cancellation-node": {
+      "optional": true
+    },
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "@mozilla/readability": {
+      "optional": true
+    },
+    "better-sqlite3": {
+      "optional": true
+    },
+    "ink": {
+      "optional": true
+    },
+    "ink-text-input": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    },
+    "jsdom": {
+      "optional": true
+    },
+    "livekit-server-sdk": {
+      "optional": true
+    },
+    "pdf-lib": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "playwright": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "sharp": {
+      "optional": true
+    },
+    "sqlite-vec": {
+      "optional": true
+    },
+    "turndown": {
+      "optional": true
+    },
+    "ws": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "homepage": "https://adk.animahealth.com",
+  "bugs": {
+    "url": "https://github.com/mycontinuum-com/adk/issues"
+  },
+  "packageManager": "pnpm@10.11.0"
+}

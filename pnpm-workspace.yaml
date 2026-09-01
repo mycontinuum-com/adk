@@ -1,0 +1,8 @@
+# Rendered by packages/adk/export/export-public.mjs from the monorepo's approved list.
+onlyBuiltDependencies:
+  - 'esbuild'
+  - 'sharp'
+  - 'protobufjs'
+  - '@ffmpeg-installer/linux-x64'
+  - 'cpu-features'
+  - 'better-sqlite3'

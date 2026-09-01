@@ -1,0 +1,7 @@
+node_modules/
+package-lock.json
+
+# The sleeping sessions. Delete it to start the demo over.
+bookings.db
+bookings.db-shm
+bookings.db-wal

@@ -1,0 +1,78 @@
+# npm release for the public ADK repository. Authored in the Serenity monorepo at
+# packages/adk/export/public-files/ and overlaid onto every export — edit it there, never here.
+#
+# Publishing is Anima-gated twice with no long-lived credential anywhere:
+#   1. Only maintainers can push a v* tag (this repository accepts no outside pushes).
+#   2. The job runs in the `npm-publish` environment, which requires a maintainer's approval.
+# npm trusted publishing (OIDC) is pinned to exactly this repository + this workflow filename, so
+# no fork or other workflow can publish, and no npm token exists to leak. This workflow supersedes
+# the monorepo's adk-publish.yml once npm's trusted publisher config points here.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: npm-publish
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm with trusted publishing support
+        run: npm install -g npm@11.5.1
+
+      - run: pnpm install
+
+      - name: Verify the tag matches package.json
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs')
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+          const tag = process.env.GITHUB_REF_NAME
+          if (tag !== `v${pkg.version}`) {
+            console.error(`Tag ${tag} does not match package.json version ${pkg.version}`)
+            process.exit(1)
+          }
+          NODE
+
+      - run: pnpm run typecheck
+
+      - run: pnpm run test
+
+      - run: pnpm run build
+
+      - name: Verify package export targets
+        run: node scripts/verify-package-exports.cjs
+
+      - name: Pack
+        run: |
+          rm -f animahealth-adk-*.tgz
+          pnpm pack --pack-destination .
+
+      - name: Publish to npm
+        run: |
+          # npm assigns `latest` to whatever it publishes — it does not read the version, so a
+          # prerelease takes `latest` too unless told otherwise, and every `npm install` would
+          # then hand people a candidate. Derive the tag from the version instead.
+          version=$(node -p "require('./package.json').version")
+          case "$version" in
+            *-*) dist_tag=rc ;;
+            *) dist_tag=latest ;;
+          esac
+          echo "Publishing $version with dist-tag $dist_tag"
+          npm publish animahealth-adk-*.tgz --access public --tag "$dist_tag"
