@@ -1,5 +1,5 @@
 # npm release for the public ADK repository. Authored in the Serenity monorepo at
-# packages/adk/export/public-files/ and overlaid onto every export — edit it there, never here.
+# packages/agents/adk/export/public-files/ and overlaid onto every export — edit it there, never here.
 #
 # Publishing is Anima-gated twice with no long-lived credential anywhere:
 #   1. Only maintainers can push a v* tag (this repository accepts no outside pushes).

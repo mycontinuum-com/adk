@@ -11,7 +11,7 @@ import type {
 
 import { normalizeSessionId } from '../core/constants'
 import { ConflictError } from '../errors/types'
-import { BaseSession } from '../session/base'
+import { BaseSession } from './base'
 
 interface ScopeBinding {
   id: string

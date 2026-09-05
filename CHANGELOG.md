@@ -1082,7 +1082,7 @@ await app.simulate(agent, {
 
 ### Internal
 
-- `tsup.config.ts` now includes an esbuild plugin that externalizes `../cli` in the CJS build, so `dist/index.js` emits `require("./cli/index.js")` instead of inlining the CLI module tree.
+- `tsup.config.ts` now includes an esbuild plugin that externalizes `./cli` in the CJS build, so `dist/index.js` emits `require("./cli/index.js")` instead of inlining the CLI module tree.
 - `scripts/postbuild-cli-cjs-wrapper.cjs` generates a CJS→ESM wrapper at `dist/cli/index.js` that does `import('./index.mjs')` to load Ink in native ESM context.
 - `lodash` is force-bundled (`noExternal`) to avoid Node ESM's "Named export not found" error when importing CJS-only packages.
 - Jest `moduleNameMapper` mocks added for `ink` and `ink-text-input` since they are ESM-only and cannot be `require()`'d in test.

@@ -11,8 +11,8 @@
  */
 import { describe, it, expect } from 'vitest'
 
-import type { NoteOpts } from '../types/runnables'
 import type { AnnotationEvent } from './events'
+import type { NoteOpts } from './runnables'
 
 import { adk } from '../api/app'
 

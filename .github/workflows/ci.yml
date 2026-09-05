@@ -1,5 +1,5 @@
 # CI for the public ADK repository. This file is authored in the Serenity monorepo at
-# packages/adk/export/public-files/ and overlaid onto every export — edit it there, never here.
+# packages/agents/adk/export/public-files/ and overlaid onto every export — edit it there, never here.
 #
 # The unit suite is keyless by design (providers are mocked); the backed compliance suites run in a
 # second job against service containers — every documented store and vector backend runs its shared

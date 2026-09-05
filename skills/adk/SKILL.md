@@ -61,4 +61,3 @@ Prefer current local examples over stale memory or external snippets — see [ex
   - `pnpm run test -- <path-or-pattern>`
   - `pnpm run typecheck`
   - `pnpm run build`
-- If this skill changes, render the harness through the current renderer and spot-check `.agents/skills/adk/SKILL.md`.

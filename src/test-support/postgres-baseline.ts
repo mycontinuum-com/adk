@@ -77,7 +77,7 @@ export async function ensureAdkBaseline(pool: BaselinePool): Promise<void> {
   )
   if (shape.rows.length === 0) {
     throw new Error(
-      'adk schema in this database predates the 2026-07 baseline — reset it (e.g. `./serenity db reset --cell factory`) and re-run',
+      'adk schema in this database predates the 2026-07 baseline — reset it (e.g. `pnpm db reset --cell factory`) and re-run',
     )
   }
 }

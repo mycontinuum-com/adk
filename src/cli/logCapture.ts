@@ -162,7 +162,7 @@ function subscribeToLogger(): void {
   // TODO: Re-enable when platform primitives are extracted to a shared package
   // This function subscribes to the platform Logger for log capture integration.
   // The logger module was part of the anima-service monorepo at:
-  // '../../../platform/primitives/observability/logger'
+  // '../../platform/primitives/observability/logger'
   //
   // if (process.env.NODE_ENV === 'test') return;
   //

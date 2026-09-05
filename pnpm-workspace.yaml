@@ -1,4 +1,4 @@
-# Rendered by packages/adk/export/export-public.mjs from the monorepo's approved list.
+# Rendered by packages/agents/adk/export/export-public.mjs from the monorepo's approved list.
 onlyBuiltDependencies:
   - 'esbuild'
   - 'sharp'
