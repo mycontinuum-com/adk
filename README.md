@@ -107,10 +107,10 @@ pnpm install
 pnpm run test
 ```
 
-The suite runs with no API keys and no database. Every documented session store and vector backend also runs a shared compliance suite against real service containers in [CI](.github/workflows/ci.yml) — the contract claims are continuously proven, not asserted.
+The suite runs with no API keys and no database. Every documented session store and vector backend also runs a shared compliance suite against real service containers in [CI](https://github.com/mycontinuum-com/adk/blob/main/.github/workflows/ci.yml) — the contract claims are continuously proven, not asserted.
 
 ## Contributing, security, license
 
-This repository is a continuously exported snapshot of the ADK's development home — see [CONTRIBUTING.md](CONTRIBUTING.md) for how issues and pull requests flow (short version: issues are the front door, and accepted PRs are imported with your authorship preserved). Report vulnerabilities via [SECURITY.md](SECURITY.md), not public issues.
+This repository is a continuously exported snapshot of the ADK's development home — see [CONTRIBUTING.md](https://github.com/mycontinuum-com/adk/blob/main/CONTRIBUTING.md) for how issues and pull requests flow (short version: issues are the front door, and accepted PRs are imported with your authorship preserved). Report vulnerabilities via [SECURITY.md](https://github.com/mycontinuum-com/adk/blob/main/SECURITY.md), not public issues.
 
 [MIT](LICENSE) © Anima Health.
