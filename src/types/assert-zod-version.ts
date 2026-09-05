@@ -2,10 +2,9 @@
  * Refuse a zod 4 schema at the door, loudly.
  *
  * The ADK's schema layer reads zod 3 internals — the coercion parser, the CLI's schema-input
- * inspector, context rendering and provider schema normalization all dispatch on
- * `_def.typeName`, and every provider and voice tool schema is converted by `zod-to-json-schema`.
- * zod 4 removed `_def.typeName` and carries `_zod` instead, and `zod-to-json-schema` does not read
- * v4 schemas.
+ * inspector, context rendering and provider schema normalization all dispatch on `_def.typeName`,
+ * and every provider and voice tool schema is converted by `zod-to-json-schema`. zod 4 removed
+ * `_def.typeName` and carries `_zod` instead, and `zod-to-json-schema` does not read v4 schemas.
  *
  * Handed a v4 schema, none of that throws. The coercion parser finds no `typeName` and falls
  * through, so `'5'` never becomes `5`; the JSON-schema conversion falls back to a bare `any`, so
@@ -17,7 +16,10 @@
  * So this is checked once, where a schema enters — never on a per-call path.
  */
 const isZod4Schema = (value: unknown): boolean =>
-  typeof value === 'object' && value !== null && '_zod' in value && !('typeName' in ((value as { _def?: object })._def ?? {}))
+  typeof value === 'object' &&
+  value !== null &&
+  '_zod' in value &&
+  !('typeName' in ((value as { _def?: object })._def ?? {}))
 
 /** Throws when `schema` is a zod 4 schema. `where` names the call the user made. */
 export function assertZod3Schema(schema: unknown, where: string): void {

@@ -304,7 +304,7 @@ describe('yielding tool lifecycle', () => {
         name: 'calculate',
         description: 'Calculate',
         schema: z.object({ expr: z.string() }),
-        // oxlint-disable-next-line eslint(no-eval)
+        // oxlint-disable-next-line no-eval
         execute: (ctx) => ({ result: eval(ctx.args.expr) }),
       })
 

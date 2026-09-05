@@ -1,11 +1,7 @@
 import type { ParseError, JsonishValue, CompletionState } from '../types'
 
 import { jsonishToPlain } from '../types'
-import {
-  extractJsonFromText,
-  extractBalancedJsonObjects,
-  getPositionFromOffset,
-} from './extractors'
+import { extractJsonFromText, extractBalancedJsonObjects } from './extractors'
 import { parseWithFixingParser } from './state-machine'
 
 export { parseWithFixingParser } from './state-machine'

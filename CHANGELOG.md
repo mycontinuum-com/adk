@@ -33,11 +33,7 @@ Migration section:
 
 ## [0.6.0] - 2026-09-01
 
-The first public release. The surface is smaller than 0.5.27 on purpose: what shipped without a
-consumer, without a test against real infrastructure, or under a name that described the wrong
-thing is gone, because removing it after publication costs a breaking change and removing it now
-costs nothing.
-
+The first public release. The surface is smaller than 0.5.27 on purpose: what shipped without a consumer, without a test against real infrastructure, or under a name that described the wrong thing is gone, because removing it after publication costs a breaking change and removing it now costs nothing.
 
 ### Fixed
 

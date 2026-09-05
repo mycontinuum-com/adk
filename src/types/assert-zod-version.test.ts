@@ -19,7 +19,9 @@ describe('the zod 4 guard', () => {
   })
 
   it('names the call the user made, so the message points at their code', () => {
-    expect(() => assertZod3Schema(zod4Schema(), "app.tool('lookup')")).toThrow(/app\.tool\('lookup'\)/)
+    expect(() => assertZod3Schema(zod4Schema(), "app.tool('lookup')")).toThrow(
+      /app\.tool\('lookup'\)/,
+    )
   })
 
   // The control that matters: every real schema in this package is a zod 3 schema, so a false

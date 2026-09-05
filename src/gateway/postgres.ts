@@ -448,19 +448,17 @@ export class PostgresProcessStore implements ProcessStore {
 
     const result = await pool.query(sql, values)
 
-    return result.rows.map(
-      (row): ProcessSummary => ({
-        id: String(row.id),
-        appName: String(row.app_name),
-        agentName: String(row.agent_name),
-        sessionId: String(row.session_id),
-        status: String(row.status) as ProcessSummary['status'],
-        paused: Boolean(row.paused),
-        createdAt: new Date(row.created_at as string | number),
-        lastRunAt: row.last_run_at != null ? new Date(row.last_run_at as string | number) : null,
-        nextWakeAt: row.next_wake_at != null ? new Date(row.next_wake_at as string | number) : null,
-      }),
-    )
+    return result.rows.map((row): ProcessSummary => ({
+      id: String(row.id),
+      appName: String(row.app_name),
+      agentName: String(row.agent_name),
+      sessionId: String(row.session_id),
+      status: String(row.status) as ProcessSummary['status'],
+      paused: Boolean(row.paused),
+      createdAt: new Date(row.created_at as string | number),
+      lastRunAt: row.last_run_at != null ? new Date(row.last_run_at as string | number) : null,
+      nextWakeAt: row.next_wake_at != null ? new Date(row.next_wake_at as string | number) : null,
+    }))
   }
 
   async delete(appName: string, processId: string): Promise<void> {

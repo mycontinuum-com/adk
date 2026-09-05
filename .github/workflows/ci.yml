@@ -44,7 +44,6 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
 
-
       dynamodb:
         image: amazon/dynamodb-local
         ports:
@@ -64,4 +63,3 @@ jobs:
       - run: pnpm install
       - run: >-
           pnpm run test -- src/session/compliance.test.ts src/memory/providers/index-compliance.test.ts src/gateway/postgres.test.ts src/artifacts/postgres.test.ts
-

@@ -2,7 +2,7 @@ import type { z } from 'zod'
 
 import type { ParseResult } from './types'
 
-import { createParser as _createParser, type SchemaAwareParser } from './parser'
+import { createParser as _createParser } from './parser'
 
 export { createParser, type SchemaAwareParser } from './parser'
 

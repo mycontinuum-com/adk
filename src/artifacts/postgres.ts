@@ -201,14 +201,12 @@ export class PostgresArtifactService implements ArtifactService {
       [appName, processId],
     )
 
-    const summaries = result.rows.map(
-      (row): ArtifactSummary => ({
-        name: String(row.name),
-        latestVersion: Number(row.latest_version),
-        mimeType: String(row.mime_type),
-        updatedAt: new Date(row.updated_at as string | number),
-      }),
-    )
+    const summaries = result.rows.map((row): ArtifactSummary => ({
+      name: String(row.name),
+      latestVersion: Number(row.latest_version),
+      mimeType: String(row.mime_type),
+      updatedAt: new Date(row.updated_at as string | number),
+    }))
 
     // Sort by updatedAt descending (most recent first)
     summaries.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
@@ -227,14 +225,12 @@ export class PostgresArtifactService implements ArtifactService {
       [appName, processId, name],
     )
 
-    return result.rows.map(
-      (row): ArtifactVersion => ({
-        version: Number(row.version),
-        mimeType: String(row.mime_type),
-        metadata: this.parseJsonb(row.metadata),
-        createdAt: new Date(row.created_at as string | number),
-      }),
-    )
+    return result.rows.map((row): ArtifactVersion => ({
+      version: Number(row.version),
+      mimeType: String(row.mime_type),
+      metadata: this.parseJsonb(row.metadata),
+      createdAt: new Date(row.created_at as string | number),
+    }))
   }
 
   async delete(appName: string, processId: string, name: string): Promise<void> {

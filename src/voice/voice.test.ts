@@ -35,20 +35,24 @@ const mockLLMTool = vi.fn<(...args: unknown[]) => unknown>(
 
 const mockAgents = {
   voice: {
-    Agent: vi.fn<(...args: unknown[]) => unknown>().mockImplementation((opts: any) => ({
-      instructions: opts.instructions,
-      tools: opts.tools,
-      onEnter: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
-      session: { generateReply: vi.fn<(...args: unknown[]) => unknown>() },
-    })),
-    AgentSession: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(() => ({
-      on: vi.fn<(...args: unknown[]) => unknown>(),
-      start: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
-      updateAgent: vi.fn<(...args: unknown[]) => unknown>(),
-      close: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
-      shutdown: vi.fn<(...args: unknown[]) => unknown>(),
-      generateReply: vi.fn<(...args: unknown[]) => unknown>().mockReturnValue({}),
-    })),
+    Agent: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(function (opts: any) {
+      return {
+        instructions: opts.instructions,
+        tools: opts.tools,
+        onEnter: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
+        session: { generateReply: vi.fn<(...args: unknown[]) => unknown>() },
+      }
+    }),
+    AgentSession: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(function () {
+      return {
+        on: vi.fn<(...args: unknown[]) => unknown>(),
+        start: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
+        updateAgent: vi.fn<(...args: unknown[]) => unknown>(),
+        close: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
+        shutdown: vi.fn<(...args: unknown[]) => unknown>(),
+        generateReply: vi.fn<(...args: unknown[]) => unknown>().mockReturnValue({}),
+      }
+    }),
     AgentSessionEventTypes: {
       MetricsCollected: 'metrics_collected',
       AgentStateChanged: 'agent_state_changed',
@@ -64,45 +68,55 @@ const mockAgents = {
       .mockImplementation((opts: any) => ({ __handoff: true, ...opts })),
   },
   cli: { runApp: vi.fn<(...args: unknown[]) => unknown>() },
-  ServerOptions: vi.fn<(...args: unknown[]) => unknown>().mockImplementation((opts: any) => opts),
+  ServerOptions: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(function (opts: any) {
+    return opts
+  }),
 }
 
 const mockOpenAI = {
-  LLM: vi
-    .fn<(...args: unknown[]) => unknown>()
-    .mockImplementation((opts: any) => ({ __openai_llm: true, opts })),
+  LLM: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(function (opts: any) {
+    return { __openai_llm: true, opts }
+  }),
   realtime: {
-    RealtimeModel: vi
-      .fn<(...args: unknown[]) => unknown>()
-      .mockImplementation((opts: any) => ({ __openai_realtime: true, opts })),
+    RealtimeModel: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(function (
+      opts: any,
+    ) {
+      return { __openai_realtime: true, opts }
+    }),
   },
-  STT: vi
-    .fn<(...args: unknown[]) => unknown>()
-    .mockImplementation((opts: any) => ({ __openai_stt: true, opts })),
-  TTS: vi
-    .fn<(...args: unknown[]) => unknown>()
-    .mockImplementation((opts: any) => ({ __openai_tts: true, opts })),
+  STT: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(function (opts: any) {
+    return { __openai_stt: true, opts }
+  }),
+  TTS: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(function (opts: any) {
+    return { __openai_tts: true, opts }
+  }),
 }
 
 const mockGoogle = {
-  LLM: vi
-    .fn<(...args: unknown[]) => unknown>()
-    .mockImplementation((opts: any) => ({ __google_llm: true, opts })),
+  LLM: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(function (opts: any) {
+    return { __google_llm: true, opts }
+  }),
   beta: {
     realtime: {
-      RealtimeModel: vi
-        .fn<(...args: unknown[]) => unknown>()
-        .mockImplementation((opts: any) => ({ __google_realtime: true, opts })),
+      RealtimeModel: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(function (
+        opts: any,
+      ) {
+        return { __google_realtime: true, opts }
+      }),
     },
   },
 }
 
 const mockDeleteRoom = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined)
 const mockRemoveParticipant = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined)
-const mockRoomServiceClient = vi.fn<(...args: unknown[]) => unknown>().mockImplementation(() => ({
-  deleteRoom: mockDeleteRoom,
-  removeParticipant: mockRemoveParticipant,
-}))
+const mockRoomServiceClient = vi
+  .fn<(...args: unknown[]) => unknown>()
+  .mockImplementation(function () {
+    return {
+      deleteRoom: mockDeleteRoom,
+      removeParticipant: mockRemoveParticipant,
+    }
+  })
 
 function resetCallTerminationMocks() {
   mockDeleteRoom.mockReset()
@@ -2082,7 +2096,9 @@ describe('Voice module', () => {
 
     test('custom onEnter hook can explicitly generate an entry reply', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -2149,7 +2165,9 @@ describe('Voice module', () => {
 
     test('happy path: entry runs session and emits invocation_start + invocation_end', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -2178,7 +2196,9 @@ describe('Voice module', () => {
 
     test('participant disconnect sets reason to participant_left', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -2207,7 +2227,9 @@ describe('Voice module', () => {
     test('participant disconnect waits for output tool before room termination', async () => {
       const order: string[] = []
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const endCall = {
         name: 'endCall',
@@ -2279,7 +2301,9 @@ describe('Voice module', () => {
 
     test('room disconnect sets reason to disconnected', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -2307,7 +2331,9 @@ describe('Voice module', () => {
 
     test('room listeners are cleaned up after session ends', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -2329,7 +2355,9 @@ describe('Voice module', () => {
 
     test('setup callback maps participant to session config', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext({
@@ -2362,7 +2390,9 @@ describe('Voice module', () => {
     test('output tool side effects and playout complete before job shutdown', async () => {
       const order: string[] = []
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const endCall = {
         name: 'endCall',
@@ -2405,7 +2435,9 @@ describe('Voice module', () => {
     test('afterTurn runs before job shutdown so finalization can observe output', async () => {
       const order: string[] = []
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const endCall = {
         name: 'endCall',
@@ -2459,7 +2491,9 @@ describe('Voice module', () => {
       // part of that barrier, a job teardown (e.g. caller disconnect during a transfer)
       // can outrace the post-sessionDone main path and skip it entirely.
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
 
@@ -2504,7 +2538,9 @@ describe('Voice module', () => {
       // Finalization is idempotent: when the session ends normally AND the worker then runs
       // its shutdown callbacks, afterTurn (where completeCall lives) must not run twice.
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
 
@@ -2538,7 +2574,9 @@ describe('Voice module', () => {
       lkSessionMock.interrupt.mockImplementation(() => {
         order.push('interrupt')
       })
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const endCall = {
         name: 'endCall',
@@ -2581,7 +2619,9 @@ describe('Voice module', () => {
       const order: string[] = []
       const voiceEvents: any[] = []
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const finishRequest = {
         name: 'finishRequest',
@@ -2680,7 +2720,9 @@ describe('Voice module', () => {
     test('ctx.end emits output completion failure when output generation fails', async () => {
       const voiceEvents: any[] = []
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const finishRequest = {
         name: 'finishRequest',
@@ -2745,7 +2787,9 @@ describe('Voice module', () => {
 
     test('ctx.end preserves the tool list and redirects wrong tool calls to the output tool', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const finishRequest = {
         name: 'finishRequest',
@@ -2818,7 +2862,9 @@ describe('Voice module', () => {
 
     test('named voice generateReply redirects wrong tool calls before execution', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const startVerification = {
         name: 'startVerification',
@@ -2900,7 +2946,9 @@ describe('Voice module', () => {
     test('ctx.end waits for async output tool completion before room termination', async () => {
       const order: string[] = []
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const finishRequest = {
         name: 'finishRequest',
@@ -2982,7 +3030,9 @@ describe('Voice module', () => {
 
     test('removeParticipant call termination strategy uses the initial caller identity', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const endCall = {
         name: 'endCall',
@@ -3017,7 +3067,9 @@ describe('Voice module', () => {
 
     test('callTermination false leaves LiveKit room termination to the deployment', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const endCall = {
         name: 'endCall',
@@ -3047,7 +3099,9 @@ describe('Voice module', () => {
         Object.assign(new Error('room does not exist'), { status: 404 }),
       )
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const endCall = {
         name: 'endCall',
@@ -3075,7 +3129,9 @@ describe('Voice module', () => {
       const error = new Error('livekit unavailable')
       mockDeleteRoom.mockRejectedValue(error)
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const endCall = {
         name: 'endCall',
@@ -3100,7 +3156,9 @@ describe('Voice module', () => {
 
     test('duplicate completion and disconnect races terminate the call once', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const endCall = {
         name: 'endCall',
@@ -3519,7 +3577,7 @@ describe('Voice module', () => {
       const agentB = makeAgent({ name: 'agent-b' })
       let hookCallCount = 0
 
-      lkAgents.voice.AgentSession.mockImplementation(() => {
+      lkAgents.voice.AgentSession.mockImplementation(function () {
         const mock = makeLKSessionMock()
         mock.start.mockImplementation(async () => {
           setTimeout(() => mock._emit('close'), 10)
@@ -3578,7 +3636,7 @@ describe('Voice module', () => {
       const jobCtx = makeJobContext()
 
       let hookCallCount = 0
-      lkAgents.voice.AgentSession.mockImplementation(() => {
+      lkAgents.voice.AgentSession.mockImplementation(function () {
         const mock = makeLKSessionMock()
         mock.start.mockImplementation(async () => {
           setTimeout(() => mock._emit('close'), 10)
@@ -3614,7 +3672,9 @@ describe('Voice module', () => {
       const lkSessionMock = makeLKSessionMock({
         waitForPlayout: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
       })
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -3648,7 +3708,9 @@ describe('Voice module', () => {
       const lkSessionMock = makeLKSessionMock({
         waitForPlayout: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
       })
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -3681,7 +3743,9 @@ describe('Voice module', () => {
     test('agent-level onInactivity hook can keep the voice session alive', async () => {
       const waitForPlayout = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined)
       const lkSessionMock = makeLKSessionMock({ waitForPlayout })
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -3749,7 +3813,9 @@ describe('Voice module', () => {
     // finalizes"), runs that barrier as the worker does, and reports completeCall invocations.
     async function runUntilWorkerShutdown(onActive?: () => void) {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
 
@@ -3814,7 +3880,9 @@ describe('Voice module', () => {
 
     test('simultaneous participantDisconnected + disconnected uses participant_left when hook runs first', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -3856,7 +3924,9 @@ describe('Voice module', () => {
     test('onTranscript hook fires for each transcript message with session and state', async () => {
       const transcriptEvents: any[] = []
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -3913,7 +3983,9 @@ describe('Voice module', () => {
 
     test('onTranscript error does not crash the session', async () => {
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -3957,7 +4029,9 @@ describe('Voice module', () => {
     test('multiple onTranscript hooks run in order', async () => {
       const order: number[] = []
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
@@ -3999,7 +4073,9 @@ describe('Voice module', () => {
     test('onTranscript queue drains before commit', async () => {
       const callOrder: string[] = []
       const lkSessionMock = makeLKSessionMock()
-      lkAgents.voice.AgentSession.mockImplementation(() => lkSessionMock)
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
 
       const sessionService = makeSessionService()
       sessionService.commitSession.mockImplementation(async () => {

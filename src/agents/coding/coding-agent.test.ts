@@ -264,14 +264,16 @@ describe('CodingAgent', () => {
         delayMs: 10,
       })
 
-      const startTime = Date.now()
+      const startTime = performance.now()
 
       for await (const _ of agent.run('Task')) {
         // consume
       }
 
-      const elapsed = Date.now() - startTime
-      expect(elapsed).toBeGreaterThanOrEqual(20) // At least 2 * 10ms
+      const elapsed = performance.now() - startTime
+      // Two 10 ms delays. A Node timer may fire up to a millisecond early and Date.now() rounds, so
+      // the floor allows one millisecond per delay (CI measured 19 for 20).
+      expect(elapsed).toBeGreaterThanOrEqual(18)
     })
 
     describe('.execute() for tool interface', () => {
