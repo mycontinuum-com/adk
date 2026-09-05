@@ -410,8 +410,27 @@ export interface AdkApp<S extends StateSchema> {
   close(): Promise<void>
 }
 
-function isPrimitiveZodType(zodSchema: z.ZodType | undefined): boolean {
-  if (!zodSchema) return false
+/**
+ * Strips optional/nullable/default wrappers so a session key declared as `z.string().optional()` is
+ * still recognised as primitive: a wrapped primitive that fell through to the schema path would
+ * have the model's prose parsed as a value (the first number in "last 7 days" became "7").
+ */
+function unwrapZodType(zodSchema: z.ZodType): z.ZodType {
+  let current = zodSchema
+  for (;;) {
+    if (current instanceof z.ZodOptional || current instanceof z.ZodNullable) {
+      current = current.unwrap() as z.ZodType
+    } else if (current instanceof z.ZodDefault) {
+      current = current.removeDefault() as z.ZodType
+    } else {
+      return current
+    }
+  }
+}
+
+function isPrimitiveZodType(wrappedSchema: z.ZodType | undefined): boolean {
+  if (!wrappedSchema) return false
+  const zodSchema = unwrapZodType(wrappedSchema)
   return (
     zodSchema instanceof z.ZodString ||
     zodSchema instanceof z.ZodNumber ||

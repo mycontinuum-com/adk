@@ -31,6 +31,12 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## [Unreleased]
+
+### Fixed
+
+- `output: '<session key>'` for a key declared with `.optional()`, `.nullable()`, or `.default()` around a primitive (`z.string().optional()` and the like) is now a raw-text output key like its unwrapped form — previously the wrapper hid the primitive from the shorthand, so the key took the schema path and the model's prose was parsed as a value (the first number in "last 7 days" became the output `"7"`).
+
 ## [0.6.0] - 2026-09-01
 
 The first public release. The surface is smaller than 0.5.27 on purpose: what shipped without a consumer, without a test against real infrastructure, or under a name that described the wrong thing is gone, because removing it after publication costs a breaking change and removing it now costs nothing.

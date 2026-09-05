@@ -188,6 +188,32 @@ describe('spec.agent', () => {
     const app = adk({ schema })
     expect(app.use(Diagnoser).output).toBeDefined()
   })
+
+  it('keeps an optional or defaulted primitive session key as a raw-text output key', () => {
+    const schema = {
+      session: {
+        reply: z.string().optional(),
+        score: z.number().nullable().default(null),
+        report: z.object({ summary: z.string() }).optional(),
+      },
+    } satisfies StateSchema
+
+    const app = adk({ schema })
+    const agentFor = (output: 'reply' | 'score' | 'report') =>
+      app.use(
+        spec.agent(schema)((_app) => ({
+          name: `agent-${output}`,
+          model: openai('gpt-4o'),
+          context: [],
+          output,
+        })),
+      )
+
+    // A wrapped primitive must not fall through to the schema path, which parses prose as a value.
+    expect(agentFor('reply').output).toEqual({ key: 'reply' })
+    expect(agentFor('score').output).toEqual({ key: 'score' })
+    expect(agentFor('report').output).toMatchObject({ key: 'report', mode: 'native' })
+  })
 })
 
 describe('spec.sequence', () => {
