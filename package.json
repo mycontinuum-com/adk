@@ -179,10 +179,10 @@
   "scripts": {
     "build": "rm -rf dist && tsup && tsc -p tsconfig.json --emitDeclarationOnly && node scripts/postbuild-dts-aliases.cjs && node scripts/postbuild-cli-cjs-wrapper.cjs && node scripts/verify-package-exports.cjs",
     "dev": "tsup --watch",
-    "test": "vitest run",
-    "test:postgres": "vitest run src/**/postgres.test.ts",
+    "test": "vp test run",
+    "test:postgres": "vp test run src/**/postgres.test.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint src/",
+    "lint": "vp lint src/",
     "ci": "pnpm run typecheck && pnpm run test",
     "prepublishOnly": "pnpm run typecheck && pnpm run build && node scripts/verify-package-exports.cjs"
   },
@@ -228,7 +228,9 @@
     "tsx": "^4.21.0",
     "turndown": "^7.2.0",
     "typescript": "^5.0.0",
-    "vitest": "^3.2.1",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
+    "vite-plus": "0.3.0",
+    "vitest": "4.1.11",
     "voyageai": "^0.1.0",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
