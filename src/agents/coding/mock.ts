@@ -11,15 +11,7 @@
  * @module
  */
 
-import type {
-  StreamEvent,
-  AssistantEvent,
-  AssistantDeltaEvent,
-  ToolCallEvent,
-  ToolResultEvent,
-  ThoughtEvent,
-  ArtifactUpdateEvent,
-} from '../../types/events'
+import type { StreamEvent, ArtifactUpdateEvent } from '../../types/events'
 import type { FunctionTool, ToolExecutionContext } from '../../types/runnables'
 import type { StateSchema } from '../../types/schema'
 import type {
@@ -66,7 +58,7 @@ function responseToEvent(
         ...base,
         type: 'assistant',
         text: response.text ?? '',
-      } as AssistantEvent
+      }
 
     case 'assistant_delta':
       return {
@@ -74,14 +66,14 @@ function responseToEvent(
         type: 'assistant_delta',
         delta: response.text ?? '',
         text: response.text ?? '',
-      } as AssistantDeltaEvent
+      }
 
     case 'thought':
       return {
         ...base,
         type: 'thought',
         text: response.text ?? '',
-      } as ThoughtEvent
+      }
 
     case 'tool_call':
       return {
@@ -90,7 +82,7 @@ function responseToEvent(
         callId: response.callId ?? createCallId(),
         name: response.name ?? 'unknown',
         args: response.args ?? {},
-      } as ToolCallEvent
+      }
 
     case 'tool_result':
       return {
@@ -100,7 +92,7 @@ function responseToEvent(
         name: response.name ?? 'unknown',
         result: response.result,
         error: response.error,
-      } as ToolResultEvent
+      }
 
     default:
       throw new Error(`Unknown mock response type: ${(response as MockResponse).type}`)
@@ -239,7 +231,7 @@ export function createMockCodingAgent<S extends StateSchema = StateSchema>(
 
         // Track accumulated text for output
         if (event.type === 'assistant') {
-          accumulatedText += (event as AssistantEvent).text
+          accumulatedText += event.text
         }
 
         yield event
@@ -278,12 +270,10 @@ export function createMockCodingAgent<S extends StateSchema = StateSchema>(
         const modifiedFiles: string[] = []
         for (const event of events) {
           if (event.type === 'tool_call') {
-            const args = event.args as Record<string, unknown>
+            const args = event.args
             const path = args.path ?? args.file_path ?? args.filePath
-            if (path && typeof path === 'string') {
-              if (!modifiedFiles.includes(path)) {
-                modifiedFiles.push(path)
-              }
+            if (typeof path === 'string' && path && !modifiedFiles.includes(path)) {
+              modifiedFiles.push(path)
             }
           }
         }

@@ -158,38 +158,6 @@ function patchStdStreams(): void {
   }) as typeof process.stderr.write
 }
 
-function subscribeToLogger(): void {
-  // TODO: Re-enable when platform primitives are extracted to a shared package
-  // This function subscribes to the platform Logger for log capture integration.
-  // The logger module was part of the anima-service monorepo at:
-  // '../../platform/primitives/observability/logger'
-  //
-  // if (process.env.NODE_ENV === 'test') return;
-  //
-  // try {
-  //   const {
-  //     logger,
-  //   } = require('@animahealth/primitives/observability/logger');
-  //   logger.subscribe(
-  //     (level: string, message: string, data?: Record<string, unknown>) => {
-  //       const logLevel = parsePinoLevel(level);
-  //       const dataStr =
-  //         data && Object.keys(data).length > 0
-  //           ? ` ${JSON.stringify(data)}`
-  //           : '';
-  //       addEntry({
-  //         id: globalLogId++,
-  //         timestamp: new Date(),
-  //         level: logLevel,
-  //         message: `${message}${dataStr}`,
-  //       });
-  //     },
-  //   );
-  // } catch {
-  //   // Logger not available
-  // }
-}
-
 export function initLogCapture(): void {
   if (initialized) return
   initialized = true
@@ -207,7 +175,6 @@ export function initLogCapture(): void {
 
   patchConsole()
   patchStdStreams()
-  subscribeToLogger()
 }
 
 export function repatchConsole(): void {

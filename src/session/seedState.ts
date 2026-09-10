@@ -15,7 +15,9 @@ export type StateChanges<S extends StateSchema = StateSchema> = {
 export function seedState(session: BaseSession, changes: StateChanges, schema?: StateSchema): void {
   if (changes.session) session.state.update(applySchemaDefaults(changes.session, schema?.session))
   for (const scope of ['user', 'patient', 'practice', 'org', 'team'] as const) {
-    if (changes[scope])
-      (session.state as any)[scope]?.update?.(applySchemaDefaults(changes[scope]!, schema?.[scope]))
+    const scopeChanges = changes[scope]
+    if (scopeChanges) {
+      session.state[scope]?.update?.(applySchemaDefaults(scopeChanges, schema?.[scope]))
+    }
   }
 }
