@@ -24,16 +24,6 @@ import {
 } from './primitives'
 import { coerceUnion, coerceDiscriminatedUnion, coerceIntersection } from './unions'
 
-export {
-  createContext,
-  childContext,
-  addCorrection,
-  addError,
-  totalScore,
-  isMaxDepthExceeded,
-} from './context'
-export type { CoercionContext } from './context'
-
 function isEmptyObject(value: unknown): boolean {
   return (
     typeof value === 'object' &&

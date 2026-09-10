@@ -53,14 +53,6 @@ function getVisitedKey(ctx: CoercionContext, schemaId: string, value: unknown): 
   return `${ctx.path.join('.')}:${schemaId}:${safeStringify(value)}`
 }
 
-export function hasVisited(ctx: CoercionContext, schemaId: string, value: unknown): boolean {
-  return ctx.visited.has(getVisitedKey(ctx, schemaId, value))
-}
-
-export function markVisited(ctx: CoercionContext, schemaId: string, value: unknown): void {
-  ctx.visited.add(getVisitedKey(ctx, schemaId, value))
-}
-
 export function checkAndMarkVisited(
   ctx: CoercionContext,
   schemaId: string,

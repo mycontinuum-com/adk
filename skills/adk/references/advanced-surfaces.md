@@ -138,7 +138,6 @@ Gateway operations include `dispatch`, `send`, `subscribe`, `status`, `stop`, `s
 
 The protocol handler `app.handler.agui` is the normal public surface. Use `@animahealth/adk/agui` and `src/agui/` only when working on adapter internals or custom AG-UI integration.
 
-There is a local design doc at `src/agui/DESIGN.md`.
 
 ## Package Layout
 

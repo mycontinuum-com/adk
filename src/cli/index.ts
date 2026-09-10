@@ -48,19 +48,21 @@ function isModuleNotFoundError(error: unknown, depth = 3): boolean {
 
 async function loadInkRuntime(): Promise<InkRuntime> {
   try {
-    const [ink, react, appModule, spinner, terminal] = await Promise.all([
+    const [ink, react, App, SpinnerProvider, TerminalProvider] = await Promise.all([
       import('ink'),
       import('react'),
-      import('./App.js'),
-      import('./components/SpinnerContext.js'),
-      import('./components/TerminalContext.js'),
+      import('./App.js').then(({ App: component }) => component),
+      import('./components/SpinnerContext.js').then(({ SpinnerProvider: component }) => component),
+      import('./components/TerminalContext.js').then(
+        ({ TerminalProvider: component }) => component,
+      ),
     ])
     return {
       render: ink.render,
       React: react.default ?? react,
-      App: appModule.App,
-      SpinnerProvider: spinner.SpinnerProvider,
-      TerminalProvider: terminal.TerminalProvider,
+      App,
+      SpinnerProvider,
+      TerminalProvider,
     }
   } catch (error) {
     if (!isModuleNotFoundError(error)) throw error

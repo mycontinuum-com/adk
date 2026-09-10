@@ -7,7 +7,6 @@ import type { Session } from '../types/session'
 // The interface and its `declare module 'vitest'` augmentation live in './matcher-types', a module
 // with no runtime imports, so the testing barrel can re-export the type without dragging this
 // vitest-importing module into its static graph. Re-exported here for direct importers.
-export type { AdkMatchers } from './matcher-types'
 
 function findEventsByType<T extends Event['type']>(
   events: readonly Event[],
@@ -27,7 +26,7 @@ function extractEvents(
 
 const UUID_REGEX = /^([a-z]+_)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export const adkMatchers = {
+const adkMatchers = {
   toBeUuid(received: unknown) {
     const pass = typeof received === 'string' && UUID_REGEX.test(received)
     return {

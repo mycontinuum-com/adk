@@ -48,22 +48,6 @@ interface PgPool extends PgQueryable {
 }
 
 /**
- * Create a Postgres ProcessStore.
- *
- * @example
- *   ;```typescript
- *   import { postgresProcessStore } from '@animahealth/adk/gateway/postgres'
- *
- *   const store = postgresProcessStore({
- *     connectionString: process.env.DATABASE_URL,
- *   })
- *   ```
- */
-export function postgresProcessStore(config: PostgresProcessStoreConfig): ProcessStore {
-  return new PostgresProcessStore(config)
-}
-
-/**
  * Postgres ProcessStore implementation.
  *
  * All queries use parameterized SQL to prevent injection. Uses transactions where atomicity is

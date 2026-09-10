@@ -6,7 +6,7 @@ export interface LKPlayHandle {
   waitForPlayout(): Promise<void>
 }
 
-export interface LKSpeechHandle {
+interface LKSpeechHandle {
   waitForPlayout(): Promise<void>
   interrupted?: boolean
 }
@@ -78,12 +78,12 @@ export interface VoiceDeps {
   livekitServer(): LiveKitServerImports
 }
 
-export interface LiveKitRoomServiceClient {
+interface LiveKitRoomServiceClient {
   deleteRoom(roomName: string): Promise<void>
   removeParticipant(roomName: string, identity: string): Promise<void>
 }
 
-export interface LiveKitServerImports {
+interface LiveKitServerImports {
   RoomServiceClient: new (
     livekitUrl: string,
     apiKey?: string,

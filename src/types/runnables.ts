@@ -222,7 +222,7 @@ export interface FunctionTool<
   retry?: RetryConfig
 }
 
-export interface WebSearchTool {
+export interface ProviderTool {
   type: 'web_search'
   searchContextSize?: 'low' | 'medium' | 'high'
   userLocation?: {
@@ -233,8 +233,6 @@ export interface WebSearchTool {
     timezone?: string
   }
 }
-
-export type ProviderTool = WebSearchTool
 
 export interface MCPTool {
   readonly kind: 'mcp_server'
@@ -283,7 +281,7 @@ export type { Hook, TurnContext } from '../hook/types'
 export type SessionKeyOf<S extends StateSchema> =
   S['session'] extends Record<string, z.ZodType> ? keyof S['session'] & string : string
 
-export interface OutputKeyConfig<S extends StateSchema = StateSchema> {
+interface OutputKeyConfig<S extends StateSchema = StateSchema> {
   key: SessionKeyOf<S>
 }
 

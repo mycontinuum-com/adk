@@ -4,7 +4,6 @@ import { jsonishToPlain } from '../types'
 import { extractJsonFromText, extractBalancedJsonObjects } from './extractors'
 import { parseWithFixingParser } from './state-machine'
 
-export { parseWithFixingParser } from './state-machine'
 export { extractJsonFromText, getPositionFromOffset } from './extractors'
 
 export interface JsonishResult {
@@ -13,11 +12,6 @@ export interface JsonishResult {
   jsonish?: JsonishValue
   errors: ParseError[]
   fallback?: boolean
-}
-
-export interface ParseOptions {
-  extractFromText?: boolean
-  partial?: boolean
 }
 
 function plainToJsonish(value: unknown, completionState: CompletionState): JsonishValue {

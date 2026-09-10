@@ -20,51 +20,25 @@ export {
   parseJsonish,
   parsePartialJson,
   extractJsonFromText,
-  parseWithFixingParser,
   getPositionFromOffset,
   type JsonishResult,
-  type ParseOptions,
 } from './jsonish'
 
-export { coerce, coercePartial, coerceFromJsonish } from './coercion/index'
+export { coerce, coercePartial } from './coercion/index'
 
 export {
   createStreamParser,
   parseStreamChunks,
   type StreamParser,
-  type StreamDelta,
   type StreamResult,
 } from './streaming'
 
 export type {
-  CompletionState,
-  JsonishFix,
-  JsonishValue,
-  JsonishPrimitive,
-  JsonishObject,
-  JsonishArray,
-  JsonishAnyOf,
-  JsonishFixed,
-  JsonishMarkdown,
-  CorrectionType,
   Correction,
   CoercionError,
   CoercionResult,
-  CoercionSuccess,
-  CoercionFailure,
   ParseResult,
-  ParseResultSuccess,
-  ParseResultFailure,
   ParseError,
   StreamParseState,
-  SchemaType,
   ParserConfig,
-} from './types'
-
-export {
-  CorrectionScores,
-  DEFAULT_CONFIG,
-  jsonishToPlain,
-  getCompletionState,
-  simplifyJsonish,
 } from './types'

@@ -19,8 +19,6 @@ export interface EventDisplayConfig {
   hidden?: boolean
 }
 
-export { LABEL_WIDTH } from './constants'
-
 export function truncate(text: string, maxLength?: number): string {
   const singleLine = text.replace(/\s+/g, ' ').trim()
   if (maxLength === undefined || singleLine.length <= maxLength) return singleLine

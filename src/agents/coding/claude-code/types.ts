@@ -19,7 +19,7 @@ export type PermissionMode =
   | 'auto' // Model classifier approves or denies
 
 /** Error types that can occur during assistant message processing. */
-export type AssistantMessageError =
+type AssistantMessageError =
   | 'authentication_failed'
   | 'billing_error'
   | 'rate_limit'
@@ -29,7 +29,7 @@ export type AssistantMessageError =
   | 'unknown'
 
 /** Result subtypes indicating how the query ended. */
-export type ResultSubtype =
+type ResultSubtype =
   | 'success'
   | 'error_max_turns'
   | 'error_during_execution'
@@ -37,27 +37,24 @@ export type ResultSubtype =
   | 'error_max_structured_output_retries'
 
 /** Rate limit status from the SDK. */
-export type RateLimitStatus = 'allowed' | 'allowed_warning' | 'rejected'
+type RateLimitStatus = 'allowed' | 'allowed_warning' | 'rejected'
 
 /** Token usage statistics from the SDK. */
-export interface SDKUsage {
+interface SDKUsage {
   input_tokens: number
   output_tokens: number
   cache_creation_input_tokens?: number
   cache_read_input_tokens?: number
 }
 
-/** Content block types in assistant messages. */
-export type ContentBlockType = 'text' | 'tool_use' | 'thinking'
-
 /** Text content block in assistant messages. */
-export interface TextContentBlock {
+interface TextContentBlock {
   type: 'text'
   text: string
 }
 
 /** Tool use content block in assistant messages. */
-export interface ToolUseContentBlock {
+interface ToolUseContentBlock {
   type: 'tool_use'
   id: string
   name: string
@@ -65,7 +62,7 @@ export interface ToolUseContentBlock {
 }
 
 /** Thinking content block in assistant messages (extended thinking). */
-export interface ThinkingContentBlock {
+interface ThinkingContentBlock {
   type: 'thinking'
   thinking: string
 }
@@ -82,20 +79,20 @@ export interface ToolResultContent {
 }
 
 /** Text content in user messages. */
-export interface TextContent {
+interface TextContent {
   type: 'text'
   text: string
 }
 
 /** Content types for user messages. */
-export type UserMessageContent =
+type UserMessageContent =
   | string
   | TextContent
   | ToolResultContent
   | Array<TextContent | ToolResultContent>
 
 /** The nested BetaMessage structure in SDKAssistantMessage. */
-export interface BetaMessage {
+interface BetaMessage {
   id: string
   type: 'message'
   role: 'assistant'
@@ -126,7 +123,7 @@ export interface SDKUserMessage {
 }
 
 /** Permission denial information. */
-export interface PermissionDenial {
+interface PermissionDenial {
   tool_name: string
   tool_use_id: string
   tool_input: unknown
@@ -168,7 +165,7 @@ export interface SDKPartialAssistantMessage {
 }
 
 /** SDK Tool Progress Message - progress during tool execution. */
-export interface SDKToolProgressMessage {
+interface SDKToolProgressMessage {
   type: 'tool_progress'
   tool_use_id: string
   elapsed_ms: number
@@ -183,21 +180,21 @@ export interface SDKRateLimitEvent {
 }
 
 /** SDK Task Started Message - background task initiated. */
-export interface SDKTaskStartedMessage {
+interface SDKTaskStartedMessage {
   type: 'task_started'
   task_id: string
   task_type: string
 }
 
 /** SDK Task Progress Message - background task progress. */
-export interface SDKTaskProgressMessage {
+interface SDKTaskProgressMessage {
   type: 'task_progress'
   task_id: string
   summary?: string
 }
 
 /** SDK Task Notification Message - background task completion. */
-export interface SDKTaskNotificationMessage {
+interface SDKTaskNotificationMessage {
   type: 'task_notification'
   task_id: string
   result?: unknown

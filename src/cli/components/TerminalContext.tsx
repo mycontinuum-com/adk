@@ -54,14 +54,6 @@ export function TerminalProvider({ children }: TerminalProviderProps): React.Rea
   return <TerminalContext.Provider value={dimensions}>{children}</TerminalContext.Provider>
 }
 
-export function useTerminalDimensions(): TerminalDimensions {
-  return useContext(TerminalContext)
-}
-
 export function useTerminalWidth(): number {
   return useContext(TerminalContext).columns
-}
-
-export function useTerminalHeight(): number {
-  return useContext(TerminalContext).rows
 }

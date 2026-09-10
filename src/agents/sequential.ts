@@ -3,7 +3,7 @@ import type { Session } from '../types'
 import type { InternalRunConfig } from '../types/runtime'
 import type { WorkflowRunnerConfig } from './config'
 
-import { withInvocationBoundary, createInvocationId, type ResumeContext } from '../core'
+import { withInvocationBoundary, createInvocationId, type ResumeContext } from '../core/invocation'
 import {
   type WorkflowResult,
   createTerminalResult,

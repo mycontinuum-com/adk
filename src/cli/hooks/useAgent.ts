@@ -11,7 +11,7 @@ import { useOnTick } from '../components/SpinnerContext'
 
 export type CLIEvent = Event | StreamEvent
 
-export interface UseAgentState {
+interface UseAgentState {
   status: CLIStatus
   events: CLIEvent[]
   error: string | null

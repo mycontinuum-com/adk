@@ -1,5 +1,3 @@
-import { z } from 'zod'
-
 export type CompletionState = 'complete' | 'incomplete' | 'pending'
 
 export interface JsonishFix {
@@ -25,37 +23,37 @@ export type JsonishValue =
   | JsonishFixed
   | JsonishMarkdown
 
-export interface JsonishPrimitive {
+interface JsonishPrimitive {
   type: 'string' | 'number' | 'boolean' | 'null'
   value: string | number | boolean | null
   completionState: CompletionState
 }
 
-export interface JsonishObject {
+interface JsonishObject {
   type: 'object'
   entries: Array<{ key: string; value: JsonishValue }>
   completionState: CompletionState
 }
 
-export interface JsonishArray {
+interface JsonishArray {
   type: 'array'
   items: JsonishValue[]
   completionState: CompletionState
 }
 
-export interface JsonishAnyOf {
+interface JsonishAnyOf {
   type: 'anyOf'
   candidates: JsonishValue[]
   originalString: string
 }
 
-export interface JsonishFixed {
+interface JsonishFixed {
   type: 'fixed'
   value: JsonishValue
   fixes: JsonishFix[]
 }
 
-export interface JsonishMarkdown {
+interface JsonishMarkdown {
   type: 'markdown'
   tag: string
   value: JsonishValue
@@ -134,14 +132,14 @@ export interface CoercionError {
   message: string
 }
 
-export interface CoercionSuccess<T> {
+interface CoercionSuccess<T> {
   success: true
   value: T
   corrections: Correction[]
   totalScore: number
 }
 
-export interface CoercionFailure<T> {
+interface CoercionFailure<T> {
   success: false
   errors: CoercionError[]
   partial?: Partial<T>
@@ -188,8 +186,6 @@ export interface StreamParseState<T> {
   errors: ParseError[]
   completionStates: Map<string, CompletionState>
 }
-
-export type SchemaType = z.ZodType
 
 export interface ParserConfig {
   extractFromMarkdown?: boolean
@@ -246,32 +242,4 @@ export function getCompletionState(value: JsonishValue): CompletionState {
     case 'fixed':
       return getCompletionState(value.value)
   }
-}
-
-export function simplifyJsonish(value: JsonishValue, isDone: boolean): JsonishValue {
-  if (value.type !== 'anyOf') return value
-
-  const simplified = value.candidates.map((c) => simplifyJsonish(c, isDone))
-
-  if (simplified.length === 0) {
-    return {
-      type: 'string',
-      value: value.originalString,
-      completionState: isDone ? 'complete' : 'incomplete',
-    }
-  }
-
-  if (simplified.length === 1) {
-    const single = simplified[0]
-    if (single.type === 'string' && single.value === value.originalString) {
-      return {
-        type: 'string',
-        value: value.originalString,
-        completionState: isDone ? 'complete' : 'incomplete',
-      }
-    }
-    return { ...value, candidates: simplified }
-  }
-
-  return { ...value, candidates: simplified }
 }

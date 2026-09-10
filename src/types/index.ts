@@ -34,7 +34,6 @@ export type {
   ArtifactUpdateEvent,
   AnnotationEvent,
   Event,
-  EventMap,
   ThoughtDeltaEvent,
   AssistantDeltaEvent,
   StreamEvent,
@@ -65,7 +64,6 @@ export {
 
 export type {
   SessionStatus,
-  SpawnedTaskStatus,
   Session,
   SessionInputNamespace,
   Input,
@@ -73,7 +71,6 @@ export type {
   ToolInput,
   StoredSession,
   CommitResult,
-  ScopedStateChange,
   SessionStore,
   SessionService,
   Sessions,
@@ -90,12 +87,10 @@ export type {
   ModelConfig,
   ProviderModelConfig,
   RealtimeModelConfig,
-  TurnDetectionConfig,
   Provider,
   ToolChoice,
   FunctionTool,
   ToolExecutionContext,
-  WebSearchTool,
   ProviderTool,
   MCPTool,
   Tool,
@@ -107,7 +102,6 @@ export type {
   TurnContext,
   OutputMode,
   OutputConfig,
-  OutputKeyConfig,
   OutputSchemaConfig,
   SessionKeyOf,
   Agent,
@@ -128,7 +122,6 @@ export type {
   InvocationContext,
   ToolContext,
   SubRunner,
-  SubRunConfig,
   ModelAdapter,
   SpawnHandle,
   SpawnResult,
@@ -143,7 +136,6 @@ export type {
   StreamResult,
   RunConfig,
   CostEstimate,
-  ModelUsageEntry,
   UsageSummary,
   RunResultBase,
   Output,
@@ -155,4 +147,3 @@ export type {
 } from './runtime'
 
 export type { StateSchema, InferStateSchema, StateValues, ScopeState, TypedState } from './schema'
-export { output } from './schema'

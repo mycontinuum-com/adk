@@ -17,7 +17,6 @@
     "declarationMap": true,
     "sourceMap": true,
     "noEmit": false,
-    "stripInternal": true,
     "jsx": "react",
     "outDir": "./dist",
     "rootDir": "./src",
@@ -32,7 +31,8 @@
       "@anima/adk/*": [
         "./src/*"
       ]
-    }
+    },
+    "stripInternal": true
   },
   "include": [
     "src/**/*"

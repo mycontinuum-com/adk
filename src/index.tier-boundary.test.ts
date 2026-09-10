@@ -17,8 +17,11 @@ const FENCED_MODULES = [
   './agents/coding/index',
   './workflow/index',
   // Internal: no public surface at all.
-  './knowledge/index',
-  './gateway/index',
+  './knowledge/claude-provisioner',
+  './gateway/gateway',
+  './gateway/memory',
+  './gateway/postgres',
+  './gateway/in-process-executor',
   './artifacts/index',
   './channels/index',
 ]

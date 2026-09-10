@@ -1,5 +1,5 @@
 export { evaluateVoice } from './evaluate'
-export { createVoiceEvalCase, createVoiceEvalControl } from './control'
+
 export { voiceTimingMetric } from './metrics'
 export { createSpeakerTracker } from './speaker-tracker'
 

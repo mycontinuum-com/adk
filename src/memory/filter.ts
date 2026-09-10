@@ -37,7 +37,7 @@ export function normalizeFilter(input: FilterInput | undefined): VectorFilter | 
   return conditions.length > 0 ? { must: conditions } : undefined
 }
 
-export function evaluateCondition(cond: VectorCondition, meta: Record<string, unknown>): boolean {
+function evaluateCondition(cond: VectorCondition, meta: Record<string, unknown>): boolean {
   const value = meta[cond.key]
   if (cond.match) return value === cond.match.value
   if (cond.text) {

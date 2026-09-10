@@ -58,7 +58,7 @@ export function SpinnerProvider({ children }: SpinnerProviderProps): React.React
   return <SpinnerContext.Provider value={value}>{children}</SpinnerContext.Provider>
 }
 
-export function useSpinner(): string {
+function useSpinner(): string {
   const { frame } = useContext(SpinnerContext)
   return frame
 }

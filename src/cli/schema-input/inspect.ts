@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export type FieldKind = 'string' | 'number' | 'boolean' | 'enum' | 'literal' | 'array' | 'unknown'
+type FieldKind = 'string' | 'number' | 'boolean' | 'enum' | 'literal' | 'array' | 'unknown'
 
 export interface FieldDescriptor {
   name: string

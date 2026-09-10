@@ -12,13 +12,9 @@ import type { Session } from '../types'
 import type { InternalRunConfig } from '../types/runtime'
 import type { WorkflowRunnerConfig } from './config'
 
-import { createStateAccessor } from '../context'
-import {
-  withInvocationBoundary,
-  createInvocationId,
-  createOrchestrationContext,
-  type ResumeContext,
-} from '../core'
+import { createStateAccessor } from '../context/state'
+import { withInvocationBoundary, createInvocationId, type ResumeContext } from '../core/invocation'
+import { createOrchestrationContext } from '../core/orchestration'
 import { createEventId } from '../session'
 import {
   type WorkflowResult,
@@ -33,7 +29,7 @@ export interface StepResumeContext extends ResumeContext {
   childResumeContext?: ResumeContext
 }
 
-export class StepSignalError extends Error {
+class StepSignalError extends Error {
   constructor(public readonly stepSignal: StepSignal) {
     super(`Step signal: ${stepSignal.signal}`)
     this.name = 'StepSignalError'

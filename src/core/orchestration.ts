@@ -178,7 +178,7 @@ async function emitMessage(
   onStream?.(event)
 }
 
-export function createSpawnHandler(deps: {
+function createSpawnHandler(deps: {
   session: Session
   sessionService: SessionService
   invocationId: string
@@ -492,7 +492,7 @@ export function createRunHandler(deps: {
   }
 }
 
-export function createDispatchHandler(deps: {
+function createDispatchHandler(deps: {
   session: Session
   sessionService: SessionService
   invocationId: string

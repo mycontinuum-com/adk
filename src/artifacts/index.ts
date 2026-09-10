@@ -7,21 +7,8 @@
  */
 
 // Types
-export type {
-  ArtifactService,
-  Artifact,
-  ArtifactSummary,
-  ArtifactVersion,
-  SaveArtifactOptions,
-  SaveArtifactResult,
-  LoadArtifactOptions,
-} from './types'
-
-export { inferMimeType } from './types'
 
 // In-memory implementation
 export { InMemoryArtifactService } from './memory'
 
 // Postgres implementation (requires pg peer dependency)
-export { postgresArtifactService, PostgresArtifactService } from './postgres'
-export type { PostgresArtifactServiceConfig } from './postgres'

@@ -22,7 +22,7 @@ export interface WorkflowResult<TRunnable extends Runnable = Runnable> {
   outputValue?: unknown
 }
 
-export function createWorkflowResult<TRunnable extends Runnable>(
+function createWorkflowResult<TRunnable extends Runnable>(
   runnable: TRunnable,
   session: Session,
   yieldIndex: number,

@@ -4,12 +4,12 @@ export const CALL_ID_PREFIX = 'call_'
 export const CALL_ID_LENGTH = 24
 export const INVOCATION_ID_PREFIX = 'inv_'
 export const INVOCATION_ID_LENGTH = 16
-export const SESSION_ID_PREFIX = 'session_'
-export const EVENT_ID_PREFIX = 'event_'
+const SESSION_ID_PREFIX = 'session_'
+const EVENT_ID_PREFIX = 'event_'
 export const DEFAULT_MAX_STEPS = 25
 export const MAX_TOOL_RETRY_ATTEMPTS = 10
 
-export function normalizeId(prefix: string, id: string): string {
+function normalizeId(prefix: string, id: string): string {
   const bare = id.startsWith(prefix) ? id.slice(prefix.length) : id
   return `${prefix}${bare}`
 }

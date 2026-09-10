@@ -6,8 +6,6 @@ import type {
   InvocationKind,
   ThoughtDeltaEvent,
   AssistantDeltaEvent,
-  AssistantEvent,
-  ThoughtEvent,
   ModelStartEvent,
   ModelEndEvent,
   ContextMessageSummary,
@@ -20,8 +18,6 @@ import type { CLIEvent } from './hooks/useAgent'
 
 import { calculateCost } from '../providers/pricing'
 import { type InvocationState, endReasonToState } from '../session/resume/tree'
-
-export type { InvocationState }
 
 export interface StreamingMetadata {
   chunkCount: number
@@ -37,9 +33,6 @@ export interface DeltaBatchEvent {
   finalText: string
   events: (ThoughtDeltaEvent | AssistantDeltaEvent)[]
 }
-
-export type AugmentedAssistantEvent = AssistantEvent
-export type AugmentedThoughtEvent = ThoughtEvent
 
 export function getStreamingMetadata(
   blocks: InvocationBlock[],
@@ -64,7 +57,7 @@ export interface ContextMessageItem {
   index: number
 }
 
-export interface ContextToolItem {
+interface ContextToolItem {
   id: string
   type: 'context_tool'
   parentContextId: string
@@ -72,22 +65,22 @@ export interface ContextToolItem {
   index: number
 }
 
-export interface ContextSchemaItem {
+interface ContextSchemaItem {
   id: string
   type: 'context_schema'
   parentContextId: string
   schemaName: string
 }
 
-export type ContextChildItem = ContextMessageItem | ContextToolItem | ContextSchemaItem
+type ContextChildItem = ContextMessageItem | ContextToolItem | ContextSchemaItem
 
-export interface PendingContextEnd {
+interface PendingContextEnd {
   id: string
   type: 'pending_context_end'
   contextId: string
 }
 
-export interface PendingBlockEnd {
+interface PendingBlockEnd {
   id: string
   type: 'pending_block_end'
   invocationId: string

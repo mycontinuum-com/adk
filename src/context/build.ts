@@ -182,7 +182,7 @@ export function createRenderContext(
   }
 }
 
-export async function createRenderContextAsync(
+async function createRenderContextAsync(
   session: Session,
   agent: Agent,
   invocationId: string,

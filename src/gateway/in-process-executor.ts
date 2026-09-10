@@ -11,7 +11,7 @@ export interface InProcessExecutorConfig {
   artifactService?: ArtifactService
 }
 
-export class InProcessExecutor implements Executor {
+class InProcessExecutor implements Executor {
   readonly name = 'in-process'
 
   private readonly sessionService: SessionService

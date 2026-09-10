@@ -131,7 +131,7 @@ export interface EgressRecordingConfig {
   apiSecret?: string
 }
 
-export type CallTerminationStrategy = 'deleteRoom' | 'removeParticipant'
+type CallTerminationStrategy = 'deleteRoom' | 'removeParticipant'
 
 export interface CallTerminationConfig {
   /**

@@ -45,25 +45,6 @@ interface PgPool {
 }
 
 /**
- * Create a Postgres ArtifactService.
- *
- * @example
- *   ;```typescript
- *   import { postgresArtifactService } from '@animahealth/adk/artifacts/postgres'
- *
- *   const service = postgresArtifactService({
- *     connectionString: process.env.DATABASE_URL,
- *   })
- *
- *   await service.save('my-app', 'process-1', 'plan', '# Implementation Plan\n...')
- *   const artifact = await service.load('my-app', 'process-1', 'plan')
- *   ```
- */
-export function postgresArtifactService(config: PostgresArtifactServiceConfig): ArtifactService {
-  return new PostgresArtifactService(config)
-}
-
-/**
  * Postgres ArtifactService implementation.
  *
  * All queries use parameterized SQL to prevent injection. Artifacts are stored with automatic

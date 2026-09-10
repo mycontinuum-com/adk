@@ -18,7 +18,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Source type - who produced the knowledge and how. */
-export type KnowledgeSourceType =
+type KnowledgeSourceType =
   | 'git' // Committed via PR - highest trust
   | 'human' // Direct human input (steering, dashboard edit)
   | 'agent' // Agent output, subject to review
@@ -26,14 +26,14 @@ export type KnowledgeSourceType =
   | 'external' // External system data (Linear, Sentry)
 
 /** Scope - who can see the knowledge. */
-export type KnowledgeScope =
+type KnowledgeScope =
   | 'process' // Only the owning process
   | 'flow' // All processes of this flow type
   | 'area' // All processes targeting this area
   | 'system' // Every process
 
 /** Authority - how the agent should treat the knowledge. */
-export type KnowledgeAuthority =
+type KnowledgeAuthority =
   | 'instruction' // Must follow - guardrails, conventions, rules
   | 'decision' // Already decided - don't revisit unless asked
   | 'reference' // Useful context - informational, not directive
@@ -42,7 +42,7 @@ export type KnowledgeAuthority =
   | 'draft' // Work in progress - tentative, may change
 
 /** Special knowledge types for provisioning. */
-export type KnowledgeType = 'skill' | 'rule'
+type KnowledgeType = 'skill' | 'rule'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Assembled Context
@@ -144,51 +144,6 @@ export interface ProvisionManifest {
 
   /** Timestamp when provisioning completed. */
   provisionedAt: Date
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Knowledge Entry (Database)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Knowledge entry as stored in the database.
- *
- * This matches the fab.knowledge table schema.
- */
-export interface KnowledgeEntry {
-  id: string
-  name: string
-  sourceType: KnowledgeSourceType
-  sourceRef: Record<string, unknown> | null
-  scope: KnowledgeScope
-  scopeKey: string | null
-  processId: string | null
-  authority: KnowledgeAuthority
-  mimeType: string
-  version: number
-  renderHint: string | null
-  label: string | null
-  derivedFrom: string[] | null
-  supersedes: string | null
-  tags: string[]
-  createdAt: Date
-  updatedAt: Date
-}
-
-/** Input for creating a new knowledge entry. */
-export interface CreateKnowledgeInput {
-  name: string
-  content: string | Buffer
-  mimeType: string
-  sourceType: KnowledgeSourceType
-  sourceRef?: Record<string, unknown>
-  scope: KnowledgeScope
-  scopeKey?: string
-  processId?: string
-  authority: KnowledgeAuthority
-  renderHint?: string
-  label?: string
-  tags?: string[]
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,7 +1,5 @@
 import { z } from 'zod'
 
-import type { OutputConfig, OutputMode } from './runnables'
-
 export type StateSchema = {
   session?: Record<string, z.ZodType>
   user?: Record<string, z.ZodType>
@@ -70,32 +68,10 @@ export type TypedState<S extends StateSchema = StateSchema> = ScopeState<S['sess
   readonly temp: ScopeState<S['temp']>
 } & SharedScopeProperties<S>
 
-type SessionSchema<T extends StateSchema> = NonNullable<T['session']>
-type SessionValue<T extends StateSchema, K extends keyof SessionSchema<T>> =
-  SessionSchema<T>[K] extends z.ZodType<infer U> ? U : never
-
 export function applySchemaDefaults(
   state: Record<string, unknown>,
   scopeSchema?: Record<string, z.ZodType>,
 ): Record<string, unknown> {
   if (!scopeSchema) return state
   return z.object(scopeSchema).passthrough().parse(state)
-}
-
-export function output<T extends StateSchema, K extends keyof SessionSchema<T> & string>(
-  schema: T,
-  key: K,
-  mode: OutputMode = 'native',
-): OutputConfig<T, SessionValue<T, K>> {
-  const zodSchema = schema.session?.[key]
-
-  if (
-    zodSchema instanceof z.ZodString ||
-    zodSchema instanceof z.ZodNumber ||
-    zodSchema instanceof z.ZodBoolean
-  ) {
-    return { key }
-  }
-
-  return { key, schema: zodSchema, mode }
 }

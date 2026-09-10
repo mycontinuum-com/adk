@@ -54,12 +54,12 @@ export interface ForcedToolGate {
   cancel(toolName?: string): void
 }
 
-export interface ForcedToolInterception {
+interface ForcedToolInterception {
   result: ToolResultEvent
   afterResult?: () => void
 }
 
-export type VoiceGenerateReplyOptions = {
+type VoiceGenerateReplyOptions = {
   userInput?: string
   instructions?: string
   toolChoice?: ToolChoice

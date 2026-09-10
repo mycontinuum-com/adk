@@ -28,18 +28,16 @@ import type { InternalRunConfig } from '../types/runtime'
 import type { AgentRunnerConfig } from './config'
 
 import { buildContext, createStartEvent, createEndEvent } from '../context'
+import { DEFAULT_MAX_STEPS, MAX_TOOL_RETRY_ATTEMPTS } from '../core/constants'
+import { createInvocationContext, createToolContext } from '../core/ctx'
 import {
-  withRetry,
   withInvocationBoundary,
   createInvocationId,
-  isYieldSignal,
-  isRunnable,
-  createInvocationContext,
-  createToolContext,
   type InvocationBoundaryOptions,
   type ResumeContext,
-} from '../core'
-import { DEFAULT_MAX_STEPS, MAX_TOOL_RETRY_ATTEMPTS } from '../core/constants'
+} from '../core/invocation'
+import { withRetry } from '../core/retry'
+import { isYieldSignal, isRunnable } from '../core/tools'
 import {
   isFunctionTool,
   expandMCPTools,
@@ -64,7 +62,7 @@ function enrichToolCallsWithYieldFlag(toolCalls: ToolCallEvent[], tools: Functio
   }
 }
 
-export interface AgentResult extends Omit<RunResultBase, 'runnable' | 'output'> {
+interface AgentResult extends Omit<RunResultBase, 'runnable' | 'output'> {
   runnable: Agent
   outcome: InvocationOutcome | null
   yieldIndex: number

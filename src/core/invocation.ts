@@ -17,7 +17,7 @@ import type {
 import { createEventId, BaseSession } from '../session'
 import { INVOCATION_ID_PREFIX, INVOCATION_ID_LENGTH } from './constants'
 
-export interface YieldInfo {
+interface YieldInfo {
   yieldedToolIds: string[]
   yieldIndex: number
   awaitingInput?: boolean

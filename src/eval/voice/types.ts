@@ -103,7 +103,7 @@ export interface TranscriptEntry {
   turnIndex: number
 }
 
-export type VoiceDiagnosticEvent = VoiceEvent & { createdAt: number }
+type VoiceDiagnosticEvent = VoiceEvent & { createdAt: number }
 
 // ---------------------------------------------------------------------------
 // Run result

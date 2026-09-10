@@ -237,7 +237,3 @@ export function subscribe(callback: (entry: LogEntry) => void): () => void {
   listeners.add(callback)
   return () => listeners.delete(callback)
 }
-
-export function isInitialized(): boolean {
-  return initialized
-}

@@ -1,4 +1,4 @@
-export type LifecycleState = 'idle' | 'active' | 'ending' | 'ended'
+type LifecycleState = 'idle' | 'active' | 'ending' | 'ended'
 
 export type VoiceEndReason =
   | 'completed'

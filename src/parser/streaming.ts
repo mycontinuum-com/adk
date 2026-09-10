@@ -29,7 +29,7 @@ export interface StreamParser<T> {
   reset(): void
 }
 
-export interface StreamDelta<_T> {
+interface StreamDelta<_T> {
   path: string[]
   value: unknown
   operation: 'set' | 'append' | 'delete' | 'complete'

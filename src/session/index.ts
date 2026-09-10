@@ -7,7 +7,7 @@ import { CALL_ID_PREFIX, CALL_ID_LENGTH, createEventId } from '../core/constants
 import { InMemoryStore } from './memory'
 import { sessionService } from './service'
 
-export { BaseSession, type BaseSessionOptions } from './base'
+export { BaseSession } from './base'
 
 export interface SessionOptions {
   id?: string
@@ -28,21 +28,7 @@ export { createEventId }
 export const createCallId = () =>
   `${CALL_ID_PREFIX}${randomUUID().replace(/-/g, '').slice(0, CALL_ID_LENGTH)}`
 
-export {
-  buildInvocationTree,
-  computeResumeContext,
-  validateResumeState,
-  assertReadyToResume,
-  findYieldedNodes,
-  findNode,
-  getNodePath,
-  hasUnresolvedYields,
-  getUnresolvedYields,
-  InvocationTreeError,
-  type InvocationNode,
-  type InvocationState,
-  type RunnableResumeContext,
-} from './resume'
+export { validateResumeState, assertReadyToResume } from './resume'
 
 export { computePipelineFingerprint } from './fingerprint'
 
@@ -51,7 +37,6 @@ export { seedState, type StateChanges } from './seedState'
 export {
   snapshotAt,
   computeStateAtEvent,
-  computeAllStatesAtEvent,
   findEventIndex,
   findInvocationBoundary,
   SnapshotError,

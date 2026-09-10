@@ -8,4 +8,4 @@ export {
 } from './handlers'
 export { PipelineStructureChangedError } from './pipeline'
 export { OutputParseError, ConflictError } from './types'
-export type { ErrorHandler, ErrorRecovery, ComposedErrorHandler } from './types'
+export type { ErrorHandler } from './types'

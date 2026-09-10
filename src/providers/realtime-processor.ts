@@ -18,7 +18,7 @@ import { type WebSocketLike, receiveEvents } from './ws-helpers'
 
 // --- Classifier interface ---
 
-export interface ToolCallInfo {
+interface ToolCallInfo {
   name: string
   args: Record<string, unknown>
   /** Provider-specific data stored in providerContext.data (e.g. { call_id, item_id } for OpenAI). */

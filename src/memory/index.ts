@@ -1,6 +1,5 @@
 export { memory, collectionSpec, normalizeFilter } from './memory'
-export { voyage } from './providers/voyage'
-export { qdrant } from './providers/qdrant'
+
 export { pgvector } from './providers/pgvector'
 export { inMemoryIndex } from './providers/inMemoryIndex'
 export { sqliteVec } from './providers/sqliteVec'
@@ -12,18 +11,14 @@ export type {
   MetadataUpdate,
   EmbeddingModel,
   VoyageModel,
-  VoyageSageMakerConfig,
   QdrantConfig,
   PgVectorConfig,
   Embedder,
-  EmbedResult,
   VectorIndex,
   VectorFilter,
   FilterInput,
   VectorCondition,
-  VectorMatch,
   Match,
-  Point,
   GetResult,
   SearchResult,
   SearchOptions,
@@ -31,21 +26,15 @@ export type {
   SampleOptions,
   SampleResult,
   SlicedSampleResult,
-  DistanceMatrixPair,
-  DistanceMatrixResult,
   CollectionSpec,
-  ContextConfig,
-  ToolConfig,
   UpsertItem,
   SliceConfig,
   SlicedMemoryConfig,
   SlicedMemory,
-  SlicedSubset,
   SlicedVariantAccessor,
   SliceAccessor,
   SlicedMatchUnion,
   SlicedSearchResult,
   SlicedGetUnion,
-  InferSliceMeta,
   PgPool,
 } from './types'

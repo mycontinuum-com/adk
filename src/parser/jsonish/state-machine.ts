@@ -16,7 +16,7 @@ function combineSurrogates(high: number, low: number): string {
   return String.fromCodePoint(((high - 0xd800) << 10) + (low - 0xdc00) + 0x10000)
 }
 
-export type CollectionType =
+type CollectionType =
   | {
       type: 'object'
       keys: string[]
@@ -58,7 +58,7 @@ export type CollectionType =
   | { type: 'trailingComment'; contentBuffer: string[] }
   | { type: 'blockComment'; contentBuffer: string[] }
 
-export interface ParseState {
+interface ParseState {
   collectionStack: Array<{ collection: CollectionType; fixes: JsonishFix[] }>
   completedValues: Array<{
     name: string
@@ -69,7 +69,7 @@ export interface ParseState {
   unescapedQuoteCount: number
 }
 
-export function createParseState(): ParseState {
+function createParseState(): ParseState {
   return {
     collectionStack: [],
     completedValues: [],

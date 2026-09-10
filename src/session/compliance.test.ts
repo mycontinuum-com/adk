@@ -1,4 +1,4 @@
-import type { SessionStore, StoredSession, Event } from '../../types'
+import type { SessionStore, StoredSession, Event } from '../types'
 
 import { InMemoryStore } from './memory'
 

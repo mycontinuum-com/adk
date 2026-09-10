@@ -92,6 +92,7 @@ import { BaseRunner } from '../core/runner'
 import { OutputParseError } from '../errors/types'
 import { generateReport } from '../eval/report'
 import { evaluate as runEval } from '../eval/simulator'
+import { createVoiceEvalCase } from '../eval/voice/control'
 import { aguiHandler } from '../handler/agui'
 import { restHandler, type RestResponse } from '../handler/rest'
 import { turn } from '../handler/turn'
@@ -280,7 +281,7 @@ export interface MCPNamespace<S extends StateSchema> {
   promptDefinitions(): Promise<MCPPromptInfo[]>
 }
 
-export interface HookNamespace<S extends StateSchema = StateSchema> {
+interface HookNamespace<S extends StateSchema = StateSchema> {
   (hook: Hook<S>): Hook<S>
   logging(options?: LoggingHookOptions): Hook<S>
   voiceLogging(options?: VoiceLoggingOptions<S>): VoiceHook<S>
@@ -291,7 +292,7 @@ export interface HookNamespace<S extends StateSchema = StateSchema> {
 
 type UserHandlerConfig<S extends StateSchema> = Omit<HandlerConfig<S>, 'appName'>
 
-export interface HandlerNamespace<S extends StateSchema = StateSchema> {
+interface HandlerNamespace<S extends StateSchema = StateSchema> {
   rest(config: UserHandlerConfig<S>): (input: HandlerInput) => Promise<RestResponse>
   agui(config: UserHandlerConfig<S>): (input: HandlerInput) => AsyncIterable<AGUIEvent>
   turn(
@@ -950,13 +951,9 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
           },
           {
             case: (evalCase: VoiceEvalCase<S> | VoiceEvalCaseFactory<S>) => {
-              const { createVoiceEvalCase } =
-                require('../eval/voice/control') as typeof import('../eval/voice/control')
               return createVoiceEvalCase(evalCase)
             },
             cases: (evalCases: (VoiceEvalCase<S> | VoiceEvalCaseFactory<S>)[]) => {
-              const { createVoiceEvalCase } =
-                require('../eval/voice/control') as typeof import('../eval/voice/control')
               return evalCases.map(createVoiceEvalCase)
             },
             report:

@@ -244,7 +244,3 @@ export class InMemoryChannel implements EventChannel {
     this.closed = true
   }
 }
-
-export function createInMemoryChannel(): EventChannel {
-  return new InMemoryChannel()
-}

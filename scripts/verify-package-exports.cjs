@@ -10,6 +10,10 @@ const packed = JSON.parse(
   execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: root,
     encoding: 'utf8',
+    // This local dry run needs no pnpm-injected npm_config_* settings, which npm rejects.
+    env: Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith('npm_config_')),
+    ),
   }),
 )[0]
 

@@ -25,7 +25,7 @@ function requireBinding(binding: VoiceEvalControlBinding | undefined): VoiceEval
   return binding
 }
 
-export function createVoiceEvalControl(): VoiceEvalControl {
+function createVoiceEvalControl(): VoiceEvalControl {
   let activeBinding: VoiceEvalControlBinding | undefined
   const control: InternalVoiceEvalControl = {
     disconnectUser: (options?: VoiceEvalControlDisconnectOptions) =>

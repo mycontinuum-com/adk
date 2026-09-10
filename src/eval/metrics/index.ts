@@ -8,17 +8,11 @@ export type {
   NumberAssertion,
 } from './types'
 
-export { stateMetric, type StateMetricConfig } from './state'
+export { stateMetric } from './state'
 
-export {
-  eventCountMetric,
-  eventSequenceMetric,
-  type EventCountMetricConfig,
-  type EventSequenceMetricConfig,
-  type EventSequenceStep,
-} from './events'
+export { eventCountMetric, eventSequenceMetric } from './events'
 
-export { timingMetric, type TimingMeasure, type TimingMetricConfig } from './timing'
+export { timingMetric } from './timing'
 
 export {
   codingDeltaMetric,

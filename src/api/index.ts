@@ -11,8 +11,6 @@ export type {
   ToolConfig,
   ContextNamespace,
   ToolsNamespace,
-  HookNamespace,
-  HandlerNamespace,
   MCPNamespace,
 } from './app'
 

@@ -11,7 +11,7 @@ import type { StateSchema } from '../types/schema'
 import type { VoiceSession } from '../voice/types'
 import type { Metric, MetricRun, MetricResult } from './metrics/types'
 
-export type { Metric, MetricRun, MetricResult }
+export type { MetricResult }
 export type { Transform, TerminationReason }
 
 export interface EvalOptions<S extends StateSchema = StateSchema> {

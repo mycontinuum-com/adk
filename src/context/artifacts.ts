@@ -23,10 +23,6 @@ import type { ArtifactUpdateEvent } from '../types/events'
 import { inferMimeType } from '../artifacts/types'
 
 // Re-export for convenience
-export type {
-  SaveArtifactOptions as ArtifactSaveOptions,
-  LoadArtifactOptions as ArtifactLoadOptions,
-}
 
 /**
  * The proxy interface exposed on ctx.artifacts.
@@ -64,7 +60,7 @@ export interface ArtifactsProxy {
 }
 
 /** Event emitter callback for artifact updates. */
-export type ArtifactEventEmitter = (event: ArtifactUpdateEvent) => void
+type ArtifactEventEmitter = (event: ArtifactUpdateEvent) => void
 
 /** Configuration for creating an artifacts proxy. */
 export interface ArtifactsProxyConfig {
