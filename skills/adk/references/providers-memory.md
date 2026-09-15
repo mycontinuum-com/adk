@@ -17,9 +17,9 @@ The main entry still re-exports these for compatibility, but the source marks th
 ## OpenAI
 
 ```typescript
-openai('gpt-5-mini', {
-  temperature: 0.7,
-  reasoning: { effort: 'low' },
+openai('gpt-5.2', {
+  temperature: 0,
+  reasoning: { effort: 'none' },
 })
 
 const cachedModel = openai('gpt-5.6-luna', {
@@ -79,6 +79,22 @@ claude('claude-sonnet-4-5', {
 Enable Claude models in Google Cloud Model Garden and grant Vertex AI permissions.
 
 ## Shared Model Options
+
+Temperature is explicit and does not change reasoning settings. Omission preserves the provider
+default; ADK does not insert a temperature or disable reasoning automatically.
+
+- OpenAI forwards temperature when reasoning is omitted or explicitly `none`. With an active
+  reasoning effort it retains the compatibility guard and omits temperature. Use `none` only on
+  models supporting it; omission can select a reasoning default that rejects temperature.
+- Claude forwards temperature (including zero) without `thinking`; with manual extended thinking
+  it omits temperature because Anthropic prohibits changing it. Models that prohibit sampling
+  even without thinking still reject it: the adapter does not override model capabilities.
+- Gemini forwards temperature (including zero) independently of `thinkingConfig`. Google recommends
+  keeping Gemini 3 sampling at its default of 1; explicit overrides remain the caller's choice.
+
+Provider compatibility: [OpenAI](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.2),
+[Claude](https://platform.claude.com/docs/en/about-claude/models/extended-thinking-models),
+[Gemini](https://ai.google.dev/gemini-api/docs/troubleshooting).
 
 Common provider options include `temperature`, `maxTokens`, and `retry`. Provider-specific options include:
 

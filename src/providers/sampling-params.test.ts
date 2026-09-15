@@ -12,6 +12,7 @@ import { z } from 'zod'
 
 import type { RenderContext } from '../types'
 
+import { ClaudeAdapter } from './claude'
 import { GeminiAdapter } from './gemini'
 import { OpenAIAdapter } from './openai'
 
@@ -110,7 +111,7 @@ describe('Gemini sampling parameters', () => {
     const stream = adapter.step(ctx, {
       provider: 'gemini',
       name: 'gemini-3.5-flash-lite',
-      temperature: 0.2,
+      temperature: 0,
       maxTokens: 16384,
       thinkingConfig: { thinkingLevel: 'minimal', includeThoughts: false },
     } as never)
@@ -119,7 +120,7 @@ describe('Gemini sampling parameters', () => {
       next = await stream.next()
     }
 
-    expect(captured.config?.temperature).toBe(0.2)
+    expect(captured.config?.temperature).toBe(0)
     expect(captured.config?.maxOutputTokens).toBe(16384)
     expect(captured.config?.responseSchema).toBeDefined()
   })
@@ -168,17 +169,68 @@ async function runOpenAIStep(config: Record<string, unknown>): Promise<CapturedO
 }
 
 describe('OpenAI sampling parameters', () => {
+  it('preserves zero with explicit none reasoning', async () => {
+    const request = await runOpenAIStep({ temperature: 0, reasoning: { effort: 'none' } })
+    expect(request.temperature).toBe(0)
+    expect(request.reasoning).toEqual({ effort: 'none' })
+  })
+
+  it('does not choose a temperature when reasoning is disabled', async () => {
+    const request = await runOpenAIStep({ reasoning: { effort: 'none' } })
+    expect(request).not.toHaveProperty('temperature')
+  })
+
+  it('does not infer reasoning from temperature', async () => {
+    const request = await runOpenAIStep({ temperature: 0 })
+    expect(request.temperature).toBe(0)
+    expect(request).not.toHaveProperty('reasoning')
+  })
+
   it('forwards temperature to a non-reasoning model', async () => {
     const request = await runOpenAIStep({ temperature: 0.2 })
     expect(request.temperature).toBe(0.2)
   })
 
-  it('drops temperature when a reasoning effort is set, which those models reject', async () => {
+  it.each(['minimal', 'low', 'medium', 'high'])('drops temperature with active %s reasoning', async (effort) => {
     const request = await runOpenAIStep({
       temperature: 0.2,
-      reasoning: { effort: 'medium' },
+      reasoning: { effort },
     })
     expect(request.reasoning).toBeDefined()
     expect(request).not.toHaveProperty('temperature')
+  })
+})
+
+
+describe('Claude sampling parameters', () => {
+  async function request(config: Record<string, unknown>) {
+    const adapter = new ClaudeAdapter()
+    let captured: { temperature?: number; thinking?: unknown } = {}
+    // @ts-expect-error replacing the private client factory to capture the transport request
+    adapter.getClient = () => ({ messages: { create: async (body: typeof captured) => {
+      captured = body
+      return (async function* () {})()
+    } } })
+    const stream = adapter.step(renderContext(), {
+      provider: 'claude', name: 'claude-sonnet-4-5',
+      vertex: { project: 'test', location: 'test' }, ...config,
+    } as never)
+    for await (const _ of stream) { /* drain transport */ }
+    return captured
+  }
+
+  it('preserves explicit zero without enabling thinking', async () => {
+    expect(await request({ temperature: 0 })).toMatchObject({ temperature: 0 })
+    expect(await request({ temperature: 0 })).not.toHaveProperty('thinking')
+  })
+
+  it('leaves omitted temperature at the provider default', async () => {
+    expect(await request({})).not.toHaveProperty('temperature')
+  })
+
+  it('retains the extended-thinking compatibility guard', async () => {
+    const body = await request({ temperature: 0, thinking: { budgetTokens: 1024 } })
+    expect(body).not.toHaveProperty('temperature')
+    expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 1024 })
   })
 })

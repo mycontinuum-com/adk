@@ -184,10 +184,11 @@ export class OpenAIAdapter implements ModelAdapter {
         store: false,
         ...promptCacheOptions,
         ...(serializedToolChoice && { tool_choice: serializedToolChoice }),
-        // OpenAI reasoning models (o-series, GPT-5.x) reject a non-default
-        // temperature, so it is only forwarded to non-reasoning models --
-        // mirroring how python drops it for those families.
-        ...(config.temperature != null && !reasoning && { temperature: config.temperature }),
+        // Active OpenAI reasoning rejects temperature. Explicit effort none
+        // allows sampling on models that support disabling reasoning.
+        // Do not infer reasoning settings from a sampling parameter.
+        ...(config.temperature != null &&
+          (!reasoning || reasoning.effort === 'none') && { temperature: config.temperature }),
         ...(config.maxTokens != null && { max_output_tokens: config.maxTokens }),
         ...(reasoning && {
           reasoning,

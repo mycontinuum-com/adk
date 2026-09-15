@@ -33,7 +33,12 @@ Migration section:
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-15
+
 ### Fixed
+
+- OpenAI now forwards an explicitly configured temperature when reasoning effort is `none`; active reasoning continues to omit temperature. Omitted temperatures remain omitted, preserving provider defaults.
+- OpenAI reasoning configuration now accepts `none` in its public type.
 
 - `output: '<session key>'` for a key declared with `.optional()`, `.nullable()`, or `.default()` around a primitive (`z.string().optional()` and the like) is now a raw-text output key like its unwrapped form — previously the wrapper hid the primitive from the shorthand, so the key took the schema path and the model's prose was parsed as a value (the first number in "last 7 days" became the output `"7"`).
 

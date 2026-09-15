@@ -1,6 +1,6 @@
 {
   "name": "@animahealth/adk",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Anima Agent Development Kit - Framework for building production-grade multi-agent AI systems",
   "keywords": [
     "agents",
