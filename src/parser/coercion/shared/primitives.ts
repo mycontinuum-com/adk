@@ -1,8 +1,6 @@
-import { z } from 'zod'
+import type { CoercionContext } from '../context'
 
-import type { CoercionContext } from './context'
-
-import { addCorrection, addError } from './context'
+import { addCorrection, addError } from '../context'
 
 const URL_PROTOCOL_REGEX = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//
 const CURRENCY_REGEX = /[\p{Sc}]/gu
@@ -56,25 +54,16 @@ export function coerceToString(value: unknown, ctx: CoercionContext): string | u
   return undefined
 }
 
-export function applyStringRefinements(
+export function applyUrlRefinement(
   value: string,
-  schema: z.ZodType,
+  hasUrlFormat: boolean,
   ctx: CoercionContext,
 ): string {
-  if (!(schema instanceof z.ZodString)) return value
-
-  const checks = (schema._def as { checks?: Array<{ kind: string }> }).checks || []
-
-  for (const check of checks) {
-    if (check.kind === 'url') {
-      if (value && !URL_PROTOCOL_REGEX.test(value)) {
-        const fixed = `https://${value}`
-        addCorrection(ctx, value, fixed, 'Added https:// protocol to URL', 'urlProtocolAdded')
-        return fixed
-      }
-    }
+  if (hasUrlFormat && value && !URL_PROTOCOL_REGEX.test(value)) {
+    const fixed = `https://${value}`
+    addCorrection(ctx, value, fixed, 'Added https:// protocol to URL', 'urlProtocolAdded')
+    return fixed
   }
-
   return value
 }
 

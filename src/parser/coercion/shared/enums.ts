@@ -1,8 +1,6 @@
-import { z } from 'zod'
+import type { CoercionContext } from '../context'
 
-import type { CoercionContext } from './context'
-
-import { addCorrection, addError } from './context'
+import { addCorrection, addError } from '../context'
 
 function sanitizeCharacters(input: string | null | undefined): string {
   if (!input) {
@@ -246,13 +244,4 @@ export function coerceToEnum(
     `Value "${value}" does not match any enum option`,
   )
   return undefined
-}
-
-export function getEnumValues(schema: z.ZodEnum<[string, ...string[]]>): string[] {
-  return schema.options
-}
-
-export function getNativeEnumValues(schema: z.ZodNativeEnum<z.EnumLike>): string[] {
-  const enumObj = schema.enum
-  return Object.values(enumObj).filter((v): v is string => typeof v === 'string')
 }

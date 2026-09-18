@@ -27,8 +27,9 @@ import type { Session } from '../types'
 import type { InternalRunConfig } from '../types/runtime'
 import type { AgentRunnerConfig } from './config'
 
-import { buildContext, createStartEvent, createEndEvent } from '../context'
+import { buildContext, createStartEvent, createEndEvent } from '../context/build'
 import { DEFAULT_MAX_STEPS, MAX_TOOL_RETRY_ATTEMPTS } from '../core/constants'
+import { createEventId } from '../core/constants'
 import { createInvocationContext, createToolContext } from '../core/ctx'
 import {
   withInvocationBoundary,
@@ -46,12 +47,11 @@ import {
   isEndSignal,
   safeParseToolArgs,
 } from '../core/tools'
-import { composeErrorHandlers } from '../errors'
+import { composeErrorHandlers } from '../errors/compose'
 import { OutputParseError } from '../errors/types'
-import { composeHooks } from '../hook'
-import { createParser } from '../parser'
+import { composeHooks } from '../hook/compose'
+import { createParser } from '../parser/parser'
 import { getModelName, getInnerModel } from '../providers/models'
-import { createEventId } from '../session'
 
 function enrichToolCallsWithYieldFlag(toolCalls: ToolCallEvent[], tools: FunctionTool[]): void {
   const yieldingToolNames = new Set(tools.filter((t) => t.yieldSchema).map((t) => t.name))
@@ -726,45 +726,43 @@ function processAgentOutput(
   }
 
   if ('schema' in outputConfig) {
-    const parser = createParser(outputConfig.schema)
-    const result = parser.parse(rawOutput)
-
-    if (result.success) {
-      if (outputConfig.key) {
-        dynamicState[outputConfig.key] = result.value
-      }
+    const direct = createParser(outputConfig.schema, { coerceTypes: false }).parse(rawOutput)
+    if (direct.success) {
+      if (outputConfig.key) dynamicState[outputConfig.key] = direct.value
       return {
-        value: result.value,
+        value: direct.value,
         parsed: {
-          value: result.value,
+          value: direct.value,
+          corrections: direct.corrections,
+          totalScore: direct.totalScore,
+        },
+      }
+    }
+
+    const result = createParser(outputConfig.schema).parse(rawOutput)
+    const partial = result.success ? result.value : result.partial
+    const validation = outputConfig.schema.safeParse(partial)
+    if (validation.success) {
+      if (outputConfig.key) dynamicState[outputConfig.key] = validation.data
+      return {
+        value: validation.data,
+        parsed: {
+          value: validation.data,
           corrections: result.corrections,
           totalScore: result.totalScore,
         },
       }
     }
 
-    if (result.partial !== undefined) {
-      const validation = outputConfig.schema.safeParse(result.partial)
-      if (validation.success) {
-        if (outputConfig.key) {
-          dynamicState[outputConfig.key] = validation.data
-        }
-        return {
-          value: validation.data,
-          parsed: {
-            value: validation.data,
-            corrections: result.corrections,
-            totalScore: result.totalScore,
-          },
-        }
-      }
-    }
-
     throw new OutputParseError(
       rawOutput,
       outputConfig.schema,
-      result.errors,
-      result.partial,
+      validation.error.issues.map((issue) => ({
+        stage: 'validation',
+        message: issue.message,
+        path: issue.path.map(String),
+      })),
+      partial,
       result.corrections,
     )
   }

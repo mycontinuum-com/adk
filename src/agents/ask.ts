@@ -1,6 +1,5 @@
-import type { z } from 'zod'
-
 import type { ModelConfig } from '../types/runnables'
+import type { ZodSchema } from '../types/zod'
 
 /**
  * Options for app.ask — a one-shot, no-tools, isolated (fresh BaseSession) typed LLM call.
@@ -22,7 +21,7 @@ export interface AskOpts<T = string> {
    * When supplied, the call returns the schema-validated output typed as `T`. When absent, returns
    * the assistant text as `string`.
    */
-  schema?: z.ZodType<T>
+  schema?: ZodSchema<T>
   /** Optional system prompt prepended to this isolated call only. */
   system?: string
   /** AbortSignal threaded into the inner app.run call. */

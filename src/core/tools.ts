@@ -1,7 +1,6 @@
-import { z } from 'zod'
-
 import type { ToolYieldEvent } from '../types/events'
 import type { Tool, FunctionTool, ProviderTool, MCPTool, Runnable } from '../types/runnables'
+import type { SafeParseResult, ZodSchema } from '../types/zod'
 
 import { coerce } from '../parser/coercion/index'
 
@@ -110,10 +109,7 @@ export async function expandMCPTools(tools: Tool[]): Promise<{
   return { functionTools: allFunctionTools, providerTools }
 }
 
-export function safeParseToolArgs<T>(
-  args: unknown,
-  schema: z.ZodType<T>,
-): z.SafeParseReturnType<unknown, T> {
+export function safeParseToolArgs<T>(args: unknown, schema: ZodSchema<T>): SafeParseResult<T> {
   const coerced = coerce(args, schema)
-  return schema.safeParse(coerced.success ? coerced.value : args)
+  return schema.safeParse(coerced.success ? coerced.value : args) as SafeParseResult<T>
 }

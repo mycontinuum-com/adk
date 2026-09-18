@@ -1,8 +1,8 @@
-import { zodResponsesFunction } from 'openai/helpers/zod'
 import { vi } from 'vitest'
 import { z } from 'zod'
 
 import { normalizeSchema, resetNormalizeWarning } from './normalizeSchema'
+import { zodToToolSchema } from './zodToJsonSchema'
 
 beforeEach(() => {
   resetNormalizeWarning()
@@ -43,8 +43,7 @@ describe('normalizeSchema', () => {
       nickname: z.string().optional().describe('A nickname'),
     })
     const result = normalizeSchema(schema, 'test') as z.ZodObject<any>
-    const def = (result.shape.nickname as any)._def
-    expect(def.description).toBe('A nickname')
+    expect(result.shape.nickname.description).toBe('A nickname')
   })
 
   it('normalizes nested objects', () => {
@@ -71,7 +70,7 @@ describe('normalizeSchema', () => {
     })
     const result = normalizeSchema(schema, 'test') as z.ZodObject<any>
     const arrayDef = (result.shape.items as any)._def
-    const elementShape = arrayDef.type.shape
+    const elementShape = arrayDef.element.shape
     expect(elementShape.value.isOptional()).toBe(true)
     expect(elementShape.value.isNullable()).toBe(true)
   })
@@ -106,7 +105,7 @@ describe('normalizeSchema', () => {
       })
       .strict()
     const result = normalizeSchema(schema, 'test') as z.ZodObject<any>
-    expect((result as any)._def.unknownKeys).toBe('strict')
+    expect(result.safeParse({ name: 'test', extra: true }).success).toBe(false)
   })
 
   it('does not modify fields with defaults', () => {
@@ -147,7 +146,7 @@ describe('normalizeSchema', () => {
     spy.mockRestore()
   })
 
-  it('produces schemas that pass zodResponsesFunction without error', () => {
+  it('produces required fields for strict provider schemas', () => {
     const schema = z.object({
       nodeId: z.string().optional(),
       nested: z
@@ -163,28 +162,16 @@ describe('normalizeSchema', () => {
         .optional(),
     })
 
-    expect(() =>
-      zodResponsesFunction({
-        name: 'test',
-        description: 'test',
-        parameters: schema,
-      }),
-    ).toThrow()
-
     const normalized = normalizeSchema(schema, 'test')
-
-    expect(() =>
-      zodResponsesFunction({
-        name: 'test',
-        description: 'test',
-        parameters: normalized,
-      }),
-    ).not.toThrow()
+    const parameters = zodToToolSchema('test', 'test', normalized).parameters
+    expect(parameters.type).toBe('object')
+    expect(parameters.required).toEqual(['nodeId', 'nested'])
   })
 
   it('normalizes record value types', () => {
     const schema = z.object({
       data: z.record(
+        z.string(),
         z.object({
           value: z.string().optional(),
         }),

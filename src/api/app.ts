@@ -55,6 +55,7 @@ import type {
 import type { RunConfig, RunResult, StreamResult, TurnResult } from '../types/runtime'
 import type { ErasedStateSchema, StateSchema } from '../types/schema'
 import type { Session, Input, SessionStore, Sessions } from '../types/session'
+import type { AnyZodSchema, ZodSchema } from '../types/zod'
 import type { VoiceLoggingOptions } from '../voice/logging'
 import type { VoiceHook } from '../voice/types'
 import type { SearchResult, FetchPageResult } from '../web/types'
@@ -105,8 +106,9 @@ import { runTestLoop, type TestOptions } from '../run/test'
 import { session as createSession, BaseSession, seedState } from '../session'
 import { inMemoryStore } from '../session/memory'
 import { sessionService as createSessionService } from '../session/service'
-import { assertZod3Schema, assertZod3StateSchema } from '../types/assert-zod-version'
+import { assertSupportedSchema, assertSupportedStateSchema } from '../types/assert-zod-version'
 import { applySchemaDefaults } from '../types/schema'
+import { isPrimitiveSchema, isZod4Schema, registerSchemaBridge } from '../types/zod'
 import {
   webSearch as webSearchSpec,
   fetchPage as fetchPageSpec,
@@ -137,7 +139,7 @@ export interface AdkConfig<S extends StateSchema> {
 
 type SessionSchemaOf<S extends StateSchema> = NonNullable<S['session']>
 type SessionValueOf<S extends StateSchema, K extends keyof SessionSchemaOf<S>> =
-  SessionSchemaOf<S>[K] extends z.ZodType<infer U> ? U : never
+  SessionSchemaOf<S>[K] extends ZodSchema<infer U> ? U : never
 
 export interface AgentConfig<S extends StateSchema = StateSchema, TOutput = unknown> extends Omit<
   BaseAgentConfig<S, TOutput>,
@@ -416,35 +418,6 @@ export interface AdkApp<S extends StateSchema> {
  * still recognised as primitive: a wrapped primitive that fell through to the schema path would
  * have the model's prose parsed as a value (the first number in "last 7 days" became "7").
  */
-function unwrapZodType(zodSchema: z.ZodType): z.ZodType {
-  let current = zodSchema
-  for (;;) {
-    if (current instanceof z.ZodOptional || current instanceof z.ZodNullable) {
-      current = current.unwrap() as z.ZodType
-    } else if (current instanceof z.ZodDefault) {
-      current = current.removeDefault() as z.ZodType
-    } else {
-      return current
-    }
-  }
-}
-
-function isPrimitiveZodType(wrappedSchema: z.ZodType | undefined): boolean {
-  if (!wrappedSchema) return false
-  const zodSchema = unwrapZodType(wrappedSchema)
-  return (
-    zodSchema instanceof z.ZodString ||
-    zodSchema instanceof z.ZodNumber ||
-    zodSchema instanceof z.ZodBoolean ||
-    zodSchema instanceof z.ZodEnum ||
-    zodSchema instanceof z.ZodLiteral ||
-    zodSchema instanceof z.ZodNull ||
-    zodSchema instanceof z.ZodUndefined ||
-    zodSchema instanceof z.ZodBigInt ||
-    zodSchema instanceof z.ZodDate
-  )
-}
-
 function normalizeOutput<S extends StateSchema, TOutput>(
   schema: S,
   output: SessionKeyOf<S> | OutputConfig<S, TOutput> | undefined,
@@ -453,7 +426,7 @@ function normalizeOutput<S extends StateSchema, TOutput>(
 
   if (typeof output === 'string') {
     const zodSchema = schema.session?.[output as string]
-    if (isPrimitiveZodType(zodSchema)) {
+    if (isPrimitiveSchema(zodSchema)) {
       return { key: output } as OutputConfig<S, TOutput>
     }
     return {
@@ -463,6 +436,7 @@ function normalizeOutput<S extends StateSchema, TOutput>(
     } as OutputSchemaConfig<S, TOutput>
   }
 
+  if ('schema' in output) assertSupportedSchema(output.schema, 'app.agent({ output })')
   return output
 }
 
@@ -491,7 +465,7 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
     adapters: appAdapters,
   } = config ?? {}
 
-  assertZod3StateSchema(schema, 'adk({ schema })')
+  assertSupportedStateSchema(schema, 'adk({ schema })')
 
   const resolvedStore = appStore ?? inMemoryStore()
   const appSessionService = createSessionService(resolvedStore)
@@ -635,7 +609,7 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
     mocks: (toolConfig) => toolConfig,
   }
 
-  const registeredTools: Array<{ name: string; yieldSchema?: z.ZodTypeAny }> = []
+  const registeredTools: Array<{ name: string; yieldSchema?: AnyZodSchema }> = []
 
   const mcpManager = createMCPManager<S>()
 
@@ -786,8 +760,8 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
       if (!toolConfig.yieldSchema && !toolConfig.execute) {
         throw new Error(`Tool '${toolConfig.name}' must have either 'execute' or 'yieldSchema'`)
       }
-      assertZod3Schema(toolConfig.schema, `app.tool('${toolConfig.name}')`)
-      assertZod3Schema(toolConfig.yieldSchema, `app.tool('${toolConfig.name}')`)
+      assertSupportedSchema(toolConfig.schema, `app.tool('${toolConfig.name}')`)
+      assertSupportedSchema(toolConfig.yieldSchema, `app.tool('${toolConfig.name}')`)
       registeredTools.push({
         name: toolConfig.name,
         yieldSchema: toolConfig.yieldSchema,
@@ -806,11 +780,25 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
     },
 
     toolInputsSchema(): z.ZodArray<z.ZodTypeAny> {
+      const rootIsZod4 = isZod4Schema(z.string())
+      const inRootGeneration = (inputSchema: AnyZodSchema): z.ZodTypeAny => {
+        if (isZod4Schema(inputSchema) === rootIsZod4) return inputSchema as z.ZodTypeAny
+        const bridge = z.any().transform((value, ctx) => {
+          const parsed = inputSchema.safeParse(value)
+          if (parsed.success) return parsed.data
+          for (const issue of parsed.error.issues) {
+            ctx.addIssue({ code: 'custom', path: [...issue.path], message: issue.message })
+          }
+          return z.NEVER
+        })
+        registerSchemaBridge(bridge, inputSchema)
+        return bridge
+      }
       const members = registeredTools.map((t) =>
         z.object({
           callId: z.string(),
           toolName: z.literal(t.name),
-          input: t.yieldSchema ?? z.unknown(),
+          input: t.yieldSchema ? inRootGeneration(t.yieldSchema) : z.unknown(),
         }),
       )
 

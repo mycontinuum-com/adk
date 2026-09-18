@@ -25,6 +25,7 @@ Use this path for new ADK packages and refactors unless a reference explicitly s
 - Keep the event ledger as the source of truth. Do not infer state from rendered model context.
 - Keep context rendering explicit: an agent only sees what its `context` array renders.
 - Prefer structured output schemas over ad hoc JSON parsing. Use ADK parser/coercion utilities only when repairing model output is unavoidable.
+- Accept Zod 3 Classic from 3.25.76 and Zod 4 Classic from 4.6.5 at public schema boundaries. Preserve the user's original schema for parsing so defaults, transforms, and refinements retain their native semantics.
 - Use ADK stream events for observability. Inspect `model_start` and `model_end` for rendered context, tools, schemas, usage, cost, duration, and provider finish metadata.
 - Use multimodal input through `input.message.media` or `session.input.message({ text, media })`; do not bypass ADK providers for vision calls.
 - Prefer subpath imports for providers and optional integrations (complete list: `references/advanced-surfaces.md` §Export Hygiene).

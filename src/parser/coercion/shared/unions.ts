@@ -1,21 +1,21 @@
-import { z } from 'zod'
+import type { AnyZodSchema } from '../../../types/zod'
+import type { Correction } from '../../types'
+import type { CoercionContext } from '../context'
 
-import type { Correction } from '../types'
-import type { CoercionContext } from './context'
+import { addCorrection, addError, createContext, totalScore } from '../context'
 
-import { createContext, childContext, addCorrection, addError, totalScore } from './context'
-import { normalizeEnumValue } from './enums'
-
-export type CoerceValueFn = (value: unknown, schema: z.ZodType, ctx: CoercionContext) => unknown
-
-export function coerceUnion(
+export type CoerceValueFn<Schema extends AnyZodSchema> = (
   value: unknown,
-  schema: z.ZodUnion<[z.ZodType, ...z.ZodType[]]>,
+  schema: Schema,
   ctx: CoercionContext,
-  coerceValue: CoerceValueFn,
-): unknown {
-  const options = schema.options
+) => unknown
 
+export function coerceUnion<Schema extends AnyZodSchema>(
+  value: unknown,
+  options: readonly Schema[],
+  ctx: CoercionContext,
+  coerceValue: CoerceValueFn<Schema>,
+): unknown {
   if (ctx.unionVariantHint !== undefined && ctx.unionVariantHint < options.length) {
     const hintedOption = options[ctx.unionVariantHint]
     const testCtx = createContext(ctx.partial, ctx.visited, ctx.depth)
@@ -84,71 +84,13 @@ export function coerceUnion(
   return ctx.partial ? undefined : value
 }
 
-export function coerceDiscriminatedUnion(
+export function coerceIntersection<Schema extends AnyZodSchema>(
   value: unknown,
-  schema: z.ZodDiscriminatedUnion<string, z.ZodDiscriminatedUnionOption<string>[]>,
+  left: Schema,
+  right: Schema,
   ctx: CoercionContext,
-  coerceValue: CoerceValueFn,
+  coerceValue: CoerceValueFn<Schema>,
 ): unknown {
-  if (typeof value !== 'object' || value === null) {
-    addError(ctx, 'discriminated_union', value, 'Expected object for discriminated union')
-    return ctx.partial ? undefined : value
-  }
-
-  const discriminator = schema.discriminator
-  const inputObj = value as Record<string, unknown>
-  const discriminatorValue = inputObj[discriminator]
-
-  if (discriminatorValue === undefined) {
-    if (ctx.partial) return undefined
-    addError(ctx, 'discriminated_union', value, `Missing discriminator field "${discriminator}"`)
-    return value
-  }
-
-  const optionsMap = schema.optionsMap
-  let matchedSchema = optionsMap.get(discriminatorValue as string)
-
-  if (!matchedSchema && typeof discriminatorValue === 'string') {
-    const entries = Array.from(optionsMap.entries())
-    for (let i = 0; i < entries.length; i++) {
-      const [key, optionSchema] = entries[i]
-      if (normalizeEnumValue(String(key)) === normalizeEnumValue(discriminatorValue)) {
-        matchedSchema = optionSchema
-        addCorrection(
-          childContext(ctx, discriminator),
-          discriminatorValue,
-          key,
-          'Matched discriminator case-insensitively',
-          'enumCaseNormalized',
-        )
-        ;(inputObj as Record<string, unknown>)[discriminator] = key
-        break
-      }
-    }
-  }
-
-  if (!matchedSchema) {
-    addError(
-      ctx,
-      `discriminated_union(${discriminator})`,
-      discriminatorValue,
-      `Invalid discriminator value "${discriminatorValue}"`,
-    )
-    return ctx.partial ? undefined : value
-  }
-
-  return coerceValue(value, matchedSchema, ctx)
-}
-
-export function coerceIntersection(
-  value: unknown,
-  schema: z.ZodIntersection<z.ZodType, z.ZodType>,
-  ctx: CoercionContext,
-  coerceValue: CoerceValueFn,
-): unknown {
-  const left = schema._def.left
-  const right = schema._def.right
-
   const leftCtx = createContext(ctx.partial, ctx.visited, ctx.depth)
   const rightCtx = createContext(ctx.partial, ctx.visited, ctx.depth)
 

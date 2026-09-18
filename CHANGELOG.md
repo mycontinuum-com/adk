@@ -31,67 +31,47 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
-## [Unreleased]
+## [0.6.1]
 
-## [0.6.1] - 2026-09-15
+### Changed
+
+- `zod` compatibility — accepts Zod 3 Classic `^3.25.76` and Zod 4 Classic `^4.6.5` across state, tools, output schemas, parsing, CLI input, and provider schema conversion. Existing Zod 3 applications can upgrade without changing schemas.
+- LiveKit agents — supports `^1.8.1` and tests against `1.9.0`. Install `@livekit/agents` and its provider plugins at matching versions.
+- Provider SDKs — accepts OpenAI `^6.0.0` and Google GenAI `^1.52.0`. `@livekit/rtc-node` is now an explicit optional peer.
+- OpenAI sampling — accepts `reasoning.effort: 'none'` and forwards an explicit temperature when reasoning is disabled. Active reasoning continues to omit temperature, and an omitted temperature preserves the provider default.
 
 ### Fixed
 
-- OpenAI now forwards an explicitly configured temperature when reasoning effort is `none`; active reasoning continues to omit temperature. Omitted temperatures remain omitted, preserving provider defaults.
-- OpenAI reasoning configuration now accepts `none` in its public type.
-
+- Published files — excludes generated `src/node_modules` cache files.
 - `output: '<session key>'` for a key declared with `.optional()`, `.nullable()`, or `.default()` around a primitive (`z.string().optional()` and the like) is now a raw-text output key like its unwrapped form — previously the wrapper hid the primitive from the shorthand, so the key took the schema path and the model's prose was parsed as a value (the first number in "last 7 days" became the output `"7"`).
 
 ## [0.6.0] - 2026-09-01
 
-The first public release. The surface is smaller than 0.5.27 on purpose: what shipped without a consumer, without a test against real infrastructure, or under a name that described the wrong thing is gone, because removing it after publication costs a breaking change and removing it now costs nothing.
-
-### Fixed
-
-- `npm install @animahealth/adk` no longer fails with `ERESOLVE` — the optional peer ranges now co-resolve (`react` widened to `^18 || ^19`, `ink` pinned to the tested `^5`, `ink-text-input` to `^6`), and `@anthropic-ai/claude-agent-sdk` left the peer list — its published versions require `zod@4`, which cannot co-resolve with the ADK's `zod@3`, so declaring it fails the install outright even marked optional. It is not bundled either: install it yourself to use `@animahealth/adk/agents/coding/claude-code`, which names it on the missing-module error.
-- Importing the ESM main entry (or `/testing`) no longer requires `openai` and `@ag-ui/core` to be installed — the build now code-splits, so lazy provider imports stay lazy instead of hoisting their SDKs' static imports to the entry's top level, and `/testing` uses the SDK-free `openai` model descriptor. A packaging gate (`verify-package-exports.cjs`) now walks each key-free entry's static import graph so this class cannot ship again.
-- Provider SDKs the core loads lazily (`openai`, `@google/genai`, `@anthropic-ai/vertex-sdk`, `ws`) are now declared as optional peers, so package managers surface them instead of the first `import` failing.
-- Concurrent first operations on a lazily-opened store no longer construct two instances — `SQLiteStore` and lazy vector providers (`sqliteVec`, `qdrant`, `voyage`) memoize the in-flight open, closing the window where a `':memory:'` database could silently drop one side's committed writes.
-- `sqliteVec` filtered search no longer returns empty when every match ranks beyond its overfetch window — the KNN window now widens until `topK` matches are found or the collection is exhausted.
-- Event dedup is now uniform across session stores: `InMemoryStore` skips already-stored event ids like the SQL stores, and the SQLite/Postgres stores no longer assign a duplicate `idx` when a committed batch overlaps stored events (which left `ORDER BY idx` unspecified).
-- `memory(...).close()` on a never-used lazy index is a no-op instead of instantiating the provider (and creating its database file) just to close it.
-- `PostgresStore.loadScopedState` no longer crashes on string-valued state (`'dark'`) — the JSONB driver already decodes values, and the redundant `JSON.parse` threw on any bare string.
-- `DynamoDBStore.list()` now lists sessions (it was a stub returning `[]`); Scan-based — see its doc comment before using it on a large table.
-- `pgvector` reads (`scroll`/`count`/`distanceMatrix`/`get`) no longer create the collection's table as a side effect — a missing collection reads as empty instead of failing on a dimension-less table whose index cannot build. Mutations on a missing collection are no-ops.
-- Every documented store and vector backend now actually runs its shared compliance suite: `DynamoDBStore` and `PostgresStore` run the session-store suite and `pgvector` the vector-index suite against service containers in CI (the suite fixtures are now hygienic across tests on shared backends). The `qdrant` index deliberately does not run the vector suite — it is provisioning-based (collections and named-vector sets are fixed at creation via `collectionSpec()`), where the suite encodes lazy creation.
-- `composeHooks`, `loggingHook`, `metricsHook`, and `cliHook` are now exported from the Core entry — only their option types were previously reachable, so a consumer could not construct any built-in hook at all.
-- Registered model adapters now reach every entry point. `adk({ adapters })` was honoured by `app.run` but dropped by `app.handler.turn/rest/agui`, `app.handler.voice`, and `app.cli`, each of which built its own runner without them — so a served agent or a CLI could not be driven by a scripted adapter and demanded a real provider key instead. `HandlerConfig` and `VoiceHandlerConfig` now carry `adapters`, and a caller's override wins over the app's.
-- A missing optional peer says which package to install instead of failing as a bare module-resolution error: `@animahealth/adk/stores/sqlite` names `better-sqlite3`, and `@animahealth/adk/cli` names `ink ink-text-input react` (its dependencies now load lazily, before the alternate screen is entered, so the message is visible rather than torn down with the process).
-- `fetchPage` reports a missing HTML-extraction dependency as `missing_dependency` with the install line, rather than as `network_error` — which read as "the page is broken" and had models retrying a fault no retry could fix. `FetchPageResult.error` gains that member and an optional `errorMessage`.
-- `webSearch()` builds its default Serper client on first use rather than at construction, so a module that merely defines a research agent no longer throws at import time without `SERPER_API_KEY`.
-- The `/testing` matchers ship their types. `expect(...).toHaveToolCall()` and friends had no type declaration in `dist`, so TypeScript consumers saw an error on a matcher that worked at runtime.
-
-### Changed
-
-- `zod` peer floor raised to `^3.25.0`. The old `^3.22.0` was already fiction: `zod-to-json-schema` requires `^3.25.28 || ^4`, so npm resolves 3.25.x for every consumer regardless, and a project pinning 3.22–3.24 was installing on a peer warning rather than a satisfied range. The floor now says what the package actually needs.
-- A zod 4 schema is refused at `adk({ schema })` and `app.tool(...)` instead of degrading in silence. This package reads zod 3 internals, and handed a v4 schema nothing throws: coercion stops (a `'5'` stays a string) and JSON-schema conversion falls back to `any`, so every tool reaches the model with its parameters erased. The check runs once, where a schema enters, and names the call that supplied it. Reaching this state is easier than it sounds — pnpm's `autoInstallPeers` links zod 4 for you as soon as another dependency asks for it.
-- The Claude Agent SDK's missing-module error no longer tells you to run a command that cannot work. `npm install @anthropic-ai/claude-agent-sdk` fails outright: the SDK peer-requires zod 4, which will not co-resolve with this package's zod 3. The message now gives the recipe that does work — install with pnpm, and pin `zod@^3.25` in your own app so both resolve.
-
-- `model()` in the test kit accepts a plain string as a text reply — `model('hello')`, symmetric with `user('hi')`. Previously a string produced a response with no `.text`: the adapter emitted nothing and the run "passed" with the reply silently gone.
-- `OpenAIAdapter` is now exported from `@animahealth/adk/openai` — the documented `new OpenAIAdapter(endpoints)` + `adk({ adapters: { openai } })` seam for programmatic endpoint injection was previously unreachable (the class was not exported anywhere).
-- `OpenAIEndpoint` gains `dangerouslyAllowBrowser` — passed through to the OpenAI/Azure client so a page where the END USER supplies their own key can construct the adapter in a browser. Never set it with a key the user did not type themselves.
-
-### Removed
-
-- `@animahealth/adk/executors` is gone, with the Docker, Modal, file-watch, artifact-sync and workspace-tool modules behind it (~5,300 lines). Nothing imported them but the barrel that exported them; they were never exercised against real Docker or Modal; and `workspaceTools()` shipped a `shell` tool guarded by a regex blocklist, which is not a sandbox. `createWorkspaceProvisioner` and the isolation strategies survive — they were the one load-bearing part — and now come from `@animahealth/adk/agents/coding`. Provisioning a coder somewhere other than the local filesystem is yours to build against that seam.
-- `RunResult.stepEvents` is gone; read the ledger from `run.session.events`. The field was a copy of the session's events frozen when the run returned, under a name that described neither its scope nor its snapshot: "step" means one model call at the provider layer, and this carried the whole session. `run.usage` reports the session's accumulated total, as it always did. To keep a snapshot, spread it yourself: `[...run.session.events]`.
-- `FunctionTool.requiresApproval` is gone. It was declared on the type but absent from `ToolConfig`, never copied by `app.tool`, and never read anywhere in the package — so no tool could ever set it and nothing would have acted on it. Human approval is the yielding-tool surface.
-- `dockerode` and `@types/dockerode` left the manifest with the executors that used them.
-
-- Experimental surfaces no longer reach the Core entry — `import { DockerExecutor } from '@animahealth/adk'` and friends are gone. `/executors` (all exports), `/agents/coding` (all exports, including the root-only `claudeCode`/`mockCodingAgent` aliases — use `createClaudeCodeAgent`/`createMockCodingAgent` from `@animahealth/adk/agents/coding`), and the knowledge module (`provisionClaudeProtocol`, `renderClaudeMd`, `renderRule`, `renderSettings` — now internal, no replacement) left the main barrel. A gate (`src/index.tier-boundary.test.ts`) keeps every fenced module's vocabulary out of the Core entry.
-- The gateway/process-store surface (`createGateway`, `GatewayImpl`, `inMemoryProcessStore`, `postgresProcessStore`, `createInProcessExecutor`, and their types), the artifact services (`InMemoryArtifactService`, `postgresArtifactService`, `inferMimeType`, `createArtifactsProxy`), and channels (`InMemoryChannel`, `EventChannel`) are internal — removed from the main barrel with no subpath. They are proposals-stage machinery, not public SDK.
-- SQLite backends — `SQLiteStore` / `sqliteStore()` (`/stores/sqlite`), the `sqliteIndex()` vector provider, and the `better-sqlite3` / `sqlite-vec` optional peers were dropped during the 0.5.20–0.5.27 line without a changelog entry; documenting here. Both surfaces are restored below (the vector provider returns as `sqliteVec`, not `sqliteIndex`).
+The first public release. It removes untested experimental APIs and restores the supported local storage integrations.
 
 ### Added
 
-- SQLite session store restored — `SQLiteStore` / `sqliteStore(dbPath)` return at `@animahealth/adk/stores/sqlite` over the optional `better-sqlite3` peer (`>=11`): zero-infrastructure durable sessions for local development, CLIs, and single-process deployments, passing the same store compliance suite as the in-memory and Postgres stores. `':memory:'` gives an ephemeral store.
-- SQLite vector memory restored as `sqliteVec({ path })` — a config for `memory({ index })` like `qdrant(…)` / `pgvector(…)`, over the optional `better-sqlite3` + `sqlite-vec` peers (vec0 virtual tables, cosine metric). Successor to the removed `sqliteIndex()`; where the old provider's no-variant `scroll`/`count` read only the `default` variant, `sqliteVec` follows the in-memory reference (each id is one logical point).
-- VectorIndex compliance suite — `runVectorIndexTests` (`src/memory/providers/index-compliance.test.ts`) now proves every index provider against one contract; the in-memory reference and `sqliteVec` both run it.
+- SQLite storage — restored `SQLiteStore`, `sqliteStore()`, and vector memory through `sqliteVec()`.
+- Built-in hooks — exported `composeHooks`, `loggingHook`, `metricsHook`, and `cliHook` from the main entry.
+- Storage contracts — added shared compliance suites for session stores and vector indexes.
+
+### Changed
+
+- `zod` — raised the peer floor to `^3.25.0` and rejected Zod 4 schemas with a clear error.
+- Model adapters — applied `adk({ adapters })` to run, handler, voice, and CLI entry points.
+- Provider SDKs — kept imports lazy and declared the packages as optional peers.
+
+### Fixed
+
+- Stores — fixed concurrent lazy initialization, duplicate events, filtered SQLite vector search, and side effects from read-only `pgvector` operations.
+- Postgres and DynamoDB — fixed string-valued Postgres state and implemented `DynamoDBStore.list()`.
+- Optional dependencies — added clear missing-package errors for CLI, SQLite, and web packages.
+- Test kit — shipped `/testing` matcher types and allowed `model('text')` replies.
+
+### Removed
+
+- Experimental APIs — removed executors, gateway, process-store, artifact, channel, and knowledge APIs.
+- Obsolete fields — removed `RunResult.stepEvents` and `FunctionTool.requiresApproval`. Read events from `run.session.events` and use yielding tools for approval.
 
 ## [0.5.27] - 2026-08-20
 

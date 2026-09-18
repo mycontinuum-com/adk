@@ -772,6 +772,18 @@ describe('createRenderContext', () => {
     expect(ctx.invocationId).toBe('inv-123')
     expect(ctx.events).toEqual([])
   })
+
+  test('ignores an invalid output schema without dereferencing it', () => {
+    const session = new BaseSession('app', { id: 'test' })
+    const testAgent = agent({
+      name: 'test',
+      model: openai('gpt-4o-mini'),
+      context: [],
+      output: { schema: null } as never,
+    })
+
+    expect(createRenderContext(session, testAgent, 'inv-123').outputSchema).toBeUndefined()
+  })
 })
 
 describe('buildContext', () => {

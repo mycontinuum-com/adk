@@ -1,21 +1,16 @@
-import type { z } from 'zod'
-
 // @ts-ignore
 import { Box, Text } from 'ink'
 // @ts-ignore
 import TextInput from 'ink-text-input'
 import React, { useMemo, useEffect, useState, useCallback } from 'react'
 
+import type { AnyZodSchema } from '../../types/zod'
 import type { DisplayEvent, StreamingMetadata, DeltaBatchEvent } from '../blocks'
 
 import { getEventSummary, getEventDetail, type DetailViewMode } from '../event-display'
 import { inspectSchema, JsonSchemaForm, estimateFormHeight } from '../schema-input'
 import { renderJsonLine, renderThoughtText, renderToolCallLine } from '../text-formatting'
 import { useTerminalWidth } from './TerminalContext'
-
-function getEventId(event: DisplayEvent | null): string | undefined {
-  return event ? (event as { id?: string }).id : undefined
-}
 
 interface DetailPaneProps {
   event: DisplayEvent | null
@@ -27,7 +22,7 @@ interface DetailPaneProps {
   onInputSubmit?: (value: string) => void
   height?: number
   streaming?: StreamingMetadata
-  yieldSchema?: z.ZodTypeAny
+  yieldSchema?: AnyZodSchema
 }
 
 function wrapText(text: string, width: number, preserveIndent: boolean = false): string[] {
@@ -149,6 +144,7 @@ export function DetailPane({
   const terminalWidth = useTerminalWidth()
   const contentWidth = terminalWidth
   const [inputValue, setInputValue] = useState('')
+  const [inputErrors, setInputErrors] = useState<string[]>([])
 
   const schemaDescriptor = useMemo(
     () => (yieldSchema ? inspectSchema(yieldSchema) : null),
@@ -189,24 +185,35 @@ export function DetailPane({
     onMaxOffsetChange?.(maxOffset)
   }, [maxOffset, onMaxOffsetChange])
 
-  const eventId = getEventId(event)
-  useEffect(() => {
-    setInputValue('')
-  }, [eventId])
-
   const handleInputSubmit = useCallback(
     (value: string) => {
+      let input: unknown
+      try {
+        input = JSON.parse(value)
+      } catch {
+        input = value
+      }
+      const validation = yieldSchema?.safeParse(input)
+      if (validation && !validation.success) {
+        setInputErrors(
+          validation.error.issues.map(
+            (issue) => `${issue.path.map(String).join('.') || 'Input'}: ${issue.message}`,
+          ),
+        )
+        return
+      }
+      setInputErrors([])
       onInputSubmit?.(value)
       setInputValue('')
     },
-    [onInputSubmit],
+    [onInputSubmit, yieldSchema],
   )
 
   const handleSchemaSubmit = useCallback(
     (value: Record<string, unknown>) => {
-      onInputSubmit?.(JSON.stringify(value))
+      handleInputSubmit(JSON.stringify(value))
     },
-    [onInputSubmit],
+    [handleInputSubmit],
   )
 
   const handleSchemaCancel = useCallback(() => {}, [])
@@ -225,9 +232,14 @@ export function DetailPane({
       ? estimateFormHeight(schemaDescriptor)
       : 3
     : 0
+  const errorLines = Math.min(inputErrors.length, 3)
   const displayLines = isInputMode
-    ? wrappedLines.slice(0, maxContentLines - inputLinesReserved)
+    ? wrappedLines.slice(0, Math.max(0, maxContentLines - inputLinesReserved - errorLines))
     : visibleLines.slice(0, maxContentLines - inputLinesReserved)
+  const displayRows = displayLines.map((line, index) => ({
+    key: `${effectiveOffset + index}:${line}`,
+    line,
+  }))
 
   return (
     <Box flexDirection="column" height={height}>
@@ -260,8 +272,8 @@ export function DetailPane({
           </>
         )}
       </Box>
-      {displayLines.map((line, idx) => (
-        <Box key={idx}>
+      {displayRows.map(({ key, line }) => (
+        <Box key={key}>
           {useHighlighting ? (
             renderDetailLine(line.trimEnd() || '', cleanRenderMode, keyColor)
           ) : (
@@ -271,6 +283,11 @@ export function DetailPane({
       ))}
       {isInputMode && (
         <Box flexDirection="column" marginTop={1}>
+          {[...new Set(inputErrors)].slice(0, 3).map((error) => (
+            <Text key={error} color="red" wrap="truncate">
+              {error}
+            </Text>
+          ))}
           {useSchemaForm && schemaDescriptor ? (
             <JsonSchemaForm
               fields={schemaDescriptor.fields}

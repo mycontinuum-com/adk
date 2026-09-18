@@ -1,7 +1,5 @@
 import type { AnthropicVertex } from '@anthropic-ai/vertex-sdk'
 
-import { z } from 'zod'
-
 import type {
   Event,
   StreamEvent,
@@ -702,11 +700,7 @@ export function parseResponse(
 
 export function serializeTools(tools: readonly FunctionTool[]): ClaudeTool[] {
   return tools.map((t) => {
-    const fn = zodToToolSchema(
-      t.name,
-      t.description,
-      normalizeSchema(t.schema as z.ZodType, t.name),
-    )
+    const fn = zodToToolSchema(t.name, t.description, normalizeSchema(t.schema, t.name))
     return {
       name: fn.name,
       description: fn.description ?? t.description,

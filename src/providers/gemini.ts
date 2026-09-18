@@ -4,11 +4,8 @@ import type {
   Content,
   Part,
   FunctionCall,
-  Schema,
   ToolConfig,
 } from '@google/genai'
-
-import { z } from 'zod'
 
 import { normalizeSchema } from './normalizeSchema'
 import { zodToToolSchema } from './zodToJsonSchema'
@@ -43,6 +40,7 @@ import type {
   ToolChoice,
   VertexAIConfig,
 } from '../types/runnables'
+import type { AnyZodSchema } from '../types/zod'
 
 import { withStreamRetry } from '../core/retry'
 import { createEventId, createCallId } from '../session'
@@ -165,7 +163,7 @@ Either:
           ...(config.maxTokens != null && { maxOutputTokens: config.maxTokens }),
           ...(useNativeStructuredOutput && {
             responseMimeType: 'application/json',
-            responseSchema: zodToGeminiSchema(ctx.outputSchema!),
+            responseJsonSchema: zodToGeminiSchema(ctx.outputSchema!),
           }),
         },
       })
@@ -520,15 +518,11 @@ export function serializeTools(tools: readonly FunctionTool[]) {
   return [
     {
       functionDeclarations: tools.map((t) => {
-        const fn = zodToToolSchema(
-          t.name,
-          t.description,
-          normalizeSchema(t.schema as z.ZodType, t.name),
-        )
+        const fn = zodToToolSchema(t.name, t.description, normalizeSchema(t.schema, t.name))
         return {
           name: fn.name,
           description: fn.description ?? t.description,
-          parameters: fn.parameters as Schema,
+          parametersJsonSchema: fn.parameters,
         }
       }),
     },
@@ -557,9 +551,9 @@ function mapThinkingConfig(config?: {
   }
 }
 
-function zodToGeminiSchema(schema: z.ZodType): Schema {
+function zodToGeminiSchema(schema: AnyZodSchema): Record<string, unknown> {
   const fn = zodToToolSchema('output', 'Output schema', normalizeSchema(schema, 'output'))
-  return fn.parameters as Schema
+  return fn.parameters
 }
 
 export function serializeToolConfig(

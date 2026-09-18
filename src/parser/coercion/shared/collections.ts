@@ -1,6 +1,5 @@
-import { z } from 'zod'
-
-import type { CoercionContext } from './context'
+import type { AnyZodSchema } from '../../../types/zod'
+import type { CoercionContext } from '../context'
 
 import {
   createContext,
@@ -8,15 +7,23 @@ import {
   checkAndMarkVisited,
   addCorrection,
   addError,
-} from './context'
+} from '../context'
 
-export type CoerceValueFn = (value: unknown, schema: z.ZodType, ctx: CoercionContext) => unknown
-
-export function coerceArray(
+export type CoerceValueFn<Schema extends AnyZodSchema> = (
   value: unknown,
-  schema: z.ZodArray<z.ZodType>,
+  schema: Schema,
   ctx: CoercionContext,
-  coerceValue: CoerceValueFn,
+) => unknown
+
+export interface CoercibleSchema extends AnyZodSchema {
+  isOptional(): boolean
+}
+
+export function coerceArray<Schema extends AnyZodSchema>(
+  value: unknown,
+  elementSchema: Schema,
+  ctx: CoercionContext,
+  coerceValue: CoerceValueFn<Schema>,
 ): unknown[] | undefined {
   if (value === null || value === undefined) {
     if (ctx.partial) return undefined
@@ -25,8 +32,6 @@ export function coerceArray(
   }
 
   if (!Array.isArray(value)) {
-    const elementSchema = schema.element
-
     if (typeof value === 'string' && value.includes(',')) {
       const parts = value
         .split(',')
@@ -74,7 +79,6 @@ export function coerceArray(
     return undefined
   }
 
-  const elementSchema = schema.element
   const result: unknown[] = []
   let lastUnionIndex: number | undefined
 
@@ -122,11 +126,12 @@ function findKeyInsensitive(
   return undefined
 }
 
-export function coerceObject(
+export function coerceObject<Schema extends CoercibleSchema>(
   value: unknown,
-  schema: z.ZodObject<z.ZodRawShape>,
+  shape: Record<string, Schema>,
+  passthrough: boolean,
   ctx: CoercionContext,
-  coerceValue: CoerceValueFn,
+  coerceValue: CoerceValueFn<Schema>,
 ): Record<string, unknown> | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     if (value === null || value === undefined) {
@@ -137,13 +142,12 @@ export function coerceObject(
     return undefined
   }
 
-  const schemaId = 'object:' + Object.keys(schema.shape).toSorted().join(',')
+  const schemaId = 'object:' + Object.keys(shape).toSorted().join(',')
   if (checkAndMarkVisited(ctx, schemaId, value)) {
     addError(ctx, 'object', value, 'Circular reference detected')
     return undefined
   }
 
-  const shape = schema.shape
   const result: Record<string, unknown> = {}
   const inputObj = value as Record<string, unknown>
   const usedInputKeys = new Set<string>()
@@ -166,14 +170,14 @@ export function coerceObject(
     }
 
     const inputValue = found?.value
-    const coerced = coerceValue(inputValue, fieldSchema as z.ZodType, fieldCtx)
+    const coerced = coerceValue(inputValue, fieldSchema, fieldCtx)
 
     ctx.corrections.push(...fieldCtx.corrections)
     ctx.errors.push(...fieldCtx.errors)
 
     if (coerced !== undefined) {
       result[key] = coerced
-    } else if (!ctx.partial && !(fieldSchema as z.ZodType).isOptional()) {
+    } else if (!ctx.partial && !fieldSchema.isOptional()) {
       addError(fieldCtx, 'required', undefined, `Missing required field "${key}"`)
       ctx.errors.push(...fieldCtx.errors)
     }
@@ -181,7 +185,7 @@ export function coerceObject(
 
   for (const [inputKey, val] of Object.entries(inputObj)) {
     if (!usedInputKeys.has(inputKey)) {
-      if (schema._def.unknownKeys === 'passthrough') {
+      if (passthrough) {
         result[inputKey] = val
       } else {
         addCorrection(ctx, inputKey, undefined, `Extra key "${inputKey}" ignored`, 'extraKey')
@@ -196,11 +200,11 @@ export function coerceObject(
   return result
 }
 
-export function coerceRecord(
+export function coerceRecord<Schema extends AnyZodSchema>(
   value: unknown,
-  schema: z.ZodRecord<z.ZodType, z.ZodType>,
+  valueSchema: Schema,
   ctx: CoercionContext,
-  coerceValue: CoerceValueFn,
+  coerceValue: CoerceValueFn<Schema>,
 ): Record<string, unknown> | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     if (ctx.partial && (value === null || value === undefined)) return undefined
@@ -208,7 +212,6 @@ export function coerceRecord(
     return undefined
   }
 
-  const valueSchema = schema.valueSchema
   const result: Record<string, unknown> = {}
 
   for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
@@ -224,11 +227,11 @@ export function coerceRecord(
   return result
 }
 
-export function coerceTuple(
+export function coerceTuple<Schema extends AnyZodSchema>(
   value: unknown,
-  schema: z.ZodTuple<[z.ZodType, ...z.ZodType[]]>,
+  items: readonly Schema[],
   ctx: CoercionContext,
-  coerceValue: CoerceValueFn,
+  coerceValue: CoerceValueFn<Schema>,
 ): unknown[] | undefined {
   if (!Array.isArray(value)) {
     if (ctx.partial && (value === null || value === undefined)) return undefined
@@ -236,7 +239,6 @@ export function coerceTuple(
     return undefined
   }
 
-  const items = schema.items
   const result: unknown[] = []
 
   for (let i = 0; i < items.length; i++) {
@@ -250,15 +252,14 @@ export function coerceTuple(
   return result
 }
 
-export function coerceMap(
+export function coerceMap<Schema extends AnyZodSchema>(
   value: unknown,
-  schema: z.ZodMap<z.ZodType, z.ZodType>,
+  keySchema: Schema,
+  valueSchema: Schema,
   ctx: CoercionContext,
-  coerceValue: CoerceValueFn,
+  coerceValue: CoerceValueFn<Schema>,
 ): Map<unknown, unknown> | undefined {
   if (value instanceof Map) {
-    const keySchema = (schema._def as { keyType: z.ZodType }).keyType
-    const valueSchema = (schema._def as { valueType: z.ZodType }).valueType
     const result = new Map<unknown, unknown>()
 
     const entries = Array.from(value.entries())
@@ -280,8 +281,6 @@ export function coerceMap(
   }
 
   if (Array.isArray(value)) {
-    const keySchema = (schema._def as { keyType: z.ZodType }).keyType
-    const valueSchema = (schema._def as { valueType: z.ZodType }).valueType
     const result = new Map<unknown, unknown>()
 
     for (let i = 0; i < value.length; i++) {
@@ -305,8 +304,6 @@ export function coerceMap(
   }
 
   if (typeof value === 'object' && !Array.isArray(value)) {
-    const keySchema = (schema._def as { keyType: z.ZodType }).keyType
-    const valueSchema = (schema._def as { valueType: z.ZodType }).valueType
     const result = new Map<unknown, unknown>()
 
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
@@ -325,14 +322,13 @@ export function coerceMap(
   return undefined
 }
 
-export function coerceSet(
+export function coerceSet<Schema extends AnyZodSchema>(
   value: unknown,
-  schema: z.ZodSet<z.ZodType>,
+  elementSchema: Schema,
   ctx: CoercionContext,
-  coerceValue: CoerceValueFn,
+  coerceValue: CoerceValueFn<Schema>,
 ): Set<unknown> | undefined {
   if (value instanceof Set) {
-    const elementSchema = (schema._def as { valueType: z.ZodType }).valueType
     const result = new Set<unknown>()
 
     const items = Array.from(value)
@@ -352,7 +348,6 @@ export function coerceSet(
   }
 
   if (Array.isArray(value)) {
-    const elementSchema = (schema._def as { valueType: z.ZodType }).valueType
     const result = new Set<unknown>()
 
     for (let i = 0; i < value.length; i++) {

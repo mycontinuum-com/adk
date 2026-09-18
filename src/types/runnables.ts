@@ -1,5 +1,3 @@
-import type { z } from 'zod'
-
 import type { EventChannel } from '../channels'
 import type { OutputSignal, EndSignal } from '../core/tools'
 import type { ErrorHandler } from '../errors/types'
@@ -8,6 +6,7 @@ import type { Event, ToolCallEvent, StreamEvent, ModelUsage, ModelEndEvent } fro
 import type { RunResult, RunConfig, Output } from './runtime'
 import type { ErasedStateSchema, StateSchema, TypedState } from './schema'
 import type { Session, SessionService, MessageInput } from './session'
+import type { AnyZodSchema, ZodSchema } from './zod'
 
 export type RunnableKind = 'agent' | 'step' | 'sequence' | 'parallel' | 'loop'
 
@@ -209,8 +208,8 @@ export interface FunctionTool<
 > {
   name: string
   description: string
-  schema: z.ZodType<TInput>
-  yieldSchema?: z.ZodType<TYield>
+  schema: ZodSchema<TInput>
+  yieldSchema?: ZodSchema<TYield>
   prepare?(
     ctx: ToolExecutionContext<TInput, unknown, unknown, S>,
   ): TInput | void | Promise<TInput | void>
@@ -254,7 +253,7 @@ export interface RenderContext<S extends StateSchema = StateSchema> {
   readonly events: readonly Event[]
   readonly functionTools: readonly FunctionTool<unknown, unknown, unknown, S>[]
   readonly providerTools: readonly ProviderTool[]
-  readonly outputSchema?: z.ZodType
+  readonly outputSchema?: AnyZodSchema
   readonly outputMode?: OutputMode
   readonly toolChoice?: ToolChoice
   readonly allowedTools?: readonly string[]
@@ -279,7 +278,7 @@ export interface ModelStepResult {
 export type { Hook, TurnContext } from '../hook/types'
 
 export type SessionKeyOf<S extends StateSchema> =
-  S['session'] extends Record<string, z.ZodType> ? keyof S['session'] & string : string
+  S['session'] extends Record<string, AnyZodSchema> ? keyof S['session'] & string : string
 
 interface OutputKeyConfig<S extends StateSchema = StateSchema> {
   key: SessionKeyOf<S>
@@ -289,7 +288,7 @@ export type OutputMode = 'native' | 'prompt'
 
 export interface OutputSchemaConfig<S extends StateSchema = StateSchema, T = unknown> {
   key?: SessionKeyOf<S>
-  schema: z.ZodType<T>
+  schema: ZodSchema<T>
   mode?: OutputMode
 }
 

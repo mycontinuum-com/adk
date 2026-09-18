@@ -173,14 +173,8 @@ export function createClaudeCodeAgent<S extends StateSchema = StateSchema>(
       if (error instanceof Error && error.message.includes('Invalid SDK module')) {
         throw error
       }
-      // Not "npm install @anthropic-ai/claude-agent-sdk": the SDK's published versions peer-require
-      // zod 4, which npm cannot resolve against this package's zod 3 — that install fails outright.
-      // pnpm can hold both, but only when the app pins its own zod, or pnpm links THIS package to
-      // the SDK's zod 4 and every schema silently stops working.
       throw new Error(
-        'Claude Agent SDK not installed. It requires zod 4, which cannot co-resolve with this ' +
-          "package's zod 3 under npm. Install it with pnpm, and pin zod in your own app:\n" +
-          '  pnpm add @anthropic-ai/claude-agent-sdk zod@^3.25',
+        'Claude Agent SDK not installed. Install it with: pnpm add @anthropic-ai/claude-agent-sdk',
         { cause: error },
       )
     }

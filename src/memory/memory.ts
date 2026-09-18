@@ -1,6 +1,5 @@
-import type { z } from 'zod'
-
 import type { ContextRenderer, FunctionTool } from '../types/runnables'
+import type { ZodSchema } from '../types/zod'
 import type {
   Memory,
   MemoryVariant,
@@ -226,7 +225,7 @@ function createVariant<TMetadata extends Record<string, unknown>>(opts: {
   collection: string
   variantName: string
   contentVariantName?: string
-  metadataSchema?: z.ZodType<TMetadata>
+  metadataSchema?: ZodSchema<TMetadata>
   injectMetadata?: Record<string, unknown>
   injectFilter?: VectorCondition | VectorFilter
   variantNames?: string[]
@@ -711,7 +710,7 @@ function createSlicedMemory<TSlices extends Record<string, SliceConfig>>(
         collection: config.collection,
         variantName: vName,
         metadataSchema: sliceConfig.metadata as
-          | z.ZodType<InferSliceMeta<TSlices[typeof sliceName]>>
+          | ZodSchema<InferSliceMeta<TSlices[typeof sliceName]>>
           | undefined,
         injectMetadata: sliceInject,
         injectFilter: sliceFilter,

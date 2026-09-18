@@ -18,7 +18,11 @@ The ADK is a library, not a platform: no infrastructure dependency beyond a data
 npm install @animahealth/adk
 ```
 
-Node ≥ 22. `zod` is the one required peer (npm and pnpm install it automatically). Optional backends declare optional peers — install them only for what you use (for example `better-sqlite3` for the SQLite session store).
+Node ≥ 22. `zod` is the one required peer (npm and pnpm install it automatically).
+The ADK accepts Zod 3 Classic from 3.25.76 and Zod 4 Classic from 4.6.5; an
+existing Zod 3 application does not need to migrate to Zod 4. Optional backends
+declare optional peers — install them only for what you use (for example
+`better-sqlite3` for the SQLite session store).
 
 ## First run — no API key
 

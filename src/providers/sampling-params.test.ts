@@ -21,7 +21,7 @@ type CapturedRequest = {
     temperature?: number
     maxOutputTokens?: number
     thinkingConfig?: unknown
-    responseSchema?: unknown
+    responseJsonSchema?: unknown
   }
 }
 
@@ -122,7 +122,7 @@ describe('Gemini sampling parameters', () => {
 
     expect(captured.config?.temperature).toBe(0)
     expect(captured.config?.maxOutputTokens).toBe(16384)
-    expect(captured.config?.responseSchema).toBeDefined()
+    expect(captured.config?.responseJsonSchema).toBeDefined()
   })
 })
 
@@ -191,31 +191,41 @@ describe('OpenAI sampling parameters', () => {
     expect(request.temperature).toBe(0.2)
   })
 
-  it.each(['minimal', 'low', 'medium', 'high'])('drops temperature with active %s reasoning', async (effort) => {
-    const request = await runOpenAIStep({
-      temperature: 0.2,
-      reasoning: { effort },
-    })
-    expect(request.reasoning).toBeDefined()
-    expect(request).not.toHaveProperty('temperature')
-  })
+  it.each(['minimal', 'low', 'medium', 'high'])(
+    'drops temperature with active %s reasoning',
+    async (effort) => {
+      const request = await runOpenAIStep({
+        temperature: 0.2,
+        reasoning: { effort },
+      })
+      expect(request.reasoning).toBeDefined()
+      expect(request).not.toHaveProperty('temperature')
+    },
+  )
 })
-
 
 describe('Claude sampling parameters', () => {
   async function request(config: Record<string, unknown>) {
     const adapter = new ClaudeAdapter()
     let captured: { temperature?: number; thinking?: unknown } = {}
     // @ts-expect-error replacing the private client factory to capture the transport request
-    adapter.getClient = () => ({ messages: { create: async (body: typeof captured) => {
-      captured = body
-      return (async function* () {})()
-    } } })
+    adapter.getClient = () => ({
+      messages: {
+        create: async (body: typeof captured) => {
+          captured = body
+          return (async function* () {})()
+        },
+      },
+    })
     const stream = adapter.step(renderContext(), {
-      provider: 'claude', name: 'claude-sonnet-4-5',
-      vertex: { project: 'test', location: 'test' }, ...config,
+      provider: 'claude',
+      name: 'claude-sonnet-4-5',
+      vertex: { project: 'test', location: 'test' },
+      ...config,
     } as never)
-    for await (const _ of stream) { /* drain transport */ }
+    for await (const _ of stream) {
+      /* drain transport */
+    }
     return captured
   }
 

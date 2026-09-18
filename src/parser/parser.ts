@@ -1,5 +1,4 @@
-import type { z } from 'zod'
-
+import type { ZodSchema } from '../types/zod'
 import type {
   ParseResult,
   ParseResultSuccess,
@@ -21,7 +20,7 @@ export interface SchemaAwareParser<T> {
   parse(input: string): ParseResult<T>
   parsePartial(input: string): ParseResult<Partial<T>>
   validate(value: unknown): ParseResult<T>
-  schema: z.ZodType<T>
+  schema: ZodSchema<T>
 }
 
 function coercionErrorsToParseErrors(errors: CoercionError[]): ParseError[] {
@@ -70,7 +69,7 @@ function makeFailureResult<T>(
 }
 
 export function createParser<T>(
-  schema: z.ZodType<T>,
+  schema: ZodSchema<T>,
   config: ParserConfig = {},
 ): SchemaAwareParser<T> {
   const cfg = { ...DEFAULT_CONFIG, ...config }
@@ -128,7 +127,7 @@ export function createParser<T>(
       return makeSuccessResult(validation.data, raw, [], 0, jsonish)
     }
     return makeFailureResult(
-      validation.error.errors.map((e) => ({
+      validation.error.issues.map((e) => ({
         stage: 'validation' as const,
         message: e.message,
         path: e.path.map(String),

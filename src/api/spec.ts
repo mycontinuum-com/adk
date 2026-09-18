@@ -1,5 +1,3 @@
-import type { z } from 'zod'
-
 import type {
   StepConfig as BaseStepConfig,
   SequenceConfig,
@@ -25,6 +23,7 @@ import type {
   SessionKeyOf,
 } from '../types/runnables'
 import type { StateSchema } from '../types/schema'
+import type { AnyZodSchema, ZodSchema } from '../types/zod'
 import type { AdkApp } from './app'
 
 export type { SequenceConfig, ParallelConfig, LoopConfig }
@@ -32,8 +31,8 @@ export type { SequenceConfig, ParallelConfig, LoopConfig }
 export interface ToolConfig<TInput, TOutput, TYield, S extends StateSchema> {
   name: string
   description: string
-  schema: z.ZodType<TInput>
-  yieldSchema?: z.ZodType<TYield>
+  schema: ZodSchema<TInput>
+  yieldSchema?: ZodSchema<TYield>
   prepare?: (
     ctx: ToolExecutionContext<TInput, unknown, unknown, S>,
   ) => TInput | void | Promise<TInput | void>
@@ -52,7 +51,7 @@ export interface StepConfig<S extends StateSchema> {
 }
 
 type AgentOutput<S extends StateSchema, TOutput> =
-  S['session'] extends Record<string, z.ZodType>
+  S['session'] extends Record<string, AnyZodSchema>
     ? SessionKeyOf<S> | OutputConfig<S, TOutput>
     : OutputConfig<S, TOutput>
 

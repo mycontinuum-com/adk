@@ -1,7 +1,6 @@
-import type { z } from 'zod'
-
 import type { ParseError, Correction } from '../parser'
 import type { ErrorContext } from '../types/events'
+import type { AnyZodSchema } from '../types/zod'
 
 export type ErrorRecovery =
   | { action: 'throw' }
@@ -14,7 +13,7 @@ export type ErrorRecovery =
 export class OutputParseError extends Error {
   constructor(
     public readonly rawOutput: string,
-    public readonly schema: z.ZodType,
+    public readonly schema: AnyZodSchema,
     public readonly parseErrors: ParseError[],
     public readonly partial?: unknown,
     public readonly corrections?: Correction[],

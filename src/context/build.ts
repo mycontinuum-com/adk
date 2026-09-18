@@ -1,5 +1,3 @@
-import type { z } from 'zod'
-
 import type {
   RenderContext,
   Agent,
@@ -13,19 +11,19 @@ import type {
   OutputMode,
 } from '../types'
 import type { Session } from '../types'
+import type { AnyZodSchema } from '../types/zod'
 
 import { partitionTools, expandMCPTools, signalOutput, isOutputSignal } from '../core/tools'
 import { createEventId } from '../session'
+import { isSupportedZodSchema, schemaKind } from '../types/zod'
 import { createStateAccessor } from './state'
 
 function isObjectSchema(schema: unknown): boolean {
-  if (!schema || typeof schema !== 'object') return false
-  const def = (schema as { _def?: { typeName?: string } })._def
-  return def?.typeName === 'ZodObject'
+  return isSupportedZodSchema(schema) && schemaKind(schema) === 'object'
 }
 
 interface OutputAnalysis {
-  schema?: z.ZodType
+  schema?: AnyZodSchema
   mode?: OutputMode
   outputTool?: FunctionTool
 }

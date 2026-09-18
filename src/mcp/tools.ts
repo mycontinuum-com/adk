@@ -55,7 +55,7 @@ export function createMCPTool<S extends StateSchema>(
 }
 
 function jsonSchemaToZod(schema: Record<string, unknown>): z.ZodType<Record<string, unknown>> {
-  if (schema.type !== 'object') return z.record(z.unknown())
+  if (schema.type !== 'object') return z.record(z.string(), z.unknown())
 
   const props = (schema.properties || {}) as Record<string, Record<string, unknown>>
   const required = new Set((schema.required || []) as string[])
@@ -63,8 +63,9 @@ function jsonSchemaToZod(schema: Record<string, unknown>): z.ZodType<Record<stri
 
   for (const [key, prop] of Object.entries(props)) {
     let field = propToZod(prop)
+    if (!required.has(key)) field = field.nullable().optional()
     if (prop.description) field = field.describe(prop.description as string)
-    shape[key] = required.has(key) ? field : field.nullable().optional()
+    shape[key] = field
   }
 
   return z.object(shape).strict() as z.ZodType<Record<string, unknown>>

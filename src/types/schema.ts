@@ -1,13 +1,13 @@
-import { z } from 'zod'
+import type { AnyZodSchema, ZodOutput } from './zod'
 
 export type StateSchema = {
-  session?: Record<string, z.ZodType>
-  user?: Record<string, z.ZodType>
-  patient?: Record<string, z.ZodType>
-  practice?: Record<string, z.ZodType>
-  org?: Record<string, z.ZodType>
-  team?: Record<string, z.ZodType>
-  temp?: Record<string, z.ZodType>
+  session?: Record<string, AnyZodSchema>
+  user?: Record<string, AnyZodSchema>
+  patient?: Record<string, AnyZodSchema>
+  practice?: Record<string, AnyZodSchema>
+  org?: Record<string, AnyZodSchema>
+  team?: Record<string, AnyZodSchema>
+  temp?: Record<string, AnyZodSchema>
 }
 
 /**
@@ -15,14 +15,16 @@ export type StateSchema = {
  * concrete state schemas generic at application boundaries; use this only where the runner
  * deliberately erases that schema after construction.
  */
-export type ErasedStateSchema = z.infer<z.ZodAny>
+export type ErasedStateSchema = any
 
-export type InferScope<T> = [T] extends [Record<string, z.ZodType>]
-  ? { [K in keyof T]: z.infer<T[K]> }
+export type InferScope<T> = [T] extends [Record<string, AnyZodSchema>]
+  ? { [K in keyof T]: ZodOutput<T[K]> }
   : Record<string, unknown>
 
 type InferScopeStrict<T> =
-  T extends Record<string, z.ZodType> ? { [K in keyof T]: z.infer<T[K]> } : Record<string, never>
+  T extends Record<string, AnyZodSchema>
+    ? { [K in keyof T]: ZodOutput<T[K]> }
+    : Record<string, never>
 
 export type InferStateSchema<T extends StateSchema> = {
   session: InferScopeStrict<T['session']>
@@ -34,7 +36,8 @@ export type InferStateSchema<T extends StateSchema> = {
   temp: InferScopeStrict<T['temp']>
 }
 
-type ScopeValues<T> = T extends Record<string, z.ZodType> ? { [K in keyof T]: z.infer<T[K]> } : {}
+type ScopeValues<T> =
+  T extends Record<string, AnyZodSchema> ? { [K in keyof T]: ZodOutput<T[K]> } : {}
 
 export type StateValues<T extends StateSchema> = ScopeValues<T['session']> & {
   session: ScopeValues<T['session']>
@@ -46,7 +49,7 @@ export type StateValues<T extends StateSchema> = ScopeValues<T['session']> & {
   temp: ScopeValues<T['temp']>
 }
 
-export type ScopeState<T extends Record<string, z.ZodType> | undefined> = {
+export type ScopeState<T extends Record<string, AnyZodSchema> | undefined> = {
   [K in keyof InferScope<T>]: InferScope<T>[K]
 } & {
   update(
@@ -60,7 +63,7 @@ type SharedScopeKey = 'user' | 'patient' | 'practice' | 'org' | 'team'
 
 type SharedScopeProperties<S extends StateSchema> = {
   readonly [K in Extract<keyof S, SharedScopeKey>]: ScopeState<
-    S[K] & (Record<string, z.ZodType> | undefined)
+    S[K] & (Record<string, AnyZodSchema> | undefined)
   >
 }
 
@@ -70,8 +73,17 @@ export type TypedState<S extends StateSchema = StateSchema> = ScopeState<S['sess
 
 export function applySchemaDefaults(
   state: Record<string, unknown>,
-  scopeSchema?: Record<string, z.ZodType>,
+  scopeSchema?: Record<string, AnyZodSchema>,
 ): Record<string, unknown> {
   if (!scopeSchema) return state
-  return z.object(scopeSchema).passthrough().parse(state)
+  const result = { ...state }
+  for (const [key, schema] of Object.entries(scopeSchema)) {
+    const parsed = schema.safeParse(state[key])
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0]
+      throw new Error(`Invalid state field "${key}": ${issue?.message ?? 'validation failed'}`)
+    }
+    if (parsed.data !== undefined || key in state) result[key] = parsed.data
+  }
+  return result
 }

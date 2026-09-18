@@ -7,8 +7,6 @@ import type {
 } from 'openai/resources/responses/responses'
 
 import OpenAI, { AzureOpenAI } from 'openai'
-import { zodResponsesFunction, zodTextFormat } from 'openai/helpers/zod'
-import { z } from 'zod'
 
 import type {
   Event,
@@ -32,13 +30,13 @@ import { CALL_ID_PREFIX } from '../core/constants'
 import { withStreamRetry } from '../core/retry'
 import { createEventId, createCallId } from '../session'
 import { createStreamAccumulator, type RawDeltaEvent, type AccumulatedText } from './accumulator'
-import { normalizeSchema } from './normalizeSchema'
 import {
   type OpenAIEndpoint,
   getDefaultEndpoints,
   resolveModelName,
   isRetryableForFallback,
 } from './openai-endpoints'
+import { zodToToolSchema } from './zodToJsonSchema'
 
 interface OpenAIPromptCacheRequestOptions {
   prompt_cache_key: string
@@ -196,10 +194,12 @@ export class OpenAIAdapter implements ModelAdapter {
         }),
         ...(useNativeStructuredOutput && {
           text: {
-            format: zodTextFormat(
-              normalizeSchema(ctx.outputSchema!, 'output_schema') as z.ZodType,
-              'output_schema',
-            ),
+            format: {
+              type: 'json_schema',
+              name: 'output_schema',
+              strict: true,
+              schema: zodToToolSchema('output_schema', '', ctx.outputSchema!).parameters,
+            },
           },
         }),
       } as Parameters<typeof client.responses.stream>[0]
@@ -600,11 +600,7 @@ export function serializeTools(
   providerTools?: readonly ProviderTool[],
 ) {
   const serializedFunctionTools = functionTools.map((t) => {
-    const fn = zodResponsesFunction({
-      name: t.name,
-      description: t.description,
-      parameters: normalizeSchema(t.schema as z.ZodType, t.name),
-    })
+    const fn = zodToToolSchema(t.name, t.description, t.schema)
     return {
       type: 'function' as const,
       name: fn.name,

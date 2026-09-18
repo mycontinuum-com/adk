@@ -1,7 +1,6 @@
-import type { z } from 'zod'
-
 import type { RetryConfig } from '../types/runnables'
 import type { ContextRenderer, RenderContext, FunctionTool } from '../types/runnables'
+import type { ZodSchema } from '../types/zod'
 
 // ---------------------------------------------------------------------------
 // Filter types — shared across all providers
@@ -204,7 +203,7 @@ export interface MemoryConfig<TMetadata extends Record<string, unknown> = Record
   index: VectorIndex | QdrantConfig | PgVectorConfig | SqliteVecConfig
   collection: string
   variants?: string[]
-  metadata?: z.ZodType<TMetadata>
+  metadata?: ZodSchema<TMetadata>
 }
 
 export interface SearchOptions {
@@ -317,11 +316,11 @@ export interface Memory<
 // ---------------------------------------------------------------------------
 
 export interface SliceConfig<TMetadata extends Record<string, unknown> = Record<string, unknown>> {
-  metadata?: z.ZodType<TMetadata>
+  metadata?: ZodSchema<TMetadata>
 }
 
 export type InferSliceMeta<T> = T extends {
-  metadata: z.ZodType<infer M extends Record<string, unknown>>
+  metadata: ZodSchema<infer M extends Record<string, unknown>>
 }
   ? M
   : Record<string, unknown>

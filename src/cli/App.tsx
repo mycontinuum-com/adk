@@ -1068,6 +1068,7 @@ export function App({
 
       {displayMode !== 'logging' && (
         <DetailPane
+          key={`${(detailEvent as { id?: string } | null)?.id ?? 'none'}:${detailMode}:${isSelectedEventPendingYield}`}
           event={detailEvent}
           visible={detailVisible}
           mode={detailMode}

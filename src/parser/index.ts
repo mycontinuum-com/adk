@@ -1,17 +1,16 @@
-import type { z } from 'zod'
-
+import type { ZodSchema } from '../types/zod'
 import type { ParseResult } from './types'
 
 import { createParser as _createParser } from './parser'
 
 export { createParser, type SchemaAwareParser } from './parser'
 
-export function parse<T>(input: string, schema: z.ZodType<T>): ParseResult<T> {
+export function parse<T>(input: string, schema: ZodSchema<T>): ParseResult<T> {
   const parser = _createParser(schema)
   return parser.parse(input)
 }
 
-export function parsePartial<T>(input: string, schema: z.ZodType<T>): ParseResult<Partial<T>> {
+export function parsePartial<T>(input: string, schema: ZodSchema<T>): ParseResult<Partial<T>> {
   const parser = _createParser(schema)
   return parser.parsePartial(input)
 }

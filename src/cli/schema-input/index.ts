@@ -1,14 +1,13 @@
 export { inspectSchema, estimateFormHeight } from './inspect'
 export { JsonSchemaForm } from './JsonSchemaForm'
 
-import type { z } from 'zod'
-
 import type { Runnable, Agent } from '../../types'
+import type { AnyZodSchema } from '../../types/zod'
 
 import { isFunctionTool } from '../../core/tools'
 
-export function extractYieldSchemas(runnable: Runnable): Map<string, z.ZodTypeAny> {
-  const schemas = new Map<string, z.ZodTypeAny>()
+export function extractYieldSchemas(runnable: Runnable): Map<string, AnyZodSchema> {
+  const schemas = new Map<string, AnyZodSchema>()
 
   function walk(r: Runnable): void {
     if (r.kind === 'agent') {
