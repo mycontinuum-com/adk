@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { APIConnectionError } from 'openai'
 import { z } from 'zod'
 import { z as z3 } from 'zod/v3'
 
@@ -6,6 +10,8 @@ import type { EurouterModel, RenderContext, StreamEvent } from '../types'
 import { adk } from '../api'
 import { BaseRunner } from '../core/runner'
 import { eurouter, EurouterAdapter } from '../integrations/eurouter'
+import { BaseSession } from '../session/base'
+import { SQLiteStore } from '../session/sqlite'
 import { createTestSession } from '../testing'
 
 function chunk(delta: object, finish: string | null = null, extra: object = {}) {
@@ -411,35 +417,45 @@ it('does not report a complete estimated cost when a model call omitted usage', 
   expect(result.usage?.models[0].cost).toBeUndefined()
 })
 
-it('does not retry a failed stream after emitting text', async () => {
-  let requests = 0
-  const fetch: typeof globalThis.fetch = async () => {
-    requests++
-    return new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(
-            new TextEncoder().encode(`data: ${JSON.stringify(chunk({ content: 'partial' }))}\n\n`),
-          )
-          setTimeout(() => controller.error(new Error('Connection reset')), 5)
-        },
+it.each([
+  { delta: { content: 'partial' }, event: { type: 'assistant_delta', text: 'partial' } },
+  { delta: { reasoning: '' }, event: { type: 'thought_delta', text: '' } },
+  { delta: { reasoning_content: '' }, event: { type: 'thought_delta', text: '' } },
+])(
+  'does not retry a failed stream after emitting $event.type from $delta',
+  async ({ delta, event }) => {
+    let requests = 0
+    const fetch: typeof globalThis.fetch = async () => {
+      requests++
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(`data: ${JSON.stringify(chunk(delta))}\n\n`),
+            )
+            setTimeout(
+              () => controller.error(new APIConnectionError({ message: 'Connection reset' })),
+              5,
+            )
+          },
+        }),
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      )
+    }
+    const stream = new EurouterAdapter({ apiKey: 'fixture', fetch }).step(
+      context(),
+      eurouter('m', {
+        retry: { maxAttempts: 3, initialDelayMs: 1, maxDelayMs: 1, backoffMultiplier: 1 },
       }),
-      { headers: { 'Content-Type': 'text/event-stream' } },
     )
-  }
-  const stream = new EurouterAdapter({ apiKey: 'fixture', fetch }).step(
-    context(),
-    eurouter('m', {
-      retry: { maxAttempts: 3, initialDelayMs: 1, maxDelayMs: 1, backoffMultiplier: 1 },
-    }),
-  )
-  expect(await stream.next()).toMatchObject({
-    done: false,
-    value: { type: 'assistant_delta', text: 'partial' },
-  })
-  await expect(stream.next()).rejects.toThrow('Connection reset')
-  expect(requests).toBe(1)
-})
+    expect(await stream.next()).toMatchObject({
+      done: false,
+      value: event,
+    })
+    await expect(stream.next()).rejects.toThrow('Connection reset')
+    expect(requests).toBe(1)
+  },
+)
 
 it('propagates cancellation to an active SDK request', async () => {
   const controller = new AbortController()
@@ -478,6 +494,7 @@ it('respects context filters when replaying reasoning and parallel tool turns', 
       chunk(
         {
           reasoning: 'Remove this thought.',
+          reasoning_details: [{ type: 'reasoning.encrypted', data: 'remove-this-too' }],
           tool_calls: [
             { index: 0, id: 'a', type: 'function', function: { name: 'tool_a', arguments: '{}' } },
             { index: 1, id: 'b', type: 'function', function: { name: 'tool_b', arguments: '{}' } },
@@ -653,3 +670,132 @@ it('keeps reused gateway tool IDs distinct in ADK history while replaying the wi
     },
   ])
 })
+
+it.each([
+  { field: 'reasoning', fragments: [' Keep', ' exactly.\n'], expected: ' Keep exactly.\n' },
+  { field: 'reasoning_content', fragments: [' Keep', ' exactly.\n'], expected: ' Keep exactly.\n' },
+  { field: 'reasoning_content', fragments: ['', ''], expected: '' },
+  {
+    field: 'reasoning_details',
+    fragments: [
+      [{ type: 'reasoning.text', text: ' Keep', index: 0, format: 'unknown' }],
+      [{ type: 'reasoning.text', text: ' exactly.\n', index: 0, signature: 'fixture-signature' }],
+      [{ type: 'reasoning.encrypted', data: 'fixture-opaque', index: 1, extra: { retain: true } }],
+    ],
+    expected: [
+      { type: 'reasoning.text', text: ' Keep', index: 0, format: 'unknown' },
+      { type: 'reasoning.text', text: ' exactly.\n', index: 0, signature: 'fixture-signature' },
+      { type: 'reasoning.encrypted', data: 'fixture-opaque', index: 1, extra: { retain: true } },
+    ],
+  },
+  {
+    field: 'reasoning_details',
+    fragments: [[{ type: 'reasoning.encrypted', data: 'fixture-opaque', index: 0 }]],
+    expected: [{ type: 'reasoning.encrypted', data: 'fixture-opaque', index: 0 }],
+  },
+])(
+  'replays $field through tools and a new turn after SQLite reload',
+  async ({ field, fragments, expected }) => {
+    const http = fixture([
+      sse([
+        ...fragments.map((part) => chunk({ [field]: part })),
+        chunk(
+          {
+            tool_calls: [
+              {
+                index: 0,
+                id: 'wire-lookup',
+                type: 'function',
+                function: { name: 'lookup', arguments: '{}' },
+              },
+            ],
+          },
+          'tool_calls',
+        ),
+      ]),
+      sse([
+        ...fragments.map((part) => chunk({ [field]: part })),
+        chunk({ content: 'First answer' }, 'stop'),
+      ]),
+      sse([chunk({ content: 'Second answer' }, 'stop')]),
+    ])
+    const app = adk()
+    const agent = app.agent({
+      name: 'continuity',
+      model: eurouter('fixture-model'),
+      context: [app.context.history()],
+      tools: [
+        app.tool({
+          name: 'lookup',
+          description: 'Read a synthetic value.',
+          schema: z.object({}),
+          execute: () => 7,
+        }),
+      ],
+    })
+    const session = createTestSession('First question')
+    const first = await new BaseRunner({
+      adapters: {
+        eurouter: new EurouterAdapter({ apiKey: 'fixture', fetch: http.fetch }),
+      },
+    }).run(agent, session)
+    expect(first.status).toBe('completed')
+    expect(http.requests[1].messages).toContainEqual({
+      role: 'assistant',
+      content: null,
+      [field]: expected,
+      tool_calls: [
+        { id: 'wire-lookup', type: 'function', function: { name: 'lookup', arguments: '{}' } },
+      ],
+    })
+    const directory = mkdtempSync(join(tmpdir(), 'adk-reasoning-'))
+    const path = join(directory, 'sessions.db')
+    const writer = new SQLiteStore(path)
+    const reader = new SQLiteStore(path)
+    try {
+      expect(
+        await writer.commit(
+          {
+            id: session.id,
+            appName: session.appName,
+            version: 0,
+            scopes: session.scopes,
+            createdAt: session.createdAt,
+          },
+          [...session.events],
+          0,
+        ),
+      ).toMatchObject({ ok: true })
+      await writer.close()
+      const saved = await reader.load(session.appName, session.id)
+      if (!saved) throw new Error('Expected the persisted session')
+      const restored = BaseSession.fromSnapshot({ ...saved.session, events: saved.events })
+      restored.input.message('Second question')
+      const second = await new BaseRunner({
+        adapters: {
+          eurouter: new EurouterAdapter({ apiKey: 'fixture', fetch: http.fetch }),
+        },
+      }).run(agent, restored)
+      expect(second.status).toBe('completed')
+      const messages = z
+        .array(z.object({ role: z.string() }).passthrough())
+        .parse(http.requests[2].messages)
+      expect(messages.filter((message) => message.role === 'assistant')).toEqual([
+        {
+          role: 'assistant',
+          content: null,
+          [field]: expected,
+          tool_calls: [
+            { id: 'wire-lookup', type: 'function', function: { name: 'lookup', arguments: '{}' } },
+          ],
+        },
+        { role: 'assistant', content: 'First answer', [field]: expected },
+      ])
+      expect(messages.at(-1)).toEqual({ role: 'user', content: 'Second question' })
+    } finally {
+      await writer.close()
+      await reader.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  },
+)

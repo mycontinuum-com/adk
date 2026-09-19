@@ -43,10 +43,12 @@ const toolCallSchema = z.object({
   type: z.literal('function'),
   function: z.object({ name: z.string().min(1), arguments: z.string() }),
 })
+const reasoningDetailsSchema = z.array(z.object({ type: z.string() }).passthrough())
 const continuationSchema = z.object({
   completionId: z.string(),
   reasoning: z.string().optional(),
   reasoning_content: z.string().optional(),
+  reasoning_details: reasoningDetailsSchema.optional(),
 })
 const toolContinuationSchema = continuationSchema.extend({ callId: z.string().min(1) })
 const tokenCount = z.number().int().nonnegative()
@@ -71,6 +73,7 @@ const chunkSchema = z.object({
         content: z.string().nullish(),
         reasoning: z.string().nullish(),
         reasoning_content: z.string().nullish(),
+        reasoning_details: reasoningDetailsSchema.nullish(),
         refusal: z.string().nullish(),
         tool_calls: z
           .array(
@@ -92,6 +95,7 @@ const chunkSchema = z.object({
 type AssistantMessage = ChatCompletionAssistantMessageParam & {
   reasoning?: string
   reasoning_content?: string
+  reasoning_details?: z.infer<typeof reasoningDetailsSchema>
 }
 
 function messagesFor(ctx: RenderContext): ChatCompletionMessageParam[] {
@@ -118,6 +122,8 @@ function messagesFor(ctx: RenderContext): ChatCompletionMessageParam[] {
         if (context.reasoning !== undefined) message.reasoning = context.reasoning
         if (context.reasoning_content !== undefined)
           message.reasoning_content = context.reasoning_content
+        if (context.reasoning_details !== undefined)
+          message.reasoning_details = context.reasoning_details
       }
       if (event.type === 'tool_call') {
         const wire = toolContinuationSchema.parse(event.providerContext.data)
@@ -268,8 +274,9 @@ export class EurouterAdapter implements ModelAdapter {
       try {
         const stream = await this.client.chat.completions.create(request, { signal })
         let text = ''
-        let reasoning = ''
-        let reasoningContent = ''
+        let reasoning: string | undefined
+        let reasoningContent: string | undefined
+        const reasoningDetails: z.infer<typeof reasoningDetailsSchema> = []
         let modelName = config.name
         const completionId = createEventId()
         let servingProvider: string | undefined
@@ -310,8 +317,9 @@ export class EurouterAdapter implements ModelAdapter {
               const delta = choice.delta
               if (
                 delta.content ||
-                delta.reasoning ||
-                delta.reasoning_content ||
+                delta.reasoning != null ||
+                delta.reasoning_content != null ||
+                delta.reasoning_details?.length ||
                 delta.tool_calls?.length
               ) {
                 started = true
@@ -327,17 +335,19 @@ export class EurouterAdapter implements ModelAdapter {
                   text,
                 }
               }
-              if (delta.reasoning || delta.reasoning_content) {
+              reasoningDetails.push(...(delta.reasoning_details ?? []))
+              if (delta.reasoning != null || delta.reasoning_content != null) {
                 const thought = delta.reasoning ?? delta.reasoning_content ?? ''
-                reasoning += delta.reasoning ?? ''
-                reasoningContent += delta.reasoning_content ?? ''
+                if (delta.reasoning != null) reasoning = (reasoning ?? '') + delta.reasoning
+                if (delta.reasoning_content != null)
+                  reasoningContent = (reasoningContent ?? '') + delta.reasoning_content
                 yield {
                   ...base,
                   id: createEventId(),
                   createdAt: Date.now(),
                   type: 'thought_delta',
                   delta: thought,
-                  text: reasoning || reasoningContent,
+                  text: reasoning || reasoningContent || '',
                 }
               }
               for (const fragment of delta.tool_calls ?? []) {
@@ -387,19 +397,22 @@ export class EurouterAdapter implements ModelAdapter {
           args: z.record(z.string(), z.unknown()).parse(JSON.parse(call.function.arguments)),
         }))
         const stepEvents: Event[] = [
-          ...(reasoning || reasoningContent
+          ...(reasoning !== undefined || reasoningContent !== undefined || reasoningDetails.length
             ? [
                 {
                   ...eventBase,
                   id: createEventId(),
                   type: 'thought' as const,
-                  text: reasoning || reasoningContent,
+                  text: reasoning || reasoningContent || '',
                   providerContext: {
                     provider: 'eurouter',
                     data: {
                       completionId,
-                      ...(reasoning && { reasoning }),
-                      ...(reasoningContent && { reasoning_content: reasoningContent }),
+                      ...(reasoning !== undefined && { reasoning }),
+                      ...(reasoningContent !== undefined && {
+                        reasoning_content: reasoningContent,
+                      }),
+                      ...(reasoningDetails.length && { reasoning_details: reasoningDetails }),
                     },
                   },
                 },

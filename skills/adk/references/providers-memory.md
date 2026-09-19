@@ -124,6 +124,31 @@ The adapter retains tool-call IDs and reasoning continuation across turns. The A
 executes tools and validates final output. Interrupted streams fail instead of silently replaying
 already emitted text. This text integration does not add realtime voice or hosted provider tools.
 
+### Reasoning across calls
+
+With `app.context.history()`, the adapter automatically replays `reasoning`, `reasoning_content`,
+and ordered `reasoning_details` on their original assistant messages. This includes tool
+continuations and earlier user turns after a session-store reload. Empty text fields and structured
+block metadata are retained. Opaque blocks stay in event `providerContext`; they are not displayed
+as thought text. No extra model setting is needed for ADK replay.
+
+Replay only works for events included in the model context. `pruneReasoning()` removes it;
+`selectRecentEvents()` can remove thoughts even when it restores a companion tool call.
+Keep those thoughts when the endpoint requires reasoning continuation.
+
+The serving endpoint must also consume the returned reasoning. Model defaults do not establish
+EUrouter host behavior:
+
+| Model               | Upstream preservation behavior                                                                                                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DeepSeek V4.1 Flash | The [DeepSeek thinking API](https://api-docs.deepseek.com/guides/thinking_mode/) requires all prior `reasoning_content` when `tools` are supplied; without tools it ignores prior reasoning.    |
+| GLM 5.3 Flash       | [Z.ai preserved thinking](https://docs.z.ai/guides/capabilities/thinking-mode) uses `thinking.clear_thinking: false`. It defaults on for the coding endpoint and off for the standard endpoint. |
+| Qwen 3.8            | The [Qwen3.8-27B model card](https://huggingface.co/Qwen/Qwen3.8-27B) enables `preserve_thinking` by default, retaining thinking from all historical messages.                                  |
+
+These upstream controls are not EUrouter model options in the ADK. Confirm the selected host's
+preservation behavior before depending on it. Local protocol tests prove ADK replay, not upstream
+consumption or a quality improvement. Retained reasoning also occupies context.
+
 Usage events retain the requested model, returned model, and serving provider when supplied.
 Gateway calls never inherit native OpenAI price estimates. `reportedCostUSD` is populated only
 when the gateway supplies a cost explicitly denominated in USD. Summary costs are omitted when

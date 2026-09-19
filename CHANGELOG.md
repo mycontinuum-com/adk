@@ -39,6 +39,8 @@ Migration section:
 
 ### Changed
 
+- EUrouter reasoning — preserves structured `reasoning_details` and empty reasoning fields across model calls and saved sessions.
+
 - `zod` compatibility — accepts Zod 3 Classic `^3.25.76` and Zod 4 Classic `^4.6.5` across state, tools, output schemas, parsing, CLI input, and provider schema conversion. Existing Zod 3 applications can upgrade without changing schemas.
 - LiveKit agents — supports `^1.8.1` and tests against `1.9.0`. Install `@livekit/agents` and its provider plugins at matching versions.
 - Provider SDKs — accepts OpenAI `^6.0.0` and Google GenAI `^1.52.0`. `@livekit/rtc-node` is now an explicit optional peer.
