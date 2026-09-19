@@ -78,6 +78,9 @@
       ],
       "workflow": [
         "dist/workflow/index.d.ts"
+      ],
+      "eurouter": [
+        "dist/eurouter/index.d.ts"
       ]
     }
   },
@@ -171,6 +174,11 @@
       "types": "./dist/workflow/index.d.ts",
       "import": "./dist/workflow/index.mjs",
       "require": "./dist/workflow/index.js"
+    },
+    "./eurouter": {
+      "types": "./dist/eurouter/index.d.ts",
+      "import": "./dist/eurouter/index.mjs",
+      "require": "./dist/eurouter/index.js"
     }
   },
   "publishConfig": {

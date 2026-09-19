@@ -281,6 +281,8 @@ export type {
   RetryConfig,
   VertexAIConfig,
   OpenAIModel,
+  EurouterModel,
+  EurouterRouting,
   GeminiModel,
   ClaudeModel,
   ModelConfig,

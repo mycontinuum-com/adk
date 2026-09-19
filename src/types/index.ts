@@ -83,6 +83,8 @@ export type {
   VertexAIConfig,
   OpenAIModel,
   GeminiModel,
+  EurouterModel,
+  EurouterRouting,
   ClaudeModel,
   ModelConfig,
   ProviderModelConfig,

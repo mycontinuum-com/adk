@@ -10,9 +10,12 @@ Prefer subpath imports so optional peer dependencies stay optional:
 import { openai } from '@animahealth/adk/openai'
 import { gemini } from '@animahealth/adk/gemini'
 import { claude } from '@animahealth/adk/claude'
+import { eurouter } from '@animahealth/adk/eurouter'
 ```
 
-The main entry still re-exports these for compatibility, but the source marks those re-exports deprecated.
+The main entry still re-exports `openai`, `gemini` and `claude` for compatibility, but marks
+those re-exports deprecated. Import `eurouter` from its subpath; the main entry exports
+only its types.
 
 ## OpenAI
 
@@ -77,6 +80,93 @@ claude('claude-sonnet-4-5', {
 ```
 
 Enable Claude models in Google Cloud Model Garden and grant Vertex AI permissions.
+
+## EUrouter
+
+Use EUrouter to select hosted models such as DeepSeek, Kimi, and GLM:
+
+```typescript
+import { adk } from '@animahealth/adk'
+import { eurouter, EurouterAdapter } from '@animahealth/adk/eurouter'
+
+const app = adk({
+  adapters: {
+    eurouter: new EurouterAdapter({
+      apiKey: process.env.EUROUTER_API_KEY,
+      routing: { only: ['tensorix'], maxRetentionDays: 0 },
+    }),
+  },
+})
+
+const agent = app.agent({
+  name: 'assistant',
+  model: eurouter('deepseek-v4-flash-0731', { maxTokens: 4096 }),
+  context: [app.context.history()],
+})
+```
+
+`kimi-k3` and `glm-5.3` are other model selections under the same provider. Model IDs are
+opaque strings. Tools, structured output, and reasoning settings depend on the selected model
+and serving host. This adapter accepts text input only. Check the [EUrouter catalog](https://www.eurouter.ai/models)
+before a live run.
+
+The adapter uses Chat Completions at `https://api.eurouter.ai/api/v1`. Without an explicit key,
+it reads `EUROUTER_API_KEY`. Credentials and routing policy belong to the adapter, so an app's
+agents share a connection policy. Model configuration contains generation settings only.
+
+Routing defaults request EU processing, no training, and zero retention. `only` restricts the
+eligible hosts. `order` expresses a preference and permits other hosts unless you also restrict
+them. `allowFallbacks` controls gateway fallback within the eligible hosts. These API controls
+do not replace an application's approved processing boundary or clinical release evaluation.
+See [EUrouter routing](https://www.eurouter.ai/docs/concepts/routing).
+
+The adapter retains tool-call IDs and reasoning continuation across turns. The ADK runner
+executes tools and validates final output. Interrupted streams fail instead of silently replaying
+already emitted text. This text integration does not add realtime voice or hosted provider tools.
+
+Usage events retain the requested model, returned model, and serving provider when supplied.
+Gateway calls never inherit native OpenAI price estimates. `reportedCostUSD` is populated only
+when the gateway supplies a cost explicitly denominated in USD. Summary costs are omitted when
+any call lacks the corresponding cost data.
+
+From the repository root, build the package and run the synthetic example without a credential:
+
+```bash
+pnpm --filter @animahealth/adk build
+pnpm --filter @animahealth/adk exec node --import tsx examples/eurouter.ts
+```
+
+The example drives the real SDK and ADK through a local streaming fixture. It calls an inventory
+tool, replays its result, checks streamed text, and validates structured output for the three model
+IDs. Its output is labelled `local-fixture`. Token counts come from the fixture and are not
+measurements of a model.
+
+The example defaults to `--output-mode prompt`. It includes the output schema and JSON instructions
+in the system message, then ADK validates the response. Add `--output-mode native` to send a native
+JSON schema request instead. Support for that request depends on the model and serving host.
+The prompt asks the model to call the inventory tool once. The example checks that it actually
+does so, without forcing a tool choice. Native structured output combined with tools needs a
+separate live check for the selected model and serving host.
+
+Once a development credential is available in `EUROUTER_API_KEY`, run the same synthetic task
+against an explicitly selected live model:
+
+```bash
+pnpm --filter @animahealth/adk exec node --import tsx examples/eurouter.ts --live --model deepseek-v4-flash-0731
+```
+
+`--model` is repeatable. `--output-mode` accepts `prompt` or `native`. Live mode makes billable requests.
+Do not use patient data in this example.
+Local tests establish protocol handling. They do not establish a model's quality or live availability.
+
+Live checks on September 16, 2026 passed for `deepseek-v4-flash-0731`, `kimi-k3`, and `glm-5.3`
+with prompt-mode output and automatic tool selection. Each executed the inventory tool once,
+returned the expected JSON values, and streamed its final text. Separate capability probes saw
+Kimi and GLM reject native JSON schema requests, and GLM reject explicit `tool_choice`.
+DeepSeek accepted native JSON schema with tools but skipped the required lookup in two attempts.
+These observations apply to the tested routes at that time; repeat the check for a chosen model
+and serving host before relying on those capabilities. Gateway charges used both USD and EUR,
+so runs without complete USD charges omitted the combined `reportedCostUSD` total.
 
 ## Shared Model Options
 

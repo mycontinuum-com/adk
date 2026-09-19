@@ -117,8 +117,23 @@ export interface ClaudeModel extends BaseModelConfig {
   vertex: VertexAIConfig
 }
 
+export interface EurouterModel extends BaseModelConfig {
+  provider: 'eurouter'
+  reasoning?: { effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' }
+  retry?: RetryConfig
+}
+
+export interface EurouterRouting {
+  only?: string[]
+  order?: string[]
+  allowFallbacks?: boolean
+  dataResidency?: string
+  maxRetentionDays?: number
+  dataCollection?: 'deny' | 'allow'
+}
+
 /** Non-realtime provider model configs. */
-export type ProviderModelConfig = OpenAIModel | GeminiModel | ClaudeModel
+export type ProviderModelConfig = OpenAIModel | GeminiModel | ClaudeModel | EurouterModel
 
 /** Unified wrapper for realtime (voice-capable) model configs. */
 export interface RealtimeModelConfig {

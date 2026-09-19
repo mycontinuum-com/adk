@@ -62,9 +62,7 @@ function validatePipelineFingerprint(session: Session, currentFingerprint: strin
 }
 
 function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined {
-  const modelEndEvents = events.filter(
-    (e): e is ModelEndEvent => e.type === 'model_end' && e.usage !== undefined,
-  )
+  const modelEndEvents = events.filter((e): e is ModelEndEvent => e.type === 'model_end')
 
   if (modelEndEvents.length === 0) return undefined
 
@@ -81,7 +79,11 @@ function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined
       audioOutputTokens: number
       inputCost: number
       outputCost: number
-      hasCost: boolean
+      knownCostCalls: number
+      reportedCostCalls: number
+      reportedCostUSD: number
+      modelName: string
+      provider?: Provider
     }
   >()
 
@@ -94,10 +96,13 @@ function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined
   let totalAudioOutputTokens = 0
   let totalInputCost = 0
   let totalOutputCost = 0
-  let hasCostData = false
+  let knownCostCalls = 0
+  let reportedCostCalls = 0
+  let reportedCostUSD = 0
 
   for (const event of modelEndEvents) {
-    const u = event.usage!
+    const u = event.usage
+    if (!u) continue
     const input = u.inputTokens
     const output = u.outputTokens
     const cached = u.cachedTokens ?? 0
@@ -118,11 +123,12 @@ function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined
     if (cost) {
       totalInputCost += cost.inputCost
       totalOutputCost += cost.outputCost
-      hasCostData = true
+      knownCostCalls++
     }
 
     const name = u.modelName ?? 'unknown'
-    let entry = byModel.get(name)
+    const key = JSON.stringify([u.provider ?? null, name])
+    let entry = byModel.get(key)
     if (!entry) {
       entry = {
         calls: 0,
@@ -135,9 +141,19 @@ function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined
         audioOutputTokens: 0,
         inputCost: 0,
         outputCost: 0,
-        hasCost: false,
+        knownCostCalls: 0,
+        reportedCostCalls: 0,
+        reportedCostUSD: 0,
+        modelName: name,
+        ...(u.provider && { provider: u.provider }),
       }
-      byModel.set(name, entry)
+      byModel.set(key, entry)
+    }
+    if (u.reportedCostUSD !== undefined) {
+      reportedCostCalls++
+      reportedCostUSD += u.reportedCostUSD
+      entry.reportedCostCalls++
+      entry.reportedCostUSD += u.reportedCostUSD
     }
     entry.calls++
     entry.inputTokens += input
@@ -150,14 +166,18 @@ function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined
     if (cost) {
       entry.inputCost += cost.inputCost
       entry.outputCost += cost.outputCost
-      entry.hasCost = true
+      entry.knownCostCalls++
     }
   }
 
+  const completeUsage = modelEndEvents.every((event) => event.usage !== undefined)
   const models: ModelUsageEntry[] = []
-  for (const [modelName, e] of byModel) {
+  for (const e of byModel.values()) {
     models.push({
-      modelName,
+      modelName: e.modelName,
+      ...(e.provider && { provider: e.provider }),
+      ...(e.reportedCostCalls === e.calls &&
+        completeUsage && { reportedCostUSD: e.reportedCostUSD }),
       calls: e.calls,
       inputTokens: e.inputTokens,
       outputTokens: e.outputTokens,
@@ -166,14 +186,15 @@ function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined
       reasoningTokens: e.reasoningTokens,
       audioInputTokens: e.audioInputTokens,
       audioOutputTokens: e.audioOutputTokens,
-      ...(e.hasCost && {
-        cost: {
-          inputCost: e.inputCost,
-          outputCost: e.outputCost,
-          totalCost: e.inputCost + e.outputCost,
-          currency: 'USD' as const,
-        },
-      }),
+      ...(e.knownCostCalls === e.calls &&
+        completeUsage && {
+          cost: {
+            inputCost: e.inputCost,
+            outputCost: e.outputCost,
+            totalCost: e.inputCost + e.outputCost,
+            currency: 'USD' as const,
+          },
+        }),
     })
   }
 
@@ -189,7 +210,8 @@ function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined
     totalAudioInputTokens,
     totalAudioOutputTokens,
     modelCalls: modelEndEvents.length,
-    ...(hasCostData && {
+    ...(reportedCostCalls === modelEndEvents.length && { reportedCostUSD }),
+    ...(knownCostCalls === modelEndEvents.length && {
       cost: {
         inputCost: totalInputCost,
         outputCost: totalOutputCost,
@@ -378,6 +400,8 @@ export class BaseRunner implements Runner {
     switch (provider) {
       case 'openai':
         return new (await import('../providers/openai.js')).OpenAIAdapter()
+      case 'eurouter':
+        return new (await import('../providers/eurouter.js')).EurouterAdapter()
       case 'gemini':
         return new (await import('../providers/gemini.js')).GeminiAdapter()
       case 'claude':

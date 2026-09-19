@@ -1,5 +1,5 @@
 import type { Correction } from '../parser'
-import type { Runnable } from './runnables'
+import type { Provider, Runnable } from './runnables'
 
 export type MediaSource =
   | { type: 'base64'; mimeType: string; data: string }
@@ -233,6 +233,10 @@ export interface ModelStartEvent extends EventBase {
 }
 
 export interface ModelUsage {
+  provider?: Provider
+  requestedModelName?: string
+  servingProvider?: string
+  reportedCostUSD?: number
   modelName?: string
   inputTokens: number
   cachedTokens?: number

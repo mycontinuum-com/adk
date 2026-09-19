@@ -995,7 +995,9 @@ async function* executeAgentLoop(
       if (modifiedResult) finalStepResult = modifiedResult
 
       const modelName = getModelName(agent.model)
-      const usage = finalStepResult.usage ? { ...finalStepResult.usage, modelName } : undefined
+      const usage = finalStepResult.usage
+        ? { ...finalStepResult.usage, modelName: finalStepResult.usage.modelName ?? modelName }
+        : undefined
       const endEvent = createEndEvent({
         invocationId,
         agentName: agent.name,

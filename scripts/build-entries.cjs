@@ -27,6 +27,7 @@ const SUBPATH_ENTRIES = [
     { 'openai/index': 'src/integrations/openai.ts' },
     ['openai', 'openai/helpers/zod', 'openai/resources/responses/responses', 'ws'],
   ],
+  [{ 'eurouter/index': 'src/integrations/eurouter.ts' }, ['openai', 'openai/helpers/zod']],
   [{ 'gemini/index': 'src/integrations/gemini.ts' }, ['@google/genai']],
   [{ 'claude/index': 'src/integrations/claude.ts' }, ['@anthropic-ai/vertex-sdk']],
   [{ 'voyage/index': 'src/integrations/voyage.ts' }, ['voyageai']],

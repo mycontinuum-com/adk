@@ -1,5 +1,6 @@
 import type {
   OpenAIModel,
+  EurouterModel,
   GeminiModel,
   ClaudeModel,
   ModelConfig,
@@ -167,4 +168,11 @@ export const gemini: GeminiFactory = Object.assign(createGemini, {
  */
 export function claude(name: string, config: Omit<ClaudeModel, 'provider' | 'name'>): ClaudeModel {
   return { provider: 'claude', name, ...config }
+}
+
+export function eurouter(
+  name: string,
+  config?: Omit<EurouterModel, 'provider' | 'name'>,
+): EurouterModel {
+  return { provider: 'eurouter', name, ...config }
 }

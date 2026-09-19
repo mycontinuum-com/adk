@@ -202,7 +202,7 @@ describe('BaseRunner', () => {
       expect(result.usage?.totalCacheWriteTokens).toBe(896)
       expect(result.usage?.models).toEqual([
         expect.objectContaining({
-          modelName: 'gpt-4o-mini',
+          modelName: 'gpt-5.6-luna',
           cacheWriteTokens: 896,
         }),
       ])

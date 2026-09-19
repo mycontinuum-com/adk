@@ -33,6 +33,10 @@ Migration section:
 
 ## [0.6.1]
 
+### Added
+
+- `@animahealth/adk/eurouter` adds EUrouter model support with streaming, tool calls, and structured output.
+
 ### Changed
 
 - `zod` compatibility — accepts Zod 3 Classic `^3.25.76` and Zod 4 Classic `^4.6.5` across state, tools, output schemas, parsing, CLI input, and provider schema conversion. Existing Zod 3 applications can upgrade without changing schemas.

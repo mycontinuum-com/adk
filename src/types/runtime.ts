@@ -1,7 +1,7 @@
 import type { ErrorHandler } from '../errors/types'
 import type { Hook } from '../hook/types'
 import type { Event, StreamEvent, ToolYieldEvent, AssistantEvent, MediaPart } from './events'
-import type { Runnable } from './runnables'
+import type { Provider, Runnable } from './runnables'
 import type { ErasedStateSchema, StateSchema, TypedState } from './schema'
 import type { Session } from './session'
 
@@ -44,6 +44,8 @@ export interface CostEstimate {
 }
 
 export interface ModelUsageEntry {
+  readonly provider?: Provider
+  readonly reportedCostUSD?: number
   readonly modelName: string
   readonly calls: number
   readonly inputTokens: number
@@ -57,6 +59,7 @@ export interface ModelUsageEntry {
 }
 
 export interface UsageSummary {
+  readonly reportedCostUSD?: number
   readonly models: readonly ModelUsageEntry[]
   readonly totalInputTokens: number
   readonly totalOutputTokens: number

@@ -10,7 +10,7 @@ The ADK is a library, not a platform: no infrastructure dependency beyond a data
 - **Agents that stop and ask.** Tools can yield: the run pauses, the session persists as a row, and a human (or another system) resumes it — minutes or days later.
 - **The model sees what you choose.** Context renderers are the only bridge between the ledger and the prompt, so full audit coexists with a small context.
 - **Deterministic testing.** The test kit replaces only the model with scripted turns — tools really execute, state really writes — so agent tests run with no API key.
-- **Providers behind subpaths.** OpenAI, Gemini, and Claude (via Vertex) are optional peers behind `@animahealth/adk/openai` and friends. Importing the core pulls in none of them.
+- **Providers behind subpaths.** OpenAI, Gemini, Claude (via Vertex), and EUrouter are optional integrations behind `@animahealth/adk/openai` and friends. Importing the core pulls in none of them.
 
 ## Install
 
@@ -81,12 +81,14 @@ console.log(result.output.text) // 134 divided by 4 is 33.5.
 
 Gemini ships behind `@animahealth/adk/gemini` (AI Studio or Vertex) and Claude behind `@animahealth/adk/claude` (Vertex AI). Provider setup lives in each subpath's typed config.
 
+EUrouter ships behind `@animahealth/adk/eurouter` for hosted models such as DeepSeek, Kimi, and GLM. See the [provider guide](docs/guide/references/providers-memory.md#eurouter) for credentials, routing, and a local example that needs no key.
+
 ## What's in the box
 
 | Entry point | Surface |
 | --- | --- |
 | `@animahealth/adk` | The app: agents, steps, sequence/parallel/loop, tools, yielding tools, orchestration (`run`/`spawn`/`dispatch`/`transfer`, `app.ask`, `fanout`), context renderers, sessions and typed state scopes, memory, structured output with a forgiving parser, hooks, error handlers, the `turn`/REST/AG-UI handlers, MCP |
-| `/openai` · `/gemini` · `/claude` | Model provider configs and adapters |
+| `/openai` · `/gemini` · `/claude` · `/eurouter` | Model provider configs and adapters |
 | `/stores/sqlite` · `/stores/postgres` · `/stores/dynamodb` | Durable session stores behind one `SessionStore` contract (in-memory ships in the core) |
 | `/voyage` · `/qdrant` | Embedders and served vector backends (`pgvector`, `sqliteVec`, and `inMemoryIndex` ship in the core) |
 | `/testing` | The deterministic test kit: `runTest`, `mockAgent`, `MockAdapter`, matchers |

@@ -213,7 +213,7 @@ export function getPricing(modelName: string): ModelPricing | null {
 }
 
 export function calculateCost(usage: ModelUsage): CostEstimate | null {
-  if (!usage.modelName) return null
+  if (!usage.modelName || usage.provider === 'eurouter') return null
   const pricing = getPricing(usage.modelName)
   if (!pricing) return null
 
