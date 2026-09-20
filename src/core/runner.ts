@@ -14,6 +14,7 @@ import type {
   Runnable,
   Agent,
   ModelAdapter,
+  AdapterRegistry,
   ModelConfig,
   Provider,
   SubRunConfig,
@@ -40,7 +41,7 @@ import { runStep, type StepResumeContext } from '../agents/step'
 import { InMemoryChannel } from '../channels/inMemory'
 import { PipelineStructureChangedError } from '../errors/pipeline'
 import { composeHooks } from '../hook/compose'
-import { isRealtimeConfig, getModelProvider } from '../providers/models'
+import { isRealtimeConfig, getModelProvider, getInnerModel } from '../providers/models'
 import { calculateCost } from '../providers/pricing'
 import { BaseSession } from '../session'
 import { computePipelineFingerprint } from '../session/fingerprint'
@@ -314,7 +315,7 @@ function withTimeout<T>(
 
 export interface BaseRunnerConfig {
   sessionService?: SessionService
-  adapters?: Map<Provider, ModelAdapter> | Partial<Record<Provider, ModelAdapter>>
+  adapters?: Map<string, ModelAdapter> | AdapterRegistry
   hooks?: Hook<ErasedStateSchema>[]
   errorHandlers?: ErrorHandler[]
 }
@@ -327,14 +328,17 @@ export interface BaseRunnerConfig {
  */
 export class BaseRunner implements Runner {
   private sessionService: SessionService
-  private adapters: Map<Provider, ModelAdapter> | null
-  private adapterConfig?: Partial<Record<Provider, ModelAdapter>>
+  private adapters: Map<string, ModelAdapter> | null
+  private readonly registeredAdapters: BaseRunnerConfig['adapters']
+  private adapterConfig?: AdapterRegistry
   private realtimeAdapters = new Map<Provider, ModelAdapter>()
   private agentRegistry = new Map<string, Agent>()
   readonly hooks: readonly Hook<ErasedStateSchema>[]
   readonly errorHandlers: readonly ErrorHandler[]
 
   constructor(config?: BaseRunnerConfig) {
+    this.registeredAdapters =
+      config?.adapters instanceof Map ? new Map(config.adapters) : config?.adapters
     this.sessionService = config?.sessionService ?? sessionService(new InMemoryStore())
     this.hooks = config?.hooks ?? []
     this.errorHandlers = config?.errorHandlers ?? []
@@ -357,6 +361,18 @@ export class BaseRunner implements Runner {
 
   private async getAdapter(config: ModelConfig): Promise<ModelAdapter> {
     const provider = getModelProvider(config)
+    const model = getInnerModel(config)
+    if (model.provider === 'chat-completions' && model.adapter !== undefined) {
+      const registered = this.registeredAdapters
+      const adapter =
+        registered instanceof Map
+          ? registered.get(model.adapter)
+          : registered && Object.hasOwn(registered, model.adapter)
+            ? registered[model.adapter]
+            : undefined
+      if (!adapter) throw new Error(`No adapter registered as '${model.adapter}'`)
+      return adapter
+    }
     const custom = this.adapterConfig?.[provider]
     if (custom) return custom
 
@@ -375,10 +391,10 @@ export class BaseRunner implements Runner {
     }
 
     if (!this.adapters) {
-      this.adapters = new Map<Provider, ModelAdapter>()
+      this.adapters = new Map<string, ModelAdapter>()
       if (this.adapterConfig) {
         for (const [p, adapter] of Object.entries(this.adapterConfig)) {
-          if (adapter) this.adapters.set(p as Provider, adapter)
+          if (adapter) this.adapters.set(p, adapter)
         }
       }
     }
@@ -400,6 +416,10 @@ export class BaseRunner implements Runner {
     switch (provider) {
       case 'openai':
         return new (await import('../providers/openai.js')).OpenAIAdapter()
+      case 'chat-completions':
+        throw new Error(
+          "Configure a ChatCompletionsAdapter with an explicit baseURL in adapters['chat-completions']",
+        )
       case 'eurouter':
         return new (await import('../providers/eurouter.js')).EurouterAdapter()
       case 'gemini':

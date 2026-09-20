@@ -35,6 +35,8 @@ Migration section:
 
 ### Added
 
+- `@animahealth/adk/chat-completions` connects self-hosted text models with streaming, tools, structured output, and endpoint-scoped reasoning replay. Named adapters support multiple hosts in one app.
+
 - `@animahealth/adk/eurouter` adds EUrouter model support with streaming, tool calls, and structured output.
 
 ### Changed

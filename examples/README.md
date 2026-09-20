@@ -1,6 +1,6 @@
 # Examples
 
-Twenty single-file programs. Each one runs on its own — read it, run it, edit it.
+Twenty-one single-file programs. Each one runs on its own — read it, run it, edit it.
 
 ```bash
 pnpm install && pnpm run build   # the examples import the package by name
@@ -28,6 +28,7 @@ npx tsx examples/quickstart.ts
 | Example               | What it shows                                       |
 | --------------------- | --------------------------------------------------- |
 | `eurouter.ts`         | EUrouter streaming and tool calls, with local fixtures by default. |
+| `self-hosted.ts`     | Private Chat Completions endpoint, tools, saved reasoning and cancellation. |
 | `reasoning.ts`        | Reasoning models across OpenAI, Gemini, and Claude. |
 | `vision.ts`           | Images and documents as model input.                |
 | `assistant-vertex.ts` | Gemini through Vertex AI. Set your own GCP project. |
@@ -50,6 +51,7 @@ npx tsx examples/quickstart.ts
 Most need only `OPENAI_API_KEY`. The exceptions:
 
 - `eurouter.ts` needs no credentials locally. Use `--live` with `EUROUTER_API_KEY` for live inference.
+- `self-hosted.ts` needs a running reasoning-capable server through a local tunnel. Pass its URL with `--endpoint http://127.0.0.1:30000/v1`.
 - `reasoning.ts` and `assistant-vertex.ts` — Gemini or Claude credentials.
 - `webSearch.ts` — `SERPER_API_KEY`, and `pnpm add jsdom @mozilla/readability turndown` for page extraction.
 - `voice.ts` and `voice-eval.ts` — a LiveKit deployment and `@livekit/agents`.

@@ -9,8 +9,7 @@ import type {
   SubRunResult,
   HandoffOptions,
   Agent,
-  ModelAdapter,
-  Provider,
+  AdapterRegistry,
 } from '../types/runnables'
 import type { StateSchema, TypedState } from '../types/schema'
 import type { SessionService, Session } from '../types/session'
@@ -369,7 +368,7 @@ export interface VoiceHandlerConfig<S extends StateSchema = StateSchema> {
    * ordinary text runner — without these it reaches for a real provider and fails on a missing key,
    * even when the app registered a scripted adapter.
    */
-  adapters?: Partial<Record<Provider, ModelAdapter>>
+  adapters?: AdapterRegistry
   /** Voice hooks for both standard agent lifecycle and voice-specific lifecycle events. */
   hooks?: VoiceHook<S>[]
   errorHandlers?: ErrorHandler[]

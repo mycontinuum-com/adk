@@ -69,8 +69,9 @@ async function drain(
   adapter: EurouterAdapter,
   config: EurouterModel = eurouter('requested-model'),
   signal?: AbortSignal,
+  ctx: RenderContext = context(),
 ) {
-  const stream = adapter.step(context(), config, signal)
+  const stream = adapter.step(ctx, config, signal)
   const events: StreamEvent[] = []
   let next = await stream.next()
   while (!next.done) {
@@ -507,7 +508,13 @@ it('respects context filters when replaying reasoning and parallel tool turns', 
     sse([chunk({ content: 'done' }, 'stop')]),
   ])
   const adapter = new EurouterAdapter({ apiKey: 'fixture', fetch: http.fetch })
-  const first = await drain(adapter)
+  const app = adk()
+  const first = await drain(adapter, eurouter('requested-model'), undefined, {
+    ...context(),
+    functionTools: ['tool_a', 'tool_b'].map((name) =>
+      app.tool({ name, description: name, schema: z.object({}), execute: () => 'ok' }),
+    ),
+  })
   const ctx: RenderContext = {
     ...context(),
     events: [

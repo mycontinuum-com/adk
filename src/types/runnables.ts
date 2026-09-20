@@ -123,6 +123,19 @@ export interface EurouterModel extends BaseModelConfig {
   retry?: RetryConfig
 }
 
+export interface ChatCompletionsModel extends BaseModelConfig {
+  provider: 'chat-completions'
+  /** Select a named adapter registered on the app. Defaults to 'chat-completions'. */
+  adapter?: string
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  chatTemplate?: {
+    enable_thinking?: boolean
+    preserve_thinking?: boolean
+    reasoning_effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  }
+  retry?: RetryConfig
+}
+
 export interface EurouterRouting {
   only?: string[]
   order?: string[]
@@ -133,7 +146,12 @@ export interface EurouterRouting {
 }
 
 /** Non-realtime provider model configs. */
-export type ProviderModelConfig = OpenAIModel | GeminiModel | ClaudeModel | EurouterModel
+export type ProviderModelConfig =
+  | OpenAIModel
+  | GeminiModel
+  | ClaudeModel
+  | EurouterModel
+  | ChatCompletionsModel
 
 /** Unified wrapper for realtime (voice-capable) model configs. */
 export interface RealtimeModelConfig {
@@ -570,6 +588,8 @@ export interface ToolContext<S extends StateSchema = StateSchema> extends Invoca
    */
   end(): EndSignal
 }
+
+export type AdapterRegistry = Partial<Record<string, ModelAdapter>>
 
 export interface ModelAdapter {
   step(

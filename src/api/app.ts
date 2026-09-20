@@ -49,8 +49,7 @@ import type {
   ToolChoice,
   SessionKeyOf,
   ModelConfig,
-  ModelAdapter,
-  Provider,
+  AdapterRegistry,
 } from '../types/runnables'
 import type { RunConfig, RunResult, StreamResult, TurnResult } from '../types/runtime'
 import type { ErasedStateSchema, StateSchema } from '../types/schema'
@@ -134,7 +133,7 @@ export interface AdkConfig<S extends StateSchema> {
    * Model adapters to use for this app. Allows injecting mock adapters in tests. When not set, the
    * app loads adapters from the installed provider packages.
    */
-  adapters?: Partial<Record<Provider, ModelAdapter>>
+  adapters?: AdapterRegistry
 }
 
 type SessionSchemaOf<S extends StateSchema> = NonNullable<S['session']>

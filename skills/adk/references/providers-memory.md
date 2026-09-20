@@ -81,6 +81,83 @@ claude('claude-sonnet-4-5', {
 
 Enable Claude models in Google Cloud Model Garden and grant Vertex AI permissions.
 
+## Self-hosted Chat Completions
+
+Connect an OpenAI-compatible Chat Completions endpoint through its own adapter. The native
+OpenAI adapter uses the Responses API and is not interchangeable with this integration.
+
+```typescript
+import { adk } from '@animahealth/adk'
+import { chatCompletions, ChatCompletionsAdapter } from '@animahealth/adk/chat-completions'
+
+const app = adk({
+  adapters: {
+    'chat-completions': new ChatCompletionsAdapter({
+      baseURL: 'http://127.0.0.1:30000/v1',
+    }),
+  },
+})
+const agent = app.agent({
+  name: 'assistant',
+  model: chatCompletions('Qwen/Qwen3.8-27B', {
+    maxTokens: 4096,
+    chatTemplate: { reasoning_effort: 'xhigh', preserve_thinking: true },
+  }),
+  context: [app.context.history()],
+})
+```
+
+Use a private tunnel to reach a temporary research server. `baseURL` is required. An optional
+`apiKey` must be supplied explicitly; the adapter never reads OpenAI or EUrouter credentials.
+It sends no EUrouter routing or residency metadata. Deploying and securing the endpoint remains
+the caller's responsibility.
+
+To use multiple hosts in one app, register named adapters and select one in each model:
+
+```typescript
+const app = adk({
+  adapters: {
+    base: new ChatCompletionsAdapter({ baseURL: 'http://127.0.0.1:30000/v1' }),
+    trained: new ChatCompletionsAdapter({ baseURL: 'http://127.0.0.1:30001/v1' }),
+  },
+})
+const baseAgent = app.agent({
+  name: 'base',
+  model: chatCompletions('Qwen/Qwen3.8-27B', { adapter: 'base' }),
+  context: [app.context.history()],
+})
+const trainedAgent = app.agent({
+  name: 'trained',
+  model: chatCompletions('my-fine-tuned-model', { adapter: 'trained' }),
+  context: [app.context.history()],
+})
+```
+
+Each adapter owns its endpoint and optional credentials; each model owns its generation settings.
+An explicit adapter name must be registered or the call fails. Omitting `adapter` uses the
+`'chat-completions'` registration shown in the first example.
+
+This text-only integration supports streaming, function tools, native JSON schema output,
+retries before output begins, and durable reasoning replay. It shares EUrouter's Chat Completions
+implementation and preserves `reasoning`, `reasoning_content`, and ordered `reasoning_details`
+across tool calls and saved sessions. Keep thought events in `app.context.history()`. Native
+reasoning is replayed only for the same endpoint, adapter name and requested model. Switching
+any of these retains ordinary assistant and tool history without replaying native reasoning.
+Endpoint identity is stored as a fingerprint; endpoint URLs and credentials are not added to
+session history. Give a replaced checkpoint a new served model name to distinguish it from
+the previous model at the same endpoint.
+
+`reasoningEffort` sends the top-level `reasoning_effort` field. `chatTemplate` sends validated
+`chat_template_kwargs` containing `enable_thinking`, `preserve_thinking`, or `reasoning_effort`.
+Choose the fields supported by the server's pinned model template. These controls are not
+interchangeable on every server. Qwen's qualified SGLang recipe uses the template settings shown
+above. Calls do not inherit OpenAI token-price estimates.
+
+Run `examples/self-hosted.ts --endpoint http://127.0.0.1:30000/v1` with `tsx` after building the
+package. It makes two synthetic tool requests, closes and reopens SQLite between them, and checks
+that reasoning messages are replayed unchanged. Its output contains counts and synthetic results,
+not reasoning contents. Passing verifies protocol behavior, not production quality or throughput.
+
 ## EUrouter
 
 Use EUrouter to select hosted models such as DeepSeek, Kimi, and GLM:

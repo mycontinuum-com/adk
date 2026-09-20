@@ -46,7 +46,7 @@ Read only the domain documents needed for the task:
 
 - [runnables.md](references/runnables.md): app/schema-first construction, agents, tools, steps, sequence, parallel, loop, orchestration, running, streaming, structured output, multimodal input.
 - [context-sessions.md](references/context-sessions.md): context renderers, typed prompts, session/state model, stores, yield/resume, artifacts/provenance, time travel.
-- [providers-memory.md](references/providers-memory.md): OpenAI/Gemini/Claude/EUrouter providers, provider profiles/options, authentication, retry/error handling, vector memory, Qdrant, pgvector, Voyage.
+- [providers-memory.md](references/providers-memory.md): OpenAI/Gemini/Claude/EUrouter/self-hosted providers, provider profiles/options, authentication, retry/error handling, vector memory, Qdrant, pgvector, Voyage.
 - [handlers-voice-mcp.md](references/handlers-voice-mcp.md): turn/REST/AG-UI/voice handlers, MCP, stream events, CLI, web tools.
 - [hooks-errors-testing.md](references/hooks-errors-testing.md): hooks, error handlers, `app.test`, `runTest`, evals, voice evals, reports, matchers.
 - [advanced-surfaces.md](references/advanced-surfaces.md): artifacts, executors, coding agents, knowledge, parsers, gateway/process stores, AG-UI adapter, package layout and export hygiene.

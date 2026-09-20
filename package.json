@@ -81,6 +81,9 @@
       ],
       "eurouter": [
         "dist/eurouter/index.d.ts"
+      ],
+      "chat-completions": [
+        "dist/chat-completions/index.d.ts"
       ]
     }
   },
@@ -179,6 +182,11 @@
       "types": "./dist/eurouter/index.d.ts",
       "import": "./dist/eurouter/index.mjs",
       "require": "./dist/eurouter/index.js"
+    },
+    "./chat-completions": {
+      "types": "./dist/chat-completions/index.d.ts",
+      "import": "./dist/chat-completions/index.mjs",
+      "require": "./dist/chat-completions/index.js"
     }
   },
   "publishConfig": {

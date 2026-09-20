@@ -1,6 +1,6 @@
 import type { ErrorHandler } from '../errors/types'
 import type { Hook } from '../hook/types'
-import type { ModelAdapter, Provider, Runnable } from '../types/runnables'
+import type { AdapterRegistry, Runnable } from '../types/runnables'
 import type { StreamResult, TurnResult } from '../types/runtime'
 import type { StateSchema } from '../types/schema'
 import type { SessionService, Input } from '../types/session'
@@ -30,7 +30,7 @@ export interface HandlerConfig<S extends StateSchema = StateSchema> {
    * fills this from the app's `adk({ adapters })` registration, so a served turn can run on mock
    * adapters with no provider credentials.
    */
-  adapters?: Partial<Record<Provider, ModelAdapter>>
+  adapters?: AdapterRegistry
 }
 
 export interface TurnStream extends StreamResult<TurnResult> {
