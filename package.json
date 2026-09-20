@@ -229,6 +229,7 @@
     "@types/turndown": "^5.0.5",
     "better-sqlite3": "^12.6.2",
     "dotenv": "^17.2.3",
+    "esbuild": "^0.27.7",
     "google-auth-library": "^9.15.1",
     "ink": "^5.2.1",
     "ink-text-input": "^6.0.0",
