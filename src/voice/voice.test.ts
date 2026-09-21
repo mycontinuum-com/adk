@@ -1,7 +1,7 @@
 import { vi } from 'vitest'
 
 import type { LKAgentSession, VoiceDeps } from './livekit-types'
-import type { VoiceSession, VoiceReply, VoiceHandlerConfig } from './types'
+import type { VoiceSession, VoiceReply, VoiceHandlerConfig, VoiceEvent } from './types'
 
 import { signalOutput } from '../core/tools'
 import { realtime } from '../providers/models'
@@ -3434,6 +3434,30 @@ describe('Voice module', () => {
       expect(mockAppendEvent).not.toHaveBeenCalled()
     })
 
+    test('reports speech changes as voice activity', async () => {
+      const lkSession = makeLKSessionWithListeners()
+      const sessionService = { appendEvent: vi.fn<(...args: unknown[]) => unknown>() } as any
+      const voiceEvents: VoiceEvent[] = []
+
+      const tracker = wireEventListeners({
+        lkSession: lkSession as any,
+        sessionService,
+        session: { events: [] } as any,
+        getAgentState: makeGetAgentState(),
+        onVoiceEvent: (event) => voiceEvents.push(event),
+      })
+
+      lkSession.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
+      lkSession.emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+      lkSession.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
+      lkSession.emit('agent_state_changed', { oldState: 'listening', newState: 'thinking' })
+      await tracker.queue.drain()
+
+      expect(
+        voiceEvents.flatMap((e) => (e.type === 'voice_activity' ? [e.activity] : [])),
+      ).toEqual(['user_speech_started', 'agent_idle', 'user_speech_ended', 'agent_active'])
+    })
+
     test('onTranscript fires for user transcript with correct event', async () => {
       const lkSession = makeLKSessionWithListeners()
       const mockAppendEvent = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined)
@@ -3794,6 +3818,38 @@ describe('Voice module', () => {
         .filter((e: any) => e.type === 'invocation_end')
       expect(endEvents).toHaveLength(1)
       expect(endEvents[0].reason).toBe('completed')
+    })
+
+    test('onInactivity does not fire while a caller who talked over the agent is still speaking', async () => {
+      const voiceEvents: VoiceEvent[] = []
+      const lkSessionMock = makeLKSessionMock()
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
+      const onInactivity = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(false)
+      const handle = voiceHandler({
+        agent: makeAgent({ timeouts: { inactivity: 30 }, hooks: [{ onInactivity }] }),
+        sessionService: makeSessionService(),
+        hooks: [{ onVoiceEvent: (event: VoiceEvent) => voiceEvents.push(event) }],
+      })
+
+      lkSessionMock.start.mockImplementation(async () => {
+        setTimeout(() => {
+          lkSessionMock._emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
+          lkSessionMock._emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+          // Twice the timeout: the old timer, started when the agent went idle, fires first.
+          setTimeout(() => lkSessionMock._emit('close'), 60)
+        }, 0)
+      })
+
+      await handle.entry(makeJobContext())
+
+      expect(onInactivity).not.toHaveBeenCalled()
+      expect(
+        voiceEvents.filter(
+          (e) => e.type === 'voice_activity' && e.activity === 'inactivity_timer_started',
+        ),
+      ).toHaveLength(0)
     })
   })
 

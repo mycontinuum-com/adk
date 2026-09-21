@@ -210,6 +210,7 @@ export type VoiceEvent =
       type: 'voice_activity'
       activity:
         | 'user_speech_started'
+        | 'user_speech_ended'
         | 'agent_active'
         | 'agent_idle'
         | 'inactivity_timer_started'

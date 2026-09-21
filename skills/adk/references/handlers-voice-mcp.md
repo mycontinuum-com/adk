@@ -82,6 +82,8 @@ Tools receive `ctx.voice` for voice capabilities such as `say`, `playSound`, `ge
 
 `onTranscript` runs in a dedicated queue so it does not block the voice pipeline. Lifecycle hooks return `false` to keep the session alive and `true` to explicitly end; multiple hooks compose so any `false` vetoes ending.
 
+`onInactivity` fires after `timeouts.inactivity` of silence, meaning neither the caller nor the agent is speaking. The timer starts when whichever side spoke last stops, and a newly created reply restarts it.
+
 For voice session completion, prefer a `FunctionTool` as `agent.output`; ADK validates, executes, captures output, shuts down, and can auto-trigger the output tool on disconnect/inactivity/expiry once the caller has engaged.
 
 Voice peer dependencies include `@livekit/agents` and a provider plugin such as `@livekit/agents-plugin-openai` or `@livekit/agents-plugin-google`.

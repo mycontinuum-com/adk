@@ -38,6 +38,7 @@ import {
   collectOnEnterHooks,
   runComposedLifecycleHook,
 } from '../../voice/handler'
+import { createInactivityTimer, type InactivityTimer } from '../../voice/inactivity'
 import { createLifecycle } from '../../voice/lifecycle'
 import { createLiveKitAgent } from '../../voice/livekit-agent'
 import { createLiveKitModel } from '../../voice/livekit-model'
@@ -786,8 +787,7 @@ export async function runVoiceCase<S extends StateSchema>(
     wireTraceListeners('user', userLkSession, userRoom, startMs)
 
     // Agent-level timeouts and lifecycle helpers mirror the production voice handler.
-    let inactivityTimeout: ReturnType<typeof setTimeout> | undefined
-    let inactivityCount = 0
+    let inactivity: InactivityTimer | undefined
     let expiryTimer: ReturnType<typeof setTimeout> | undefined
     const agentTimeouts = evalCase.agent.timeouts
     const triggerOutputTool = (userInput: string) => (): Promise<void> | undefined => {
@@ -895,36 +895,10 @@ export async function runVoiceCase<S extends StateSchema>(
 
     if (agentTimeouts?.inactivity) {
       const inactivityMs = agentTimeouts.inactivity
-
-      const clearInactivityTimer = (reason: string) => {
-        if (!inactivityTimeout) return
-        clearTimeout(inactivityTimeout)
-        inactivityTimeout = undefined
-        emitVoiceEvent({
-          type: 'voice_activity',
-          activity: 'inactivity_timer_cleared',
-          reason,
-        })
-      }
-
-      const startInactivityTimer = () => {
-        clearInactivityTimer('restart')
-        if (lifecycle.state !== 'active') return
-        emitVoiceEvent({
-          type: 'voice_activity',
-          activity: 'inactivity_timer_started',
-          inactivityCount,
-          timeoutMs: inactivityMs,
-        })
-        inactivityTimeout = setTimeout(() => {
-          if (lifecycle.state !== 'active') return
-          const count = inactivityCount++
-          emitVoiceEvent({
-            type: 'voice_activity',
-            activity: 'inactivity_timeout_fired',
-            inactivityCount: count,
-            timeoutMs: inactivityMs,
-          })
+      const timer = createInactivityTimer({
+        timeoutMs: () => inactivityMs,
+        isActive: () => lifecycle.state === 'active',
+        onTimeout: (inactivityCount) =>
           runComposedLifecycleHook(
             allHooks,
             'onInactivity',
@@ -934,44 +908,26 @@ export async function runVoiceCase<S extends StateSchema>(
               session: session as Session,
               state: (session as Session).state,
               voice: voiceSession,
-              inactivityCount: count,
+              inactivityCount,
             },
             () => {
               status = 'inactivity_timeout'
               return triggerOutputTool('*The session is ending due to inactivity*')?.()
             },
             emitVoiceEvent,
-          )
-          startInactivityTimer()
-        }, inactivityMs)
-      }
+          ),
+        emit: emitVoiceEvent,
+      })
+      inactivity = timer
 
       tracker.onUserSpeechStarted(() => {
         voiceSession.turnCount++
-        clearInactivityTimer('user_speech_started')
-        inactivityCount = 0
-        emitVoiceEvent({
-          type: 'voice_activity',
-          activity: 'user_speech_started',
-          reason: 'user_speech_started',
-        })
+        timer.callerStartedSpeaking()
       })
-      tracker.onAgentActive(() => {
-        clearInactivityTimer('agent_active')
-        emitVoiceEvent({
-          type: 'voice_activity',
-          activity: 'agent_active',
-          reason: 'agent_active',
-        })
-      })
-      tracker.onAgentIdle(() => {
-        emitVoiceEvent({
-          type: 'voice_activity',
-          activity: 'agent_idle',
-          reason: 'agent_idle',
-        })
-        startInactivityTimer()
-      })
+      tracker.onUserSpeechEnded(() => timer.callerStoppedSpeaking())
+      tracker.onAgentActive(() => timer.agentBecameActive())
+      tracker.onAgentIdle(() => timer.agentWentIdle())
+      lkSession.on('speech_created', () => timer.agentReplyCreated())
     }
 
     const expiryMs = agentTimeouts?.expiry ?? agentTimeouts?.maxDuration
@@ -1017,7 +973,7 @@ export async function runVoiceCase<S extends StateSchema>(
 
     // Cleanup timers
     clearTimeout(timeoutTimer)
-    if (inactivityTimeout) clearTimeout(inactivityTimeout)
+    inactivity?.stop()
     if (expiryTimer) clearTimeout(expiryTimer)
 
     // Flush pending events

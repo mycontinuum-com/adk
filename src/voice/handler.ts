@@ -55,6 +55,7 @@ import {
   ForcedToolCallError,
   renderToolRequiredInstructions,
 } from './forced-tool-gate'
+import { createInactivityTimer } from './inactivity'
 import { createLifecycle, type VoiceEndReason, type LifecycleStateMachine } from './lifecycle'
 import { createLiveKitAgent } from './livekit-agent'
 import { createLiveKitModel } from './livekit-model'
@@ -217,9 +218,22 @@ function createEntryFunction<S extends StateSchema>(
     const activeVoiceHooks = () => [...(agentState.agent.hooks ?? []), ...(config.hooks ?? [])]
 
     let invocationOutput: unknown
-    let inactivityCount = 0
     let currentInactivityMs = initialAgent.timeouts?.inactivity ?? config.timeouts?.inactivity
-    let inactivityTimeout: ReturnType<typeof setTimeout> | undefined
+    const inactivity = createInactivityTimer({
+      timeoutMs: () => currentInactivityMs,
+      isActive: () => lifecycle.state === 'active',
+      onTimeout: (inactivityCount) =>
+        runComposedLifecycleHook(
+          activeVoiceHooks(),
+          'onInactivity',
+          lifecycle,
+          'inactivity_timeout',
+          { session, state: session.state, voice: voiceSession, inactivityCount },
+          triggerOutputTool('*The session is ending due to inactivity*'),
+          composedOnVoiceEvent,
+        ),
+      emit: (event) => composedOnVoiceEvent?.(event),
+    })
 
     // --- enqueueEvents with upgrade pattern ---
     let enqueueEventsFn: ((events: Event[]) => Promise<void>) | undefined
@@ -600,9 +614,7 @@ function createEntryFunction<S extends StateSchema>(
 
       // 4. Build new agent and update state
       const newLkAgent = await switchToAgent(target)
-      inactivityCount = 0
-      if (inactivityTimeout) clearTimeout(inactivityTimeout)
-      inactivityTimeout = undefined
+      inactivity.stop()
       invocationOutput = undefined
 
       // 5. Emit invocation_start for incoming agent
@@ -859,81 +871,14 @@ function createEntryFunction<S extends StateSchema>(
         lifecycle.tryEnd('completed')
       }
 
-      // --- Inactivity timer (event-driven, adapts on transfer) ---
-      const clearInactivityTimer = (reason: string) => {
-        if (!inactivityTimeout) return
-        clearTimeout(inactivityTimeout)
-        inactivityTimeout = undefined
-        composedOnVoiceEvent?.({
-          type: 'voice_activity',
-          activity: 'inactivity_timer_cleared',
-          reason,
-        })
-      }
-
-      const startInactivityTimer = () => {
-        clearInactivityTimer('restart')
-        if (!currentInactivityMs) return
-        if (lifecycle.state !== 'active') return
-        composedOnVoiceEvent?.({
-          type: 'voice_activity',
-          activity: 'inactivity_timer_started',
-          inactivityCount,
-          timeoutMs: currentInactivityMs,
-        })
-        inactivityTimeout = setTimeout(() => {
-          if (lifecycle.state !== 'active') return
-          const count = inactivityCount++
-          composedOnVoiceEvent?.({
-            type: 'voice_activity',
-            activity: 'inactivity_timeout_fired',
-            inactivityCount: count,
-            timeoutMs: currentInactivityMs,
-          })
-          runComposedLifecycleHook(
-            activeVoiceHooks(),
-            'onInactivity',
-            lifecycle,
-            'inactivity_timeout',
-            {
-              session,
-              state: session.state,
-              voice: voiceSession,
-              inactivityCount: count,
-            },
-            triggerOutputTool('*The session is ending due to inactivity*'),
-            composedOnVoiceEvent,
-          )
-          startInactivityTimer()
-        }, currentInactivityMs)
-      }
-
       tracker.onUserSpeechStarted(() => {
         voiceSession.turnCount++
-        clearInactivityTimer('user_speech_started')
-        inactivityCount = 0
-        composedOnVoiceEvent?.({
-          type: 'voice_activity',
-          activity: 'user_speech_started',
-          reason: 'user_speech_started',
-        })
+        inactivity.callerStartedSpeaking()
       })
-      tracker.onAgentActive(() => {
-        clearInactivityTimer('agent_active')
-        composedOnVoiceEvent?.({
-          type: 'voice_activity',
-          activity: 'agent_active',
-          reason: 'agent_active',
-        })
-      })
-      tracker.onAgentIdle(() => {
-        composedOnVoiceEvent?.({
-          type: 'voice_activity',
-          activity: 'agent_idle',
-          reason: 'agent_idle',
-        })
-        startInactivityTimer()
-      })
+      tracker.onUserSpeechEnded(() => inactivity.callerStoppedSpeaking())
+      tracker.onAgentActive(() => inactivity.agentBecameActive())
+      tracker.onAgentIdle(() => inactivity.agentWentIdle())
+      lkSession.on('speech_created', () => inactivity.agentReplyCreated())
 
       // Max duration timeout — uses expiry (with maxDuration fallback)
       const expiryMs =
@@ -966,7 +911,7 @@ function createEntryFunction<S extends StateSchema>(
       lifecycle.markEnded()
 
       if (maxDurationTimer) clearTimeout(maxDurationTimer)
-      if (inactivityTimeout) clearTimeout(inactivityTimeout)
+      inactivity.stop()
       cancelSpeechWait()
       stopThinking()
 
@@ -1249,6 +1194,7 @@ interface EventTracker {
   flush(): Promise<void>
   resetUsage(modelName?: string): void
   onUserSpeechStarted(cb: () => void): void
+  onUserSpeechEnded(cb: () => void): void
   onAgentActive(cb: () => void): void
   onAgentIdle(cb: () => void): void
 }
@@ -1287,7 +1233,11 @@ export function wireEventListeners(opts: {
   }
   let modelStartTime: number | undefined
   let turnInProgress = false
+  const reportActivity = (
+    activity: 'user_speech_started' | 'user_speech_ended' | 'agent_active' | 'agent_idle',
+  ) => onVoiceEvent?.({ type: 'voice_activity', activity, reason: activity })
   const userSpeechStartedCallbacks: Array<() => void> = []
+  const userSpeechEndedCallbacks: Array<() => void> = []
   const agentActiveCallbacks: Array<() => void> = []
   const agentIdleCallbacks: Array<() => void> = []
   let turnIndex = 0
@@ -1386,9 +1336,11 @@ export function wireEventListeners(opts: {
     const wasActive = ev.oldState === 'thinking' || ev.oldState === 'speaking'
     const isActive = ev.newState === 'thinking' || ev.newState === 'speaking'
     if (isActive && !wasActive) {
+      reportActivity('agent_active')
       for (const cb of agentActiveCallbacks) cb()
     }
     if (wasActive && !isActive) {
+      reportActivity('agent_idle')
       for (const cb of agentIdleCallbacks) cb()
     }
     queue.push(async () => {
@@ -1429,7 +1381,11 @@ export function wireEventListeners(opts: {
       newState: ev.newState,
     })
     if (ev.newState === 'speaking') {
+      reportActivity('user_speech_started')
       for (const cb of userSpeechStartedCallbacks) cb()
+    } else if (ev.oldState === 'speaking') {
+      reportActivity('user_speech_ended')
+      for (const cb of userSpeechEndedCallbacks) cb()
     }
   })
 
@@ -1503,6 +1459,9 @@ export function wireEventListeners(opts: {
     },
     onUserSpeechStarted: (cb) => {
       userSpeechStartedCallbacks.push(cb)
+    },
+    onUserSpeechEnded: (cb) => {
+      userSpeechEndedCallbacks.push(cb)
     },
     onAgentActive: (cb) => {
       agentActiveCallbacks.push(cb)

@@ -50,6 +50,8 @@ Migration section:
 
 ### Fixed
 
+- Voice inactivity timer: counts only the time when neither the caller nor the agent is speaking. Before, a caller who spoke over the agent had their own speech counted as silence, so `onInactivity` could fire seconds after they finished and interrupt the agent's reply. The timer now starts when the caller stops speaking, and a new reply restarts it. Adds the `user_speech_ended` voice activity.
+
 - Published files — excludes generated `src/node_modules` cache files.
 - `output: '<session key>'` for a key declared with `.optional()`, `.nullable()`, or `.default()` around a primitive (`z.string().optional()` and the like) is now a raw-text output key like its unwrapped form — previously the wrapper hid the primitive from the shorthand, so the key took the schema path and the model's prose was parsed as a value (the first number in "last 7 days" became the output `"7"`).
 
