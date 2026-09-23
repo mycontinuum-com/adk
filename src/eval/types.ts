@@ -10,6 +10,7 @@ import type { TypedState } from '../types/schema'
 import type { StateSchema } from '../types/schema'
 import type { VoiceSession } from '../voice/types'
 import type { Metric, MetricRun, MetricResult } from './metrics/types'
+import type { VoiceEvalCase, VoiceEvalCaseResult, VoiceEvalOptions } from './voice/types'
 
 export type { MetricResult }
 export type { Transform, TerminationReason }
@@ -104,6 +105,23 @@ export interface BaseEvalResult<C extends BaseEvalCaseResult = BaseEvalCaseResul
 export interface EvalResult<S extends StateSchema = StateSchema> extends BaseEvalResult<
   EvalCaseResult<S>
 > {}
+
+export type AnyEvalCase<S extends StateSchema = StateSchema> = EvalCase<S> | VoiceEvalCase<S>
+export type AnyEvalCaseResult<S extends StateSchema = StateSchema> =
+  | EvalCaseResult<S>
+  | VoiceEvalCaseResult<S>
+export type MixedEvalResult<S extends StateSchema = StateSchema> = BaseEvalResult<
+  AnyEvalCaseResult<S>
+>
+
+export interface MixedEvalOptions<S extends StateSchema = StateSchema> extends Omit<
+  EvalOptions<S>,
+  'onCase'
+> {
+  voice?: Pick<VoiceEvalOptions<S>, 'room' | 'hooks' | 'metrics'>
+  output?: string
+  onCase?: (result: AnyEvalCaseResult<S>, index: number, total: number) => void
+}
 
 export const STATE_CHANGE_MARKER = Symbol.for('adk.eval.stateChange')
 

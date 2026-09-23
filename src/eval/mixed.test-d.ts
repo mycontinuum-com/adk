@@ -1,0 +1,45 @@
+import { expectTypeOf } from 'vitest'
+import { z } from 'zod'
+
+import type { EvalResult, MixedEvalResult } from './types'
+
+import { adk } from '../api/app'
+import { openai } from '../providers/models'
+
+const schema = { session: { greeting: z.string() } }
+const app = adk({ schema })
+const agent = app.agent({ name: 'voice', model: openai('unused'), context: [] })
+const text = app.evaluate.case({
+  name: 'text',
+  runnable: app.step({ name: 'greeting', execute: (ctx) => ctx.output('hello') }),
+})
+const voice = app.evaluate.voice.case({ name: 'voice', agent, userAgent: agent })
+const cases = app.evaluate.cases([text, voice])
+
+expectTypeOf(app.evaluate([text])).toEqualTypeOf<Promise<EvalResult<typeof schema>>>()
+expectTypeOf(app.evaluate(cases)).toEqualTypeOf<Promise<MixedEvalResult<typeof schema>>>()
+expectTypeOf(app.evaluate.cli(cases)).toEqualTypeOf<Promise<0 | 1 | 2>>()
+
+void app.evaluate(cases, {
+  voice: {
+    metrics: [{ name: 'transcript', evaluate: (run) => ({ passed: run.transcript.length > 0 }) }],
+  },
+  metrics: [
+    {
+      name: 'state',
+      evaluate: (run) => ({ passed: run.session.state.greeting === 'hello' }),
+    },
+  ],
+})
+
+// @ts-expect-error Voice room configuration belongs in voice, not at the shared suite level.
+void app.evaluate(cases, {
+  room: { url: 'ws://unused' },
+})
+
+// @ts-expect-error A mixed callback cannot assume every result has text-only events.
+void app.evaluate(cases, {
+  onCase: (result: import('./types').EvalCaseResult<typeof schema>) => {
+    void result.events
+  },
+})

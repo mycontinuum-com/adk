@@ -206,7 +206,7 @@ async function runSuiteEval(
   }
 
   const shouldStop = options?.stopOnFirstFailure
-    ? (r: EvalCaseResult) => r.status === 'failed' || r.status === 'error'
+    ? (r: EvalCaseResult) => r.status !== 'passed'
     : undefined
 
   const results =

@@ -14,8 +14,19 @@ import type {
 } from '../context/prompt'
 import type { ErrorHandler } from '../errors/types'
 import type { Metric, MetricRun } from '../eval/metrics/types'
+import type { EvalDispatchOptions } from '../eval/mixed'
 import type { ReportOptions } from '../eval/report'
-import type { EvalCase, EvalOptions, EvalResult, ToolMock, ToolMocks } from '../eval/types'
+import type {
+  AnyEvalCase,
+  BaseEvalResult,
+  EvalCase,
+  EvalOptions,
+  EvalResult,
+  MixedEvalOptions,
+  MixedEvalResult,
+  ToolMock,
+  ToolMocks,
+} from '../eval/types'
 import type {
   VoiceEvalCase,
   VoiceEvalCaseFactory,
@@ -90,8 +101,8 @@ import {
 } from '../context/prompt'
 import { BaseRunner } from '../core/runner'
 import { OutputParseError } from '../errors/types'
+import { evaluate as runEval } from '../eval/mixed'
 import { generateReport } from '../eval/report'
-import { evaluate as runEval } from '../eval/simulator'
 import { createVoiceEvalCase } from '../eval/voice/control'
 import { aguiHandler } from '../handler/agui'
 import { restHandler, type RestResponse } from '../handler/rest'
@@ -384,10 +395,13 @@ export interface AdkApp<S extends StateSchema> {
     options: SimulateOptions,
   ): Promise<RunResult<S, TOutput>>
   simulate(runnable: Runnable<S>, options: SimulateOptions): Promise<RunResult<S>>
-  evaluate: ((
-    cases: EvalCase<S> | EvalCase<S>[],
-    options?: EvalOptions<S>,
-  ) => Promise<EvalResult<S>>) & {
+  evaluate: {
+    (cases: EvalCase<S> | EvalCase<S>[], options?: EvalOptions<S>): Promise<EvalResult<S>>
+    (
+      cases: AnyEvalCase<S> | AnyEvalCase<S>[],
+      options?: MixedEvalOptions<S>,
+    ): Promise<MixedEvalResult<S>>
+    cli(cases: AnyEvalCase<S>[], options?: MixedEvalOptions<S>): Promise<0 | 1 | 2>
     voice: ((
       cases: VoiceEvalCase<S> | VoiceEvalCase<S>[],
       options?: VoiceEvalOptions<S>,
@@ -398,10 +412,8 @@ export interface AdkApp<S extends StateSchema> {
     }
     metric(config: Metric<MetricRun<S>>): Metric<MetricRun<S>>
     case(config: EvalCase<S>): EvalCase<S>
-    cases(config: EvalCase<S>[]): EvalCase<S>[]
-    report<R extends EvalResult<S> | VoiceEvalResult<S>>(
-      options?: ReportOptions<S, R>,
-    ): (result: R) => string
+    cases<C extends AnyEvalCase<S>>(config: C[]): C[]
+    report<R extends BaseEvalResult>(options?: ReportOptions<S, R>): (result: R) => string
   }
   initialState(config: StateChanges<S>): StateChanges<S>
 
@@ -916,48 +928,44 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
       >
     },
 
-    evaluate: Object.assign(
-      (
-        caseOrCases: EvalCase<S> | EvalCase<S>[],
-        options?: EvalOptions<S>,
-      ): Promise<EvalResult<S>> => {
-        return runEval(app, caseOrCases, options)
+    evaluate: Object.assign(evaluate, {
+      cli: async (cases: AnyEvalCase<S>[], options?: MixedEvalOptions<S>) => {
+        const { evalCli } = await import('../eval/cli.js')
+        return evalCli(app, cases, options)
       },
-      {
-        voice: Object.assign(
-          (
-            caseOrCases: VoiceEvalCase<S> | VoiceEvalCase<S>[],
-            options?: VoiceEvalOptions<S>,
-          ): Promise<VoiceEvalResult<S>> => {
-            const { evaluateVoice } =
-              require('../eval/voice/evaluate') as typeof import('../eval/voice/evaluate')
-            return evaluateVoice(caseOrCases, {
-              ...options,
-              schema: options?.schema ?? schema,
-            })
+      voice: Object.assign(
+        (
+          caseOrCases: VoiceEvalCase<S> | VoiceEvalCase<S>[],
+          options?: VoiceEvalOptions<S>,
+        ): Promise<VoiceEvalResult<S>> => {
+          const { evaluateVoice } =
+            require('../eval/voice/evaluate') as typeof import('../eval/voice/evaluate')
+          return evaluateVoice(caseOrCases, {
+            ...options,
+            schema: options?.schema ?? schema,
+          })
+        },
+        {
+          case: (evalCase: VoiceEvalCase<S> | VoiceEvalCaseFactory<S>) => {
+            return createVoiceEvalCase(evalCase)
           },
-          {
-            case: (evalCase: VoiceEvalCase<S> | VoiceEvalCaseFactory<S>) => {
-              return createVoiceEvalCase(evalCase)
-            },
-            cases: (evalCases: (VoiceEvalCase<S> | VoiceEvalCaseFactory<S>)[]) => {
-              return evalCases.map(createVoiceEvalCase)
-            },
-            report:
-              (options?: ReportOptions<S, VoiceEvalResult<S>>) =>
-              (result: VoiceEvalResult<S>): string =>
-                generateReport(result, options),
+          cases: (evalCases: (VoiceEvalCase<S> | VoiceEvalCaseFactory<S>)[]) => {
+            return evalCases.map(createVoiceEvalCase)
           },
-        ),
-        metric: (metric: Metric<MetricRun<S>>) => metric,
-        case: (evalCase: EvalCase<S>) => evalCase,
-        cases: (evalCases: EvalCase<S>[]) => evalCases,
-        report:
-          <R extends EvalResult<S> | VoiceEvalResult<S>>(options?: ReportOptions<S, R>) =>
-          (result: R): string =>
-            generateReport(result, options),
-      },
-    ),
+          report:
+            (options?: ReportOptions<S, VoiceEvalResult<S>>) =>
+            (result: VoiceEvalResult<S>): string =>
+              generateReport(result, options),
+        },
+      ),
+      metric: (metric: Metric<MetricRun<S>>) => metric,
+      case: (evalCase: EvalCase<S>) => evalCase,
+      cases: <C extends AnyEvalCase<S>>(evalCases: C[]) => evalCases,
+      report:
+        <R extends BaseEvalResult>(options?: ReportOptions<S, R>) =>
+        (result: R): string =>
+          generateReport(result, options),
+    }),
 
     initialState: (state: StateChanges<S>) => state,
 
@@ -983,6 +991,21 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
       await mcpManager.disconnect()
       await resolvedStore.close()
     },
+  }
+
+  function evaluate(
+    cases: EvalCase<S> | EvalCase<S>[],
+    options?: EvalOptions<S>,
+  ): Promise<EvalResult<S>>
+  function evaluate(
+    cases: AnyEvalCase<S> | AnyEvalCase<S>[],
+    options?: MixedEvalOptions<S>,
+  ): Promise<MixedEvalResult<S>>
+  function evaluate(
+    cases: AnyEvalCase<S> | AnyEvalCase<S>[],
+    options?: EvalDispatchOptions<S>,
+  ): Promise<MixedEvalResult<S>> {
+    return runEval(app, cases, options)
   }
 
   return app

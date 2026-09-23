@@ -31,6 +31,19 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## Unreleased
+
+### Added
+
+- `app.evaluate.cli(cases, options)` runs text and voice cases through a noninteractive CLI with `list`, `run`, exact case selection, repetition, JSON evidence and pass/fail exit codes.
+- `app.evaluate` and `app.evaluate.cases` accept mixed text/voice cases. Common scheduling uses one concurrency limit; voice-specific hooks, metrics and room configuration live under `options.voice`.
+
+### Changed
+
+- Voice evidence directories start with an execution index to prevent collisions between case names. Follow `index.md` or returned recording paths instead of constructing paths from case names.
+- Concurrent suites retain results from already-running cases after stopping scheduling on failure.
+- Voice metric data must be JSON-compatible before worker IPC; unsupported values fail rather than disappearing from evidence.
+
 ## [0.6.1]
 
 ### Added

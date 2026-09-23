@@ -55,6 +55,8 @@ export function forkCase(caseIndex: number): Promise<unknown> {
       stdio: ['ignore', 'pipe', 'inherit', 'ipc'],
     })
 
+    child.stdout?.pipe(process.stderr, { end: false })
+
     let result: unknown
     let received = false
 

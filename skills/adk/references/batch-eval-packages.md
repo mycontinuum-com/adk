@@ -12,7 +12,12 @@ Build batch evals around the app, not around provider calls:
 4. Run cases with `app.evaluate` or `app.evaluate.voice`.
 5. Write deterministic reports and reviewer artifacts from the eval result, session events, and artifacts.
 
-Custom CLI code should select samples, configure model profiles, resolve caches, show progress, and write exports. It should not reimplement eval scheduling, retries, metrics, or case execution unless the ADK eval surface cannot express a concrete requirement.
+Use `app.evaluate.cli(cases, options)` for standard case selection, progress, reports, evidence
+export and exit behavior. Product code still selects samples, configures model profiles and
+resolves caches before constructing cases. Add custom CLI behavior only for a concrete need
+the shared CLI cannot express; do not reimplement scheduling, retries, metrics or execution.
+See [verification skill integration](hooks-errors-testing.md#verification-skill-integration)
+for product entry points and package scripts.
 
 Use this directory shape when the package is large enough to need structure: `evals/env.ts`, `sample.ts`, `cases/`, `metrics/`, `reports/`, `suites/run*.ts`, generated `REPORT.md`, and optional `runs/`. Keep small packages smaller; redaction-style evals can stay at `sample`, `run`, `judge`, and `report`.
 

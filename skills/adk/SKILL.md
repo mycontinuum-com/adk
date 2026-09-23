@@ -48,7 +48,7 @@ Read only the domain documents needed for the task:
 - [context-sessions.md](references/context-sessions.md): context renderers, typed prompts, session/state model, stores, yield/resume, artifacts/provenance, time travel.
 - [providers-memory.md](references/providers-memory.md): OpenAI/Gemini/Claude/EUrouter/self-hosted providers, provider profiles/options, authentication, retry/error handling, vector memory, Qdrant, pgvector, Voyage.
 - [handlers-voice-mcp.md](references/handlers-voice-mcp.md): turn/REST/AG-UI/voice handlers, MCP, stream events, CLI, web tools.
-- [hooks-errors-testing.md](references/hooks-errors-testing.md): hooks, error handlers, `app.test`, `runTest`, evals, voice evals, reports, matchers.
+- [hooks-errors-testing.md](references/hooks-errors-testing.md): hooks, error handlers, `app.test`, `runTest`, text/voice evals, eval CLI wiring, verification-skill integration, reports, matchers.
 - [advanced-surfaces.md](references/advanced-surfaces.md): artifacts, executors, coding agents, knowledge, parsers, gateway/process stores, AG-UI adapter, package layout and export hygiene.
 - [batch-eval-packages.md](references/batch-eval-packages.md): recipe for production batch eval packages, with local references from transcription, redaction, questionnaire, and patient-request evals.
 

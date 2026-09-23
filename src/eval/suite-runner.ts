@@ -35,7 +35,6 @@ export async function runWithPool<TCase, TResult>(
       if (index >= cases.length) break
 
       const result = await runCase(cases[index], index)
-      if (stopped) break
       results[index] = result
 
       if (shouldStop?.(result)) {

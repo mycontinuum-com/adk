@@ -9,12 +9,13 @@
  * Environment (see .env.voice): OPENAI_API_KEY - OpenAI API key LIVEKIT_URL - LiveKit server URL
  * LIVEKIT_API_KEY - LiveKit API key LIVEKIT_API_SECRET - LiveKit API secret
  *
- * Run: npx tsx examples/voice-eval.ts
+ * Run: pnpm exec tsx examples/voice-eval.ts list pnpm exec tsx examples/voice-eval.ts run --case
+ * text/smoke pnpm exec tsx examples/voice-eval.ts run
  */
 
 import dotenv from 'dotenv'
 
-dotenv.config({ path: `${__dirname}/.env.voice` })
+dotenv.config({ path: `${__dirname}/.env.voice`, quiet: true })
 
 import { z } from 'zod'
 
@@ -195,67 +196,47 @@ const cases: VoiceEvalCase[] = [
   },
 ]
 
-// ── Run ─────────────────────────────────────────────────────────────
+const textCase = app.evaluate.case({
+  name: 'text/smoke',
+  description: 'Check the text execution path without a model call',
+  runnable: app.step({
+    name: 'smoke',
+    execute: (ctx) => ctx.output('Text evaluation is working'),
+  }),
+  metrics: [
+    {
+      name: 'recorded_events',
+      evaluate: (run) => ({ passed: run.session.events.length > 0 }),
+    },
+  ],
+})
 
 async function main() {
-  console.log('Starting voice evaluation...\n')
-  const outputDir = `${__dirname}/voice-eval-results`
-  const repeat = 1
-  console.log(`Writing results to ${outputDir}\n`)
-  for (const c of cases) {
-    console.log(`* ${c.name}`)
-  }
-  console.log('')
-  process.stdout.write(`  ${'░'.repeat(20)} 0% (0/${cases.length * repeat})`)
-
-  const result = await app.evaluate.voice(cases, {
-    output: outputDir,
-    repeat,
-    concurrency: 10,
-    hooks: [
-      {
-        onEnter: async (ctx) => {
-          const reply = await ctx.voice.generateReply({ toolChoice: 'none' })
-          await reply.waitForPlayout()
+  process.exitCode = await app.evaluate.cli([textCase, ...cases], {
+    concurrency: 4,
+    voice: {
+      hooks: [
+        {
+          onEnter: async (ctx) => {
+            const reply = await ctx.voice.generateReply({ toolChoice: 'none' })
+            await reply.waitForPlayout()
+          },
         },
-      },
-    ],
-    metrics: [
-      // Suite-level: response latency p95 under 3 seconds
-      voiceTimingMetric({
-        name: 'response_latency_p95',
-        measure: 'response_latency_p95',
-        assertion: (ms) => ms < 3000,
-      }),
-      // Suite-level: agent speaks within 2 seconds
-      voiceTimingMetric({
-        name: 'time_to_first_speech',
-        measure: 'time_to_first_speech',
-        assertion: (ms) => ms < 2000,
-      }),
-    ],
-    onCase: (caseResult, index, total) => {
-      const filled = Math.round((index / total) * 20)
-      const bar = '█'.repeat(filled) + '░'.repeat(20 - filled)
-      const pct = Math.round((index / total) * 100)
-      const icon = caseResult.status === 'passed' ? '✓' : '✗'
-      const dur = (caseResult.durationMs / 1000).toFixed(1)
-      process.stdout.write(
-        `\r  ${bar} ${pct}% (${index}/${total})  ${icon} ${caseResult.name} ${dur}s`,
-      )
-      if (index === total) process.stdout.write('\n\n')
+      ],
+      metrics: [
+        voiceTimingMetric({
+          name: 'response_latency_p95',
+          measure: 'response_latency_p95',
+          assertion: (ms) => ms < 3000,
+        }),
+        voiceTimingMetric({
+          name: 'time_to_first_speech',
+          measure: 'time_to_first_speech',
+          assertion: (ms) => ms < 2000,
+        }),
+      ],
     },
   })
-
-  // Print summary
-  const report = app.evaluate.report()
-  console.log('\n' + report(result))
-
-  // Exit with code based on pass/fail
-  process.exit(result.summary.passed === result.summary.total ? 0 : 1)
 }
 
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
-})
+void main()

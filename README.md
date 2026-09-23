@@ -83,6 +83,28 @@ Gemini ships behind `@animahealth/adk/gemini` (AI Studio or Vertex) and Claude b
 
 EUrouter ships behind `@animahealth/adk/eurouter` for hosted models such as DeepSeek, Kimi, and GLM. See the [provider guide](docs/guide/references/providers-memory.md#eurouter) for credentials, routing, and a local example that needs no key.
 
+## Evaluation CLI
+
+Text and voice cases can share one evaluation and one CLI entry point:
+
+```ts
+async function main() {
+  process.exitCode = await app.evaluate.cli([...textCases, ...voiceCases], {
+    concurrency: 4,
+  })
+}
+void main()
+```
+
+Call the entry script with `list`, or `run --case <name> --repeat 3 --output ./runs`.
+The CLI writes JSON to stdout, diagnostics to stderr, and reports and case evidence to a fresh
+run directory. Use silent package scripts when parsing stdout. It exits successfully only
+when every selected execution passes. Normal imports still run before the CLI, so keep them quiet.
+
+Use `app.evaluate(cases, options)` for the same mixed suite without command-line handling.
+Voice-specific hooks, metrics and room configuration belong in `options.voice`.
+See [the mixed voice example](examples/voice-eval.ts).
+
 ## What's in the box
 
 | Entry point | Surface |

@@ -349,3 +349,10 @@ export type { SessionSnapshot, InvocationBoundary } from './session'
 //   import { runWorkflowFile } from '@animahealth/adk/workflow'
 //   import { coding } from '@animahealth/adk/agents/coding'
 // The knowledge module, gateway/process stores, artifact services, and channels are internal.
+
+export type {
+  AnyEvalCase,
+  AnyEvalCaseResult,
+  MixedEvalOptions,
+  MixedEvalResult,
+} from './eval/types'

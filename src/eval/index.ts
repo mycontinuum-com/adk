@@ -81,3 +81,5 @@ export type {
   VoiceTimingMeasure,
   VoiceTimingMetricConfig,
 } from './voice'
+
+export type { AnyEvalCase, AnyEvalCaseResult, MixedEvalOptions, MixedEvalResult } from './types'

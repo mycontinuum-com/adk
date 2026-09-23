@@ -93,6 +93,43 @@ Common option names: `retryHandler({ maxAttempts, baseDelay, maxDelay, backoffMu
 
 Use the builder helpers to preserve types at case boundaries: `app.evaluate.case(...)`, `app.evaluate.cases(...)`, `app.evaluate.metric(...)`, `app.evaluate.report(...)`, and the voice equivalents under `app.evaluate.voice`.
 
+`app.evaluate` and `app.evaluate.cases` also accept a mixed array of text and voice cases.
+Use one `concurrency` and `repeat` for the suite; put voice-specific room configuration, hooks
+and metrics in `options.voice`. Common metrics can inspect the session for either kind.
+
+`process.exitCode = await app.evaluate.cli(cases, options)` exposes those same cases through
+`list` and `run`, with `--case <exact-name>`, `--repeat <n>` and `--output <directory>`.
+It returns JSON and saves reports plus per-case evidence in a fresh run directory. Exit codes
+are 0 for complete success, 1 for failed/incomplete evaluation and 2 for invocation/export errors.
+Use silent package scripts for machine output, for example `pnpm --silent run eval:greeting list`.
+Keep entry-module initialization quiet. No suite registration or evaluator injection is needed.
+
+### Verification skill integration
+
+The ADK supplies `app.evaluate.cli`; it does not create an executable or add package scripts.
+Reuse the product's eval entry file, or add a small one that calls the CLI with its cases:
+
+```typescript
+async function main() {
+  process.exitCode = await app.evaluate.cli(cases, options)
+}
+void main()
+```
+
+The product owns the command name. For example, with `"eval": "node --import tsx evals/index.ts"`
+in its `package.json`, run `pnpm --silent run eval list` or
+`pnpm --silent run eval run --case greeting/english`. Use the target's existing TypeScript
+runner or compiled JavaScript setup; the script name and file path above are examples, not
+commands that installing ADK creates. Scripts are package-local; case names are local to the
+supplied suite and should be qualified when composing case arrays.
+
+A product verification skill should record the working directory, exact commands, required
+environment, feature-to-case/metric mapping, and where to read the result and detailed evidence.
+State which tools or transports are mocked and what remains unverified. A passing text case
+does not prove voice transport, and aggregated independent cases do not prove agent handoffs.
+Keep UI, API and deployed integration checks where the feature needs them. Link to this shared
+ADK guidance for the API mechanics rather than copying a runner into each verification skill.
+
 ## runTest API
 
 Use `@animahealth/adk/testing` for explicit step-based tests:
