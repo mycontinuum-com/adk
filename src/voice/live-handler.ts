@@ -20,7 +20,13 @@ import type { VoiceHandlerHandle } from './types'
 import { buildLiveContextAsync } from '../context/build'
 import { summarizeModelUsage } from '../core/runner'
 import { resolveOpenAIConnection } from '../providers/openai-endpoints'
-import { sumCosts, usageCost } from '../providers/pricing'
+import {
+  loadPricing,
+  RESULT_PRICING_WAIT_MS,
+  sumCosts,
+  usageCost,
+  type PricingCatalog,
+} from '../providers/pricing'
 import { seedState } from '../session/seedState'
 import { applySchemaDefaults } from '../types/schema'
 import { openGPTLiveTranscript } from './gpt-live-transcript'
@@ -656,17 +662,20 @@ class LiveCall<S extends StateSchema, T> {
     const context = this.context
     if (!context) return
     try {
-      const exit = exitContext(context, this.usage())
+      const exit = exitContext(
+        context,
+        this.usage(await loadPricing({ maxWaitMs: RESULT_PRICING_WAIT_MS })),
+      )
       for (const hook of this.runtime.hooks) await hook.onExit?.(exit)
     } finally {
       await this.commit(context.session)
     }
   }
 
-  private usage(): LiveCallUsage {
-    const usage = summarizeModelUsage(this.backendCalls)
+  private usage(pricing: PricingCatalog | undefined): LiveCallUsage {
+    const usage = summarizeModelUsage(this.backendCalls, pricing)
     const backend = { ...(usage && { usage }), cost: usageCost(usage) }
-    const voice = this.meter.usage()
+    const voice = this.meter.usage(pricing)
     return { backend, voice, total: sumCosts([backend.cost, voice.cost]) }
   }
 

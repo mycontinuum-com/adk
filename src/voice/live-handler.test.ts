@@ -15,8 +15,10 @@ import type {
 import { adk } from '../api'
 import { openai } from '../providers/models'
 import { serializeContext } from '../providers/openai'
+import { configurePricing } from '../providers/pricing'
 import { InMemoryStore } from '../session/memory'
 import { sessionService } from '../session/service'
+import { useTestPricing } from '../test-support/pricing-registry'
 import { UsageReportingAdapter } from '../test-support/usage-adapter'
 import { openGPTLiveTranscript } from './gpt-live-transcript'
 import { createLiveVoiceHandler } from './live-handler'
@@ -1044,6 +1046,9 @@ test('a backend transfer released after its second bound does not write the fina
 })
 
 describe('Live call usage', () => {
+  beforeEach(useTestPricing)
+  afterEach(() => configurePricing(false))
+
   function usageMetric(connection: string, seconds: number) {
     return {
       metrics: {

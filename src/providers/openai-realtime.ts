@@ -391,6 +391,9 @@ function parseUsage(usage: any): ModelUsage {
     ...(usage.input_token_details?.audio_tokens != null && {
       audioInputTokens: usage.input_token_details.audio_tokens,
     }),
+    ...(usage.input_token_details?.cached_tokens_details?.audio_tokens != null && {
+      audioCachedTokens: usage.input_token_details.cached_tokens_details.audio_tokens,
+    }),
     ...(usage.output_token_details?.audio_tokens != null && {
       audioOutputTokens: usage.output_token_details.audio_tokens,
     }),

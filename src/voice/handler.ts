@@ -35,8 +35,8 @@ import type {
   NoiseCancellationType,
 } from './types'
 
-import { createStateAccessor } from '../context'
 import { buildContextAsync } from '../context/build'
+import { createStateAccessor } from '../context/state'
 import { createEventId } from '../core/constants'
 import { createInvocationContext } from '../core/ctx'
 import { createRunHandler } from '../core/orchestration'
@@ -44,8 +44,14 @@ import { BaseRunner } from '../core/runner'
 import { isRunnable } from '../core/tools'
 import { composeErrorHandlers } from '../errors/compose'
 import { composeHooks } from '../hook/compose'
-import { isRealtimeConfig, getModelName } from '../providers/models'
-import { calculateCost } from '../providers/pricing'
+import { isRealtimeConfig, getModelName, getModelProvider } from '../providers/models'
+import {
+  calculateCost,
+  isPriceable,
+  loadPricing,
+  RESULT_PRICING_WAIT_MS,
+  type PricingCatalog,
+} from '../providers/pricing'
 import { seedState, BaseSession } from '../session'
 import { isSystemEvent } from '../types/events'
 import { applySchemaDefaults } from '../types/schema'
@@ -535,6 +541,9 @@ function createEntryFunction<S extends StateSchema>(
             effectiveOutput,
             usage,
             transferTarget,
+            isPriceable(usage)
+              ? await loadPricing({ maxWaitMs: RESULT_PRICING_WAIT_MS })
+              : undefined,
           )
           await agentState.composedHook.afterTurn(turnCtx)
         } catch {
@@ -1154,9 +1163,11 @@ export function wireEventListeners(opts: {
 
   function parseUsage(m: any): ModelUsage {
     const { agent } = getAgentState()
-    const modelName = agent.model ? getModelName(agent.model) : undefined
     return {
-      modelName,
+      ...(agent.model && {
+        provider: getModelProvider(agent.model),
+        modelName: getModelName(agent.model),
+      }),
       inputTokens: m.inputTokens ?? 0,
       outputTokens: m.outputTokens ?? 0,
       ...(m.inputTokenDetails?.cachedTokens != null && {
@@ -1592,8 +1603,12 @@ function buildVoiceTurnContext<S extends StateSchema>(
   invocationOutput: unknown,
   usage: AggregatedUsage | undefined,
   transferTarget: Runnable | undefined,
+  pricing: PricingCatalog | undefined,
 ): TurnContext {
-  const costEstimate = usage ? calculateCost(usage) : null
+  const costEstimate =
+    usage && agent.model
+      ? calculateCost({ ...usage, provider: getModelProvider(agent.model) }, pricing)
+      : null
 
   const base = {
     runnable: agent as Runnable<any>,

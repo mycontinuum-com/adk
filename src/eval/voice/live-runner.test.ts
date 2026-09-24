@@ -6,8 +6,10 @@ import type { LiveVoiceResultContext } from '../../voice/live-types'
 
 import { adk } from '../../api'
 import { openai, realtime } from '../../providers/models'
+import { configurePricing } from '../../providers/pricing'
 import { InMemoryStore } from '../../session/memory'
 import { sessionService } from '../../session/service'
+import { useTestPricing } from '../../test-support/pricing-registry'
 import { UsageReportingAdapter } from '../../test-support/usage-adapter'
 import { createLiveVoiceHandler } from '../../voice/live-handler'
 import { eventSequenceMetric } from '../metrics/events'
@@ -241,6 +243,9 @@ async function fixture() {
     },
   }
 }
+
+beforeEach(useTestPricing)
+afterEach(() => configurePricing(false))
 
 test('runs the production handler and persists call state, native fragments and tool pairs', async () => {
   const f = await fixture()

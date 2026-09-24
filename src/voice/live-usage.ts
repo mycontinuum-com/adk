@@ -1,7 +1,7 @@
 import type { Event, ModelUsage } from '../types/events'
 import type { LiveVoiceSessionUsage } from './live-types'
 
-import { calculateSessionCost } from '../providers/pricing'
+import { calculateSessionCost, type PricingCatalog } from '../providers/pricing'
 
 interface Connection {
   milliseconds: number
@@ -60,11 +60,14 @@ export class LiveVoiceMeter {
     } else if (event.type === 'session.closed') this.connection(connectionId ?? '').closed = true
   }
 
-  /** Session seconds and their cost; `unavailable` when neither usage nor connection time is known. */
-  usage(): LiveVoiceSessionUsage {
+  /**
+   * Session seconds and their cost; `unavailable` when neither usage nor connection time is known,
+   * or when `pricing` has no per-second rate for the model.
+   */
+  usage(pricing: PricingCatalog | undefined): LiveVoiceSessionUsage {
     const measured = this.seconds()
     if (!measured) return { modelName: this.modelName, cost: { basis: 'unavailable' } }
-    const totalCost = calculateSessionCost(this.modelName, measured.seconds)
+    const totalCost = calculateSessionCost(this.modelName, measured.seconds, pricing)
     return {
       modelName: this.modelName,
       seconds: measured.seconds,

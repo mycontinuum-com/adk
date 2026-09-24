@@ -24,8 +24,8 @@ import { buildContextAsync } from '../../context/build'
 import { createStateAccessor } from '../../context/state'
 import { createRunHandler } from '../../core/orchestration'
 import { composeHooks } from '../../hook/compose'
-import { isRealtimeConfig, getModelName } from '../../providers/models'
-import { calculateCost, formatCost } from '../../providers/pricing'
+import { isRealtimeConfig, getModelName, getModelProvider } from '../../providers/models'
+import { calculateCost, formatCost, isPriceable, loadPricing } from '../../providers/pricing'
 import { seedState } from '../../session'
 import { createEventId, BaseSession } from '../../session'
 import { isSystemEvent } from '../../types/events'
@@ -154,7 +154,7 @@ function createEvalSessionService(
           }
           if (u.audioOutputTokens) parts.push(`${u.audioOutputTokens} audio out`)
           if (u.reasoningTokens) parts.push(`${u.reasoningTokens} reasoning`)
-          const cost = calculateCost(u)
+          const cost = isPriceable(u) ? calculateCost(u, await loadPricing()) : null
           if (cost) parts.push(formatCost(cost.totalCost))
           writer.appendLine(`${ts.toFixed(1)}s model (${dur}, ${parts.join(', ')})`)
         } else {
@@ -975,15 +975,20 @@ export async function runVoiceCase<S extends StateSchema>(
     if (usage) {
       const modelName = getModelName(agent.model) ?? usage.modelName ?? 'unknown'
       const cost =
-        calculateCost({
-          modelName,
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens,
-          cachedTokens: usage.cachedTokens,
-          reasoningTokens: usage.reasoningTokens,
-          audioInputTokens: usage.audioInputTokens,
-          audioOutputTokens: usage.audioOutputTokens,
-        }) ?? undefined
+        calculateCost(
+          {
+            provider: getModelProvider(agent.model),
+            modelName,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cachedTokens: usage.cachedTokens,
+            reasoningTokens: usage.reasoningTokens,
+            audioInputTokens: usage.audioInputTokens,
+            audioOutputTokens: usage.audioOutputTokens,
+            audioCachedTokens: usage.audioCachedTokens,
+          },
+          await loadPricing(),
+        ) ?? undefined
       usageSummary = {
         models: [
           {

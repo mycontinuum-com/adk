@@ -27,7 +27,13 @@ import type {
 import { buildContextAsync } from '../../context/build'
 import { computeUsageSummary, summarizeModelUsage } from '../../core/runner'
 import { getModelName, isRealtimeConfig } from '../../providers/models'
-import { sumCosts, usageCost } from '../../providers/pricing'
+import {
+  loadPricing,
+  RESULT_PRICING_WAIT_MS,
+  sumCosts,
+  usageCost,
+  type PricingCatalog,
+} from '../../providers/pricing'
 import { BaseSession } from '../../session'
 import { isSystemEvent } from '../../types/events'
 import { createLiveVoiceHandler } from '../../voice/live-handler'
@@ -110,6 +116,7 @@ export function summarizeLiveEvalUsage(input: {
   call: LiveCallUsage | undefined
   voiceModel: string
   callerCalls: readonly (ModelUsage | undefined)[]
+  pricing: PricingCatalog | undefined
 }): LiveVoiceEvalUsage {
   const backend = input.call?.backend ?? {
     ...(input.backend && { usage: input.backend }),
@@ -119,7 +126,7 @@ export function summarizeLiveEvalUsage(input: {
     modelName: input.voiceModel,
     cost: { basis: 'unavailable' as const },
   }
-  const callerUsage = summarizeModelUsage(input.callerCalls)
+  const callerUsage = summarizeModelUsage(input.callerCalls, input.pricing)
   const caller = callerUsage
     ? { usage: callerUsage, cost: usageCost(callerUsage) }
     : { cost: { basis: 'unavailable' as const } }
@@ -449,7 +456,9 @@ class LiveVoiceCaseRun<S extends StateSchema> {
       endMs: fragment.endMs ?? undefined,
       turnIndex,
     }))
-    const usage = computeUsageSummary(this.session.events)
+    // The caller and GPT Live voice are always priced, so the catalog is always needed here.
+    const pricing = await loadPricing({ maxWaitMs: RESULT_PRICING_WAIT_MS })
+    const usage = computeUsageSummary(this.session.events, pricing)
     for (const message of transcript)
       this.writer?.appendLine(
         `${((message.startMs ?? 0) / 1000).toFixed(2)}s **${message.role}**: ${message.text}`,
@@ -471,6 +480,7 @@ class LiveVoiceCaseRun<S extends StateSchema> {
         call: this.callUsage,
         voiceModel: getModelName(this.evalCase.agent.model),
         callerCalls: this.callerCalls,
+        pricing,
       }),
       error: this.error,
       durationMs: Date.now() - this.startedAtMs,

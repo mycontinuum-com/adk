@@ -441,6 +441,38 @@ describe('OpenAIRealtimeTextAdapter', () => {
         cachedTokens: 30,
       })
     })
+
+    test('separates cached audio from cached text', async () => {
+      responseScript = [
+        {
+          type: 'response.done',
+          response: {
+            usage: {
+              input_tokens: 1000,
+              output_tokens: 600,
+              input_token_details: {
+                cached_tokens: 500,
+                audio_tokens: 800,
+                cached_tokens_details: { text_tokens: 200, audio_tokens: 300 },
+              },
+              output_token_details: { audio_tokens: 500 },
+            },
+          },
+        },
+      ]
+
+      const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
+      const { result } = await collectStep(adapter, createMockCtx(), config)
+
+      expect(result.usage).toEqual({
+        inputTokens: 1000,
+        outputTokens: 600,
+        cachedTokens: 500,
+        audioInputTokens: 800,
+        audioCachedTokens: 300,
+        audioOutputTokens: 500,
+      })
+    })
   })
 
   describe('tool call handling', () => {

@@ -51,6 +51,9 @@ export { gemini } from './providers/models'
 /** @deprecated Import from `@animahealth/adk/claude` instead. */
 export { claude } from './providers/models'
 
+// Cost estimation from the live pricing registry
+export { configurePricing, type PricingOptions } from './providers/pricing'
+
 // Memory (standalone - not schema-dependent)
 export {
   memory,

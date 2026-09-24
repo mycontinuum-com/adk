@@ -35,6 +35,8 @@ Migration section:
 
 ### Added
 
+- `configurePricing(options | false)` — points cost estimation at another LiteLLM-format price map, or disables it.
+- `calculateSessionCost(modelName, seconds, catalog)`, `summarizeModelUsage(calls, pricing)` and `computeUsageSummary(events, pricing)` take the live pricing catalog; GPT Live session time is priced from the registry's per-second rate instead of a bundled table.
 - `ToolExecutionContext.note(message, opts)` — the tool context type now declares `ctx.note`, which tools could already call at runtime.
 - `mayLeaveProcess(event)` — whether a stream event may be sent outside the process. It returns `false` for `state_change`.
 - `Session.addStateChangeListener(listener)` — adds a state change listener alongside the `onStateChange` callback and returns a function that removes it. The listener receives the recording session; clones copy listeners. `StateChangeListener` is its type. A custom `Session` implementation must add it; the runner already required `BaseSession` at runtime.
@@ -50,6 +52,10 @@ Migration section:
 
 ### Changed
 
+- Cost estimates — `usage.cost` uses live prices from LiteLLM's public price map instead of a bundled table, so new models such as `claude-opus-5-5` are priced without an ADK release. Costs are omitted when the registry is unreachable or a model is unlisted.
+- Cost estimates — realtime audio tokens are no longer also billed at the text rate, and Gemini thinking tokens count toward `outputCost` instead of `inputCost`.
+- `ModelUsage.provider` — text model calls record the agent's provider.
+- OpenAI realtime usage — reports `audioCachedTokens` from `cached_tokens_details`, so cached audio is priced once.
 - LiveKit agents peer range is now `^1.9.0`. GPT Live requires LiveKit Agents and its OpenAI plugin 1.9 or later.
 - Voice evidence directories start with an execution index to prevent collisions between case names. Follow `index.md` or returned recording paths instead of constructing paths from case names.
 - Concurrent suites retain results from already-running cases after stopping scheduling on failure.

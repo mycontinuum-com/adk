@@ -42,7 +42,13 @@ import { InMemoryChannel } from '../channels/inMemory'
 import { PipelineStructureChangedError } from '../errors/pipeline'
 import { composeHooks } from '../hook/compose'
 import { isRealtimeConfig, getModelProvider, getInnerModel } from '../providers/models'
-import { calculateCost } from '../providers/pricing'
+import {
+  calculateCost,
+  isPriceable,
+  loadPricing,
+  RESULT_PRICING_WAIT_MS,
+  type PricingCatalog,
+} from '../providers/pricing'
 import { BaseSession } from '../session'
 import { computePipelineFingerprint } from '../session/fingerprint'
 import { InMemoryStore } from '../session/memory'
@@ -63,17 +69,44 @@ function validatePipelineFingerprint(session: Session, currentFingerprint: strin
 }
 
 /**
- * Totals token usage and cost from the `model_end` events in `events`, per model and overall.
+ * Loads the pricing catalog for a finished run's usage summary.
  *
- * @returns `undefined` when there are no `model_end` events.
+ * @param events The run's events; only `model_end` usage is considered.
+ * @returns The catalog, or `undefined` when no call is priceable, pricing is disabled or
+ *   unavailable, or a first fetch takes longer than `RESULT_PRICING_WAIT_MS`.
  */
-export function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined {
-  return summarizeModelUsage(events.flatMap((e) => (e.type === 'model_end' ? [e.usage] : [])))
+async function loadPricingFor(
+  events: readonly Event[],
+): Promise<PricingCatalog | undefined> {
+  const priceable = events.some((e) => e.type === 'model_end' && isPriceable(e.usage))
+  return priceable ? loadPricing({ maxWaitMs: RESULT_PRICING_WAIT_MS }) : undefined
 }
 
-/** Summarizes one entry per model call; `undefined` marks a call whose usage is unknown. */
+/**
+ * Totals token usage and cost from the `model_end` events in `events`, per model and overall.
+ *
+ * @param events Run events; each `model_end` counts as one model call.
+ * @param pricing - Catalog used for cost estimates; costs are omitted when absent.
+ * @returns `undefined` when there are no `model_end` events.
+ */
+export function computeUsageSummary(
+  events: readonly Event[],
+  pricing: PricingCatalog | undefined,
+): UsageSummary | undefined {
+  return summarizeModelUsage(
+    events.flatMap((e) => (e.type === 'model_end' ? [e.usage] : [])),
+    pricing,
+  )
+}
+
+/**
+ * Summarizes one entry per model call; `undefined` marks a call whose usage is unknown.
+ *
+ * @param pricing Catalog used for cost estimates; costs are omitted when absent.
+ */
 export function summarizeModelUsage(
   calls: readonly (ModelUsage | undefined)[],
+  pricing: PricingCatalog | undefined,
 ): UsageSummary | undefined {
   if (calls.length === 0) return undefined
 
@@ -129,7 +162,7 @@ export function summarizeModelUsage(
     totalAudioInputTokens += audioIn
     totalAudioOutputTokens += audioOut
 
-    const cost = calculateCost(u)
+    const cost = calculateCost(u, pricing)
     if (cost) {
       totalInputCost += cost.inputCost
       totalOutputCost += cost.outputCost
@@ -346,12 +379,14 @@ export function createStreamResult<T>(
  *   one, which yields an `aborted` result.
  * @param session The session the run executed on; its current state, usage and output are attached.
  * @param runnable The root runnable.
+ * @param pricing Catalog used for the usage cost estimate; the cost is omitted when absent.
  * @returns The root status unchanged, with session, state and usage attached.
  */
 export function resolveRunResult(
   mainResult: RunResult | undefined,
   session: Session,
   runnable: Runnable<ErasedStateSchema>,
+  pricing: PricingCatalog | undefined,
 ): RunResult {
   if (!mainResult) {
     return {
@@ -368,7 +403,7 @@ export function resolveRunResult(
     runnable,
     session,
     state: session.state,
-    usage: computeUsageSummary(session.events),
+    usage: computeUsageSummary(session.events, pricing),
   }
 }
 
@@ -567,6 +602,8 @@ export class BaseRunner implements Runner {
     const eventChannel = new InMemoryChannel({
       onEvent: (event) => {
         ownership.observe(event)
+        // Start the first registry fetch while later steps run, so the result rarely waits for it.
+        if (event.type === 'model_end' && isPriceable(event.usage)) void loadPricing()
         composed.onEvent?.(event)
       },
     })
@@ -706,7 +743,7 @@ export class BaseRunner implements Runner {
     }
 
     const mainResult = channelResult.mainResult ? (await mainOutcome).result : undefined
-    return resolveRunResult(mainResult, session, runnable)
+    return resolveRunResult(mainResult, session, runnable, await loadPricingFor(session.events))
   }
 
   private async *execute(

@@ -52,7 +52,7 @@ import { composeErrorHandlers } from '../errors/compose'
 import { OutputParseError } from '../errors/types'
 import { composeHooks } from '../hook/compose'
 import { createParser } from '../parser/parser'
-import { getModelName, getInnerModel } from '../providers/models'
+import { getModelName, getModelProvider, getInnerModel } from '../providers/models'
 
 function enrichToolCallsWithYieldFlag(toolCalls: ToolCallEvent[], tools: FunctionTool[]): void {
   const yieldingToolNames = new Set(tools.filter((t) => t.yieldSchema).map((t) => t.name))
@@ -1010,9 +1010,12 @@ async function* executeAgentLoop(
       }
       if (modifiedResult) finalStepResult = modifiedResult
 
-      const modelName = getModelName(agent.model)
       const usage = finalStepResult.usage
-        ? { ...finalStepResult.usage, modelName: finalStepResult.usage.modelName ?? modelName }
+        ? {
+            ...finalStepResult.usage,
+            provider: finalStepResult.usage.provider ?? getModelProvider(agent.model),
+            modelName: finalStepResult.usage.modelName ?? getModelName(agent.model),
+          }
         : undefined
       const endEvent = createEndEvent({
         invocationId,

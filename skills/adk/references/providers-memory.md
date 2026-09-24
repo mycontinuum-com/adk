@@ -270,6 +270,35 @@ These observations apply to the tested routes at that time; repeat the check for
 and serving host before relying on those capabilities. Gateway charges used both USD and EUR,
 so runs without complete USD charges omitted the combined `reportedCostUSD` total.
 
+## Cost Estimates
+
+`usage.cost` is estimated from token counts and live prices in
+[LiteLLM's public price map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
+The ADK bundles no prices. Each process starts fetching the map when a model call first reports
+priceable usage, serves it from memory for an hour, then refreshes it in the background. A finished
+run waits at most one second for that first fetch; if it is not ready, that run has no cost and later
+runs use the map once it arrives. Runs without model usage, such as scripted tests, never contact the
+registry. New models are priced once the registry lists them.
+
+A model resolves by provider and name: OpenAI names match OpenAI entries, Gemini names prefer
+`gemini/<name>`, and Claude names prefer `vertex_ai/<name>`, then Anthropic. Dated snapshots and
+`@version` suffixes fall back to the base model. Resellers such as Bedrock or OpenRouter are never
+matched. Chat Completions and EUrouter calls are not priced here.
+
+Models billed by connected time, such as GPT Live, use the registry's per-second rate.
+Audio and cached tokens are billed as subsets of the reported totals. Gemini thinking tokens are
+billed on top of output tokens because Gemini reports them separately. When the registry is
+unreachable, the model is unknown, or a billed token category has no published rate, the cost is
+omitted rather than guessed. A failed fetch logs `adk.pricing.unavailable` and is retried after
+five minutes.
+
+```ts
+import { configurePricing } from '@animahealth/adk'
+
+configurePricing(false) // tests: never fetch prices
+configurePricing({ url: 'https://prices.internal/litellm.json' }) // contract prices, same format
+```
+
 ## Shared Model Options
 
 Temperature is explicit and does not change reasoning settings. Omission preserves the provider

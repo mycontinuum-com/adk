@@ -16,7 +16,7 @@ import type {
 } from '../types/events'
 import type { CLIEvent } from './hooks/useAgent'
 
-import { calculateCost } from '../providers/pricing'
+import { calculateCost, type PricingCatalog } from '../providers/pricing'
 import { type InvocationState, endReasonToState } from '../session/resume/tree'
 
 export interface StreamingMetadata {
@@ -179,7 +179,10 @@ function collapseBlockDeltas(block: InvocationBlock): void {
   }
 }
 
-function buildContextBlocksAndPreContext(block: InvocationBlock): void {
+function buildContextBlocksAndPreContext(
+  block: InvocationBlock,
+  pricing: PricingCatalog | undefined,
+): void {
   const events = block.events
   const contextBlocks: ContextBlock[] = []
   const preContextEvents: DisplayEvent[] = []
@@ -225,7 +228,7 @@ function buildContextBlocksAndPreContext(block: InvocationBlock): void {
           currentContextBlock.hasError = true
         }
         if (endEvent.usage?.modelName) {
-          const estimate = calculateCost(endEvent.usage)
+          const estimate = calculateCost(endEvent.usage, pricing)
           if (estimate !== null) {
             currentContextBlock.cost = estimate.totalCost
           }
@@ -258,7 +261,7 @@ function buildContextBlocksAndPreContext(block: InvocationBlock): void {
   block.postChildEvents = postChildEvents
 
   for (const child of block.children) {
-    buildContextBlocksAndPreContext(child)
+    buildContextBlocksAndPreContext(child, pricing)
   }
 
   const hasContextError = contextBlocks.some((ctx) => ctx.hasError)
@@ -321,7 +324,16 @@ function linkDeltasToFinalEvents(block: InvocationBlock): void {
   }
 }
 
-export function buildInvocationBlocks(events: readonly CLIEvent[]): InvocationBlock[] {
+/**
+ * Group CLI events into the invocation tree the trace view renders.
+ *
+ * @param pricing - Catalog used to show each model call's estimated cost; omitted costs when
+ *   absent.
+ */
+export function buildInvocationBlocks(
+  events: readonly CLIEvent[],
+  pricing?: PricingCatalog,
+): InvocationBlock[] {
   const blockMap = new Map<string, InvocationBlock>()
   const seenEventIds = new Set<string>()
   const roots: InvocationBlock[] = []
@@ -503,7 +515,7 @@ export function buildInvocationBlocks(events: readonly CLIEvent[]): InvocationBl
 
   for (const root of roots) {
     collapseBlockDeltas(root)
-    buildContextBlocksAndPreContext(root)
+    buildContextBlocksAndPreContext(root, pricing)
     linkDeltasToFinalEvents(root)
   }
 

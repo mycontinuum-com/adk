@@ -4,6 +4,7 @@ import type { ErrorHandler } from '../errors'
 import type { ModelAdapter, Provider, StreamEvent } from '../types'
 
 import { adk } from '../api'
+import { configurePricing, RESULT_PRICING_WAIT_MS } from '../providers/pricing'
 import { BaseSession } from '../session'
 import { inMemoryStore } from '../session/memory'
 import { sessionService } from '../session/service'
@@ -237,6 +238,75 @@ describe('BaseRunner', () => {
           cacheWriteTokens: 896,
         }),
       ])
+    })
+
+    describe('cost estimates', () => {
+      const fetchMock = vi.fn<typeof fetch>()
+      const pricedAdapter: ModelAdapter = {
+        async *step() {
+          return {
+            stepEvents: [],
+            toolCalls: [],
+            terminal: true,
+            usage: { inputTokens: 1000, outputTokens: 100 },
+          }
+        },
+      }
+
+      beforeEach(() => {
+        vi.stubGlobal('fetch', fetchMock)
+        fetchMock.mockReset()
+        fetchMock.mockImplementation(async () =>
+          Response.json({
+            'gpt-4o-mini': {
+              litellm_provider: 'openai',
+              input_cost_per_token: 1e-6,
+              output_cost_per_token: 2e-6,
+            },
+          }),
+        )
+        configurePricing({ url: 'https://prices.test/registry.json' })
+      })
+
+      afterEach(() => {
+        configurePricing(false)
+        vi.unstubAllGlobals()
+      })
+
+      test('prices model usage from the registry', async () => {
+        const runner = new BaseRunner({ adapters: { openai: pricedAdapter } })
+
+        const result = await runner.run(
+          testAgent({ model: { provider: 'openai', name: 'gpt-4o-mini' } }),
+          createTestSession('Test'),
+        )
+
+        expect(result.usage?.cost?.totalCost).toBeCloseTo(1000 * 1e-6 + 100 * 2e-6, 12)
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+      })
+
+      test('returns within the wait bound when the registry does not answer', async () => {
+        fetchMock.mockImplementation(() => new Promise(() => {}))
+        const runner = new BaseRunner({ adapters: { openai: pricedAdapter } })
+
+        const startedAt = Date.now()
+        const result = await runner.run(
+          testAgent({ model: { provider: 'openai', name: 'gpt-4o-mini' } }),
+          createTestSession('Test'),
+        )
+
+        expect(Date.now() - startedAt).toBeLessThan(RESULT_PRICING_WAIT_MS + 500)
+        expect(result.usage?.cost).toBeUndefined()
+        expect(result.usage?.totalInputTokens).toBe(1000)
+      })
+
+      test('does not contact the registry when no call reports usage', async () => {
+        const runner = new BaseRunner({ adapters: { openai: mockAdapter } })
+
+        await runner.run(testAgent(), createTestSession('Test'))
+
+        expect(fetchMock).not.toHaveBeenCalled()
+      })
     })
 
     test('throws for unsupported provider', async () => {

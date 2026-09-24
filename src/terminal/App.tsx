@@ -15,6 +15,7 @@ import type {
 import type { TerminalOptions, DisplayMode } from './types'
 
 import { buildContext, buildContextAsync, eventToMessageSummary } from '../context/build'
+import { isPriceable, loadPricing, type PricingCatalog } from '../providers/pricing'
 import {
   buildInvocationBlocks,
   getEventsInDisplayOrder,
@@ -254,7 +255,14 @@ export function App({
     setDetailScrollOffset((prev) => Math.min(prev, maxOffset))
   }, [])
 
-  const blocks = useMemo(() => buildInvocationBlocks(events), [events])
+  const [pricing, setPricing] = useState<PricingCatalog>()
+  useEffect(() => {
+    if (events.some((e) => e.type === 'model_end' && isPriceable(e.usage))) {
+      void loadPricing().then(setPricing)
+    }
+  }, [events])
+
+  const blocks = useMemo(() => buildInvocationBlocks(events, pricing), [events, pricing])
 
   const enrichedBlocks = useMemo(() => {
     if (resolvedMessages.size === 0) return blocks

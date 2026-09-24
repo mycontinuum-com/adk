@@ -14,6 +14,7 @@ import { openai } from '../../providers/models'
 import { sumCosts, usageCost } from '../../providers/pricing'
 import { InMemoryStore } from '../../session/memory'
 import { sessionService } from '../../session/service'
+import { TEST_PRICING } from '../../test-support/pricing-registry'
 import { LiveVoiceMeter, realtimeTokenUsage } from '../../voice/live-usage'
 import { evalCli } from '../cli'
 import { stringifyEvidence, voiceEvidence } from '../json'
@@ -102,9 +103,10 @@ function costedRun(run: VoiceRunResult<typeof schema>): VoiceRunResult<typeof sc
   meter.start()
   clock = 90_000
   meter.stop()
-  const backend = summarizeModelUsage([
-    { provider: 'openai', modelName: 'gpt-4o-mini', inputTokens: 1_000_000, outputTokens: 0 },
-  ])
+  const backend = summarizeModelUsage(
+    [{ provider: 'openai', modelName: 'gpt-4o-mini', inputTokens: 1_000_000, outputTokens: 0 }],
+    TEST_PRICING,
+  )
   const caller = realtimeTokenUsage(
     {
       type: 'realtime_model_metrics',
@@ -115,13 +117,14 @@ function costedRun(run: VoiceRunResult<typeof schema>): VoiceRunResult<typeof sc
     },
     'gpt-realtime',
   )
-  const voice = meter.usage()
+  const voice = meter.usage(TEST_PRICING)
   const callBackend = { usage: backend, cost: usageCost(backend) }
   return {
     ...run,
     usage: backend,
     usageScope: 'backend',
     liveUsage: summarizeLiveEvalUsage({
+      pricing: TEST_PRICING,
       backend: undefined,
       call: {
         backend: callBackend,
@@ -185,6 +188,7 @@ describe('native Live voice eval suite', () => {
       return {
         ...run,
         liveUsage: summarizeLiveEvalUsage({
+          pricing: TEST_PRICING,
           backend: undefined,
           call: undefined,
           voiceModel: 'gpt-live-1',
@@ -231,6 +235,7 @@ describe('native Live voice eval suite', () => {
     boundary.run.mockResolvedValue({
       ...run,
       liveUsage: summarizeLiveEvalUsage({
+        pricing: TEST_PRICING,
         backend: undefined,
         call: undefined,
         voiceModel: 'gpt-live-1',

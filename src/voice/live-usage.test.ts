@@ -1,6 +1,7 @@
 import { realtime } from '@livekit/agents-plugin-openai'
 
 import { calculateCost, calculateSessionCost, sumCosts } from '../providers/pricing'
+import { TEST_PRICING } from '../test-support/pricing-registry'
 import {
   backendModelCalls,
   isRealtimeMetrics,
@@ -36,12 +37,12 @@ function pluginConnection(meter: LiveVoiceMeter) {
 
 describe('GPT Live session pricing', () => {
   test('charges $0.05 per minute, per second', () => {
-    expect(calculateSessionCost('gpt-live-1', 90)).toBe(0.075)
-    expect(calculateSessionCost('gpt-live-1', 60)).toBe(0.05)
-    expect(calculateSessionCost('gpt-live-1', 1)).toBeCloseTo(0.05 / 60, 12)
-    expect(calculateSessionCost('gpt-live-1-2026-09-01', 120)).toBe(0.1)
-    expect(calculateSessionCost('gpt-live-10', 90)).toBeNull()
-    expect(calculateSessionCost('gpt-realtime', 90)).toBeNull()
+    expect(calculateSessionCost('gpt-live-1', 90, TEST_PRICING)).toBe(0.075)
+    expect(calculateSessionCost('gpt-live-1', 60, TEST_PRICING)).toBe(0.05)
+    expect(calculateSessionCost('gpt-live-1', 1, TEST_PRICING)).toBeCloseTo(0.05 / 60, 12)
+    expect(calculateSessionCost('gpt-live-1-2026-09-01', 120, TEST_PRICING)).toBe(0.1)
+    expect(calculateSessionCost('gpt-live-10', 90, TEST_PRICING)).toBeNull()
+    expect(calculateSessionCost('gpt-realtime', 90, TEST_PRICING)).toBeNull()
   })
 })
 
@@ -51,7 +52,7 @@ describe('Live voice meter', () => {
     const connection = pluginConnection(meter)
     connection.usage(12)
     connection.closed(15)
-    expect(meter.usage()).toEqual({
+    expect(meter.usage(TEST_PRICING)).toEqual({
       modelName: 'gpt-live-1',
       seconds: 15,
       cost: { basis: 'reported', totalCost: 0.0125, currency: 'USD' },
@@ -66,7 +67,7 @@ describe('Live voice meter', () => {
     connection.reconnect('connection-two')
     connection.usage(5)
     connection.closed(10)
-    expect(meter.usage()).toEqual({
+    expect(meter.usage(TEST_PRICING)).toEqual({
       modelName: 'gpt-live-1',
       seconds: 30,
       cost: { basis: 'reported', totalCost: 0.025, currency: 'USD' },
@@ -87,7 +88,7 @@ describe('Live voice meter', () => {
     connection.closed(10)
     clock = 135_000
     meter.stop()
-    expect(meter.usage()).toEqual({
+    expect(meter.usage(TEST_PRICING)).toEqual({
       modelName: 'gpt-live-1',
       seconds: 135,
       cost: { basis: 'estimated', totalCost: 0.1125, currency: 'USD' },
@@ -100,7 +101,7 @@ describe('Live voice meter', () => {
     meter.start()
     clock += 90_000
     meter.stop()
-    expect(meter.usage()).toEqual({
+    expect(meter.usage(TEST_PRICING)).toEqual({
       modelName: 'gpt-live-1',
       seconds: 90,
       cost: { basis: 'estimated', totalCost: 0.075, currency: 'USD' },
@@ -115,7 +116,7 @@ describe('Live voice meter', () => {
     connection.usage(48)
     clock = 30_000
     meter.stop()
-    expect(meter.usage()).toEqual({
+    expect(meter.usage(TEST_PRICING)).toEqual({
       modelName: 'gpt-live-1',
       seconds: 48,
       cost: { basis: 'estimated', totalCost: 0.04, currency: 'USD' },
@@ -128,14 +129,21 @@ describe('Live voice meter', () => {
     dropped.usage(40)
     clock = 60_000
     later.stop()
-    expect(later.usage().seconds).toBe(60)
-    expect(later.usage().cost).toEqual({ basis: 'estimated', totalCost: 0.05, currency: 'USD' })
+    expect(later.usage(TEST_PRICING).seconds).toBe(60)
+    expect(later.usage(TEST_PRICING).cost).toEqual({
+      basis: 'estimated',
+      totalCost: 0.05,
+      currency: 'USD',
+    })
   })
 
   test('reports unavailable, not zero, when nothing was measured', () => {
     const meter = new LiveVoiceMeter('gpt-live-1')
     meter.stop()
-    expect(meter.usage()).toEqual({ modelName: 'gpt-live-1', cost: { basis: 'unavailable' } })
+    expect(meter.usage(TEST_PRICING)).toEqual({
+      modelName: 'gpt-live-1',
+      cost: { basis: 'unavailable' },
+    })
   })
 
   test('keeps measured seconds but no cost for an unpriced voice model', () => {
@@ -146,7 +154,7 @@ describe('Live voice meter', () => {
       sessionDurationMs: 9_000,
     })
     meter.observeServerEvent({ type: 'session.closed' }, 'c')
-    expect(meter.usage()).toEqual({
+    expect(meter.usage(TEST_PRICING)).toEqual({
       modelName: 'unpriced-live',
       seconds: 9,
       cost: { basis: 'unavailable' },
@@ -234,7 +242,10 @@ describe('simulated caller usage', () => {
       audioCachedTokens: 2_000,
       audioOutputTokens: 5_000,
     })
-    expect(calculateCost(usage!)!.totalCost).toBeCloseTo(0.004 + 0.256 + 0.0008 + 0.008 + 0.32, 12)
+    expect(calculateCost(usage!, TEST_PRICING)!.totalCost).toBeCloseTo(
+      0.004 + 0.256 + 0.0008 + 0.008 + 0.32,
+      12,
+    )
   })
 
   test('a response without reported tokens has unknown usage, not zero', () => {

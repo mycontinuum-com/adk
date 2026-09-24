@@ -20,7 +20,7 @@ import {
   serializeToolChoice,
   ClaudeAdapter,
 } from './claude'
-import { calculateCost } from './pricing'
+import { calculateCost, parsePricingCatalog } from './pricing'
 
 const TEST_INV_ID = 'test-invocation-id'
 const TEST_AGENT = 'test_agent'
@@ -789,13 +789,22 @@ describe('Claude provider', () => {
         cacheWriteTokens: 900,
       })
 
-      // The catalog has no Claude entry and calculateCost takes no catalog argument, so price the
-      // normalized usage against a catalog entry with distinct read and write rates
-      // (gpt-5.6-luna: $0.20 input, $0.02 cached, $0.25 cache write, $1.20 output per million).
-      const cost = calculateCost({ ...usage, modelName: 'gpt-5.6-luna' })
+      const catalog = parsePricingCatalog({
+        'claude-opus-5-5': {
+          litellm_provider: 'anthropic',
+          input_cost_per_token: 4e-6,
+          cache_read_input_token_cost: 2e-7,
+          cache_creation_input_token_cost: 5e-6,
+          output_cost_per_token: 2e-5,
+        },
+      })
+      const cost = calculateCost(
+        { ...usage, provider: 'claude', modelName: 'claude-opus-5-5' },
+        catalog,
+      )
       expect(cost).not.toBeNull()
-      expect(cost!.inputCost).toBeCloseTo((100 * 0.2 + 3000 * 0.02 + 900 * 0.25) / 1_000_000, 12)
-      expect(cost!.outputCost).toBeCloseTo((250 * 1.2) / 1_000_000, 12)
+      expect(cost!.inputCost).toBeCloseTo(100 * 4e-6 + 3000 * 2e-7 + 900 * 5e-6, 12)
+      expect(cost!.outputCost).toBeCloseTo(250 * 2e-5, 12)
     })
 
     it('takes cumulative input counts reported on message_delta', async () => {

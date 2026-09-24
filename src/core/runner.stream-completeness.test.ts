@@ -1067,10 +1067,12 @@ describe('run result status', () => {
     const terminated: RunResult = { ...fields, status: 'terminated', terminationReason: 'maxTurns' }
     const participantLeft: RunResult = { ...fields, status: 'participant_left' }
 
-    expect(resolveRunResult(terminated, session, runnable)).toMatchObject({
+    expect(resolveRunResult(terminated, session, runnable, undefined)).toMatchObject({
       status: 'terminated',
       terminationReason: 'maxTurns',
     })
-    expect(resolveRunResult(participantLeft, session, runnable).status).toBe('participant_left')
+    expect(resolveRunResult(participantLeft, session, runnable, undefined).status).toBe(
+      'participant_left',
+    )
   })
 })
