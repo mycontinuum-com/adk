@@ -88,6 +88,7 @@ async function fixture(
     agentScope?: boolean
     backendTimeoutMs?: number
     backendUsage?: boolean
+    resultGate?: ReturnType<typeof gate>
     clock?: () => number
   } = {},
 ) {
@@ -259,7 +260,7 @@ async function fixture(
           },
           onResult: options.omitResult
             ? undefined
-            : (ctx) => {
+            : async (ctx) => {
                 const { reply } = z.object({ reply: z.string() }).parse(ctx.output)
                 previousAnswers.push(ctx.state.answer)
                 ctx.state.update({ answer: reply })
@@ -269,6 +270,7 @@ async function fixture(
                   (options.failResult === 'once' && result.mock.calls.length === 1)
                 )
                   throw new Error('Result failed')
+                await options.resultGate?.promise
                 ctx.voice.appendCommentary(reply)
               },
           onError: options.omitError ? undefined : error,
@@ -1011,6 +1013,36 @@ test('a stalled backend transfer cannot hold call termination past its second bo
   expect(f.error).not.toHaveBeenCalled()
 })
 
+test('a backend transfer released after its second bound does not write the finalized call', async () => {
+  const stalled = gate()
+  const f = await fixture({ backendTimeoutMs: 50, toolState: true })
+  const call = await f.call()
+  const callId = f.entered[0]!.callId
+  const load = f.app.sessions.get.bind(f.app.sessions)
+  let transferring = false
+  vi.spyOn(f.app.sessions, 'get').mockImplementation(async (id) => {
+    if (id === callId && !transferring) {
+      transferring = true
+      await stalled.promise
+    }
+    return load(id)
+  })
+  call.live.dispatch('stalled-id', 'Question')
+  await vi.waitFor(() => expect(transferring).toBe(true))
+  f.entered[0]!.voice.end()
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 500 })
+  const labels = (session: { readonly events: readonly Event[] } | undefined) =>
+    session!.events.flatMap((event) => (event.type === 'annotation' ? [event.label] : []))
+  const finalized = await load(callId)
+  expect(labels(finalized).at(-1)).toBe('live-call-ended')
+  stalled.release()
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const latest = await load(callId)
+  expect(labels(latest)).toEqual(labels(finalized))
+  expect(latest!.state.answer).toBe('')
+  expect(f.error).not.toHaveBeenCalled()
+})
+
 describe('Live call usage', () => {
   function usageMetric(connection: string, seconds: number) {
     return {
@@ -1109,6 +1141,20 @@ describe('Live call usage', () => {
     expect(usage.total).toEqual({ basis: 'unavailable' })
     stuck.release()
     await vi.waitFor(() => expect(f.finished).toEqual(['first', 'second']))
+  })
+
+  test('a result hook still running at close keeps the settled backend cost', async () => {
+    const stuck = gate()
+    const f = await fixture({ resultGate: stuck, backendTimeoutMs: 50, backendUsage: true })
+    const call = await f.call()
+    call.live.dispatch('first-id', 'Question')
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    f.entered[0]!.voice.end()
+    await vi.waitFor(() => expect(f.exited).toHaveBeenCalledTimes(1), { timeout: 500 })
+    const usage = f.exited.mock.calls[0]![0].usage
+    expect(usage.backend.usage?.modelCalls).toBe(1)
+    expect(usage.backend.cost).toEqual({ basis: 'reported', totalCost: 0.15, currency: 'USD' })
+    stuck.release()
   })
 
   test('backend calls without reported token usage make backend and total cost unavailable', async () => {

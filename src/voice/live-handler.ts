@@ -207,6 +207,8 @@ class LiveCall<S extends StateSchema, T> {
   private abandoned = false
   /** A settled delegation's writes to the call session, which close() lets finish. */
   private transfer: Promise<void> | undefined
+  /** Set when close() stops waiting for backend work; the call ledger then takes no more of it. */
+  private ledgerClosed = false
   private endRequested = false
   private endReason = 'disconnected'
   private participantIdentity: string | undefined
@@ -484,7 +486,6 @@ class LiveCall<S extends StateSchema, T> {
       if (!saved) throw new Error('Live call state is missing')
       return saved
     })
-    this.callSession = callSession
     applyLiveState(session, callSession, stateStart)
     const work = completedBackendWork(session.events.slice(workStart))
     const batch = {
@@ -513,6 +514,11 @@ class LiveCall<S extends StateSchema, T> {
       agentName: config.backend.name,
     })
     for (const completed of work.events) await sessionService.appendEvent(callSession, completed)
+    if (this.ledgerClosed) {
+      this.log({ callId, delegationId: delegation.id }, 'Late Live backend work was not recorded')
+      return
+    }
+    this.callSession = callSession
     await this.commit(callSession)
   }
 
@@ -582,8 +588,9 @@ class LiveCall<S extends StateSchema, T> {
     let backendSettled = await settlesWithin(this.queue, this.runtime.timeout)
     if (!backendSettled) {
       this.abandoned = true
-      // The unsettled run's model calls are unknown, so backend cost cannot be complete.
-      this.backendCalls.push(undefined)
+      // A run still in flight has unknown model calls. A settled run's calls are already recorded,
+      // even when its transfer or result hook is what keeps the queue open.
+      if (this.activeRun) this.backendCalls.push(undefined)
       // Settled work already being recorded may finish first, within a second bound.
       const transfer = this.transfer
       if (transfer)
@@ -596,6 +603,7 @@ class LiveCall<S extends StateSchema, T> {
       if (!backendSettled)
         this.log({ callId: this.context?.callId }, 'Live backend work did not settle before close')
     }
+    this.ledgerClosed = true
     try {
       await this.closeVoice(backendSettled)
     } finally {
