@@ -246,6 +246,7 @@
     "tsx": "^4.21.0",
     "turndown": "^7.2.0",
     "typescript": "^5.8.3",
+    "undici": "6.25.0",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
     "vite-plus": "0.3.0",
     "vitest": "4.1.11",

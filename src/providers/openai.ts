@@ -1,4 +1,5 @@
 import type {
+  Response as ProviderResponse,
   ResponseInputItem,
   ResponseOutputItem,
   ResponseReasoningItem,
@@ -73,6 +74,8 @@ function createEndpointKey(endpoint: OpenAIEndpoint, model?: string): string {
     endpoint.apiVersion ?? ''
   }:${model ?? ''}`
 }
+
+class PrematureOpenAIStreamError extends Error {}
 
 export class OpenAIAdapter implements ModelAdapter {
   private endpoints: OpenAIEndpoint[]
@@ -159,7 +162,14 @@ export class OpenAIAdapter implements ModelAdapter {
     endpoint: OpenAIEndpoint,
   ): AsyncGenerator<StreamEvent, ModelStepResult> {
     const reasoning = config.provider === 'openai' ? config.reasoning : undefined
-    const retryConfig = config.provider === 'openai' ? config.retry : undefined
+    const retryConfig = (config.provider === 'openai' ? config.retry : undefined) ?? {
+      maxAttempts: 2,
+      initialDelayMs: 250,
+      maxDelayMs: 250,
+      backoffMultiplier: 1,
+      retryableErrors: (error: Error) => error instanceof PrematureOpenAIStreamError,
+    }
+    let emitted = false
     const promptCache = config.provider === 'openai' ? config.promptCache : undefined
     const { client, resolvedModel } = this.getOrCreateClient(endpoint, config.name)
 
@@ -194,12 +204,7 @@ export class OpenAIAdapter implements ModelAdapter {
         }),
         ...(useNativeStructuredOutput && {
           text: {
-            format: {
-              type: 'json_schema',
-              name: 'output_schema',
-              strict: true,
-              schema: zodToToolSchema('output_schema', '', ctx.outputSchema!).parameters,
-            },
+            format: serializeOutputSchema(ctx.outputSchema!),
           },
         }),
       } as Parameters<typeof client.responses.stream>[0]
@@ -208,12 +213,20 @@ export class OpenAIAdapter implements ModelAdapter {
       const cleanup = signal ? registerAbortHandler(signal, () => stream.abort()) : undefined
 
       const accumulator = createStreamAccumulator()
+      let terminalResponse: ProviderResponse | undefined
 
       try {
         for await (const event of stream) {
           if (signal?.aborted) {
             throw new Error('Aborted')
           }
+
+          if (
+            event.type === 'response.completed' ||
+            event.type === 'response.incomplete' ||
+            event.type === 'response.failed'
+          )
+            terminalResponse = event.response
 
           let rawEvent: RawDeltaEvent | null = null
 
@@ -238,13 +251,17 @@ export class OpenAIAdapter implements ModelAdapter {
           }
 
           if (rawEvent) {
+            emitted = true
             yield accumulator.push(rawEvent)
           }
         }
 
-        const response = await stream.finalResponse()
+        await stream.finalResponse()
+        if (!terminalResponse)
+          throw new PrematureOpenAIStreamError('OpenAI stream ended without a terminal response')
+        if (terminalResponse.status === 'failed') throw new Error('OpenAI response failed')
         return parseResponse(
-          response,
+          terminalResponse,
           endpoint,
           ctx.invocationId,
           ctx.agentName,
@@ -256,7 +273,10 @@ export class OpenAIAdapter implements ModelAdapter {
     }
 
     return yield* withStreamRetry(createStream, {
-      config: retryConfig,
+      config: {
+        ...retryConfig,
+        retryableErrors: (error) => !emitted && (retryConfig.retryableErrors?.(error) ?? true),
+      },
       signal,
     })
   }
@@ -592,6 +612,15 @@ export function parseResponse(
     terminal: toolCalls.length === 0,
     usage: parseUsage(response.usage),
     finishReason: parseFinishReason(response.status, toolCalls.length > 0),
+  }
+}
+
+export function serializeOutputSchema(schema: NonNullable<RenderContext['outputSchema']>) {
+  return {
+    type: 'json_schema' as const,
+    name: 'output_schema',
+    strict: true,
+    schema: zodToToolSchema('output_schema', '', schema).parameters,
   }
 }
 

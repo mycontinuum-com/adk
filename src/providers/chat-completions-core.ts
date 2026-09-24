@@ -79,14 +79,14 @@ const chunkSchema = z.object({
           .array(
             z.object({
               index: z.number().int().nonnegative(),
-              id: z.string().optional(),
+              id: z.string().nullish(),
               type: z.literal('function').optional(),
               function: z
-                .object({ name: z.string().optional(), arguments: z.string().optional() })
-                .optional(),
+                .object({ name: z.string().nullish(), arguments: z.string().optional() })
+                .nullish(),
             }),
           )
-          .optional(),
+          .nullish(),
       }),
     }),
   ),
@@ -300,7 +300,12 @@ export class ChatCompletionsCore implements ModelAdapter {
           for await (const raw of stream) {
             signal?.throwIfAborted()
             const parsed = chunkSchema.safeParse(raw)
-            if (!parsed.success) throw new Error(`Invalid ${label} stream response`)
+            if (!parsed.success) {
+              const fields = parsed.error.issues.map(
+                (issue) => `${issue.path.join('.')}: ${issue.code}`,
+              )
+              throw new Error(`Invalid ${label} stream response (${fields.join(', ')})`)
+            }
             const chunk = parsed.data
             modelName = chunk.model
             servingProvider = chunk.provider ?? servingProvider
@@ -398,8 +403,11 @@ export class ChatCompletionsCore implements ModelAdapter {
           throw new Error(`${label} returned duplicate tool call IDs`)
         }
         const advertisedTools = new Set(request.tools?.map((tool) => tool.function.name))
-        if (wireCalls.some((call) => !advertisedTools.has(call.function.name))) {
-          throw new Error(`${label} returned an unadvertised tool`)
+        const unadvertised = wireCalls.find((call) => !advertisedTools.has(call.function.name))
+        if (unadvertised) {
+          throw new Error(
+            `${label} returned an unadvertised tool ${JSON.stringify(unadvertised.function.name.slice(0, 128))}; allowed tools: ${[...advertisedTools].join(', ') || '(none)'}`,
+          )
         }
         const continuation = { completionId, ...(scope && { scope }) }
         const providerContext = { provider, data: continuation }

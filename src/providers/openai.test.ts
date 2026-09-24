@@ -1,6 +1,7 @@
 import type { ResponseOutputItem } from 'openai/resources/responses/responses'
 
 import { z } from 'zod'
+import { z as z3 } from 'zod/v3'
 
 import type {
   Event,
@@ -22,6 +23,7 @@ import {
   serializeTools,
   serializeToolChoice,
   serializePromptCacheOptions,
+  serializeOutputSchema,
   OpenAIAdapter,
 } from './openai'
 
@@ -604,6 +606,51 @@ describe('OpenAI serialization', () => {
   })
 
   describe('serializeTools', () => {
+    it('emits JSON Schema null unions for nested nullable fields without losing constraints', () => {
+      const schema = z3.object({
+        datapoints: z3.array(
+          z3.object({
+            unit: z3.string().min(1).nullable().optional(),
+            date: z3.string().nullable().optional(),
+            nullable: z3.string(),
+          }),
+        ),
+      })
+      const [tool] = serializeTools([
+        { name: 'finish', description: 'Finish', schema, execute: () => ({}) },
+      ])
+      const expected = {
+        type: 'object',
+        properties: {
+          datapoints: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                unit: { anyOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+                date: { type: ['string', 'null'] },
+                nullable: { type: 'string' },
+              },
+              required: ['unit', 'date', 'nullable'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['datapoints'],
+        additionalProperties: false,
+      }
+      expect(tool.parameters).toEqual(expected)
+      expect(serializeOutputSchema(schema).schema).toEqual(expected)
+    })
+
+    it('does not duplicate existing null branches', () => {
+      const schema = z.object({ value: z.union([z.string(), z.null()]) })
+      const [tool] = serializeTools([
+        { name: 'finish', description: 'Finish', schema, execute: () => ({}) },
+      ])
+      expect(tool.parameters).toMatchObject({ properties: { value: { type: ['string', 'null'] } } })
+    })
+
     it('should serialize tools with zod schemas', () => {
       const tools: FunctionTool[] = [
         {

@@ -95,6 +95,37 @@ describe('BaseRunner', () => {
       ).rejects.toThrow('Timeout')
     })
 
+    test('timeout aborts a blocked tool and prevents another model call', async () => {
+      mockAdapter.setResponses([
+        { toolCalls: [{ name: 'wait_for_abort', args: {} }] },
+        { text: 'Should not run' },
+      ])
+      const runner = new BaseRunner({ adapters: { openai: mockAdapter } })
+      let toolSignal: AbortSignal | undefined
+      let toolStopped = false
+      const tool = app.tool({
+        name: 'wait_for_abort',
+        description: 'Wait for cancellation',
+        schema: z.object({}),
+        execute: async ({ signal }) => {
+          toolSignal = signal
+          await new Promise<void>((resolve) =>
+            signal?.addEventListener('abort', () => resolve(), { once: true }),
+          )
+          toolStopped = true
+          return {}
+        },
+      })
+
+      await expect(
+        runner.run(testAgent({ tools: [tool] }), createTestSession('Test'), { timeout: 50 }),
+      ).rejects.toThrow('Timeout after 50ms')
+      expect(toolSignal?.aborted).toBe(true)
+      expect(toolStopped).toBe(true)
+      await new Promise<void>((resolve) => setTimeout(resolve, 0))
+      expect(mockAdapter.stepCalls).toHaveLength(1)
+    })
+
     test('supports abort', async () => {
       mockAdapter.setResponses([{ text: 'Response', delayMs: 500 }])
       const runner = new BaseRunner({

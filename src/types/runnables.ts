@@ -54,7 +54,7 @@ export interface NoiseReductionConfig {
 export interface OpenAIModel extends BaseModelConfig {
   provider: 'openai'
   reasoning?: {
-    effort: 'none' | 'minimal' | 'low' | 'medium' | 'high'
+    effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
     summary?: 'auto' | 'detailed'
   }
   /** Explicit prompt caching for tagged context messages. */

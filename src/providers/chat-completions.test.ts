@@ -74,23 +74,28 @@ it.each([
   async ({ field, fragments, expected }) => {
     const http = fixture([
       sse([
-        ...fragments.map((part) => chunk({ [field]: part })),
+        ...fragments.map((part) => chunk({ [field]: part, tool_calls: null })),
+        chunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: 'wire-lookup',
+              type: 'function',
+              function: { name: 'lookup', arguments: '' },
+            },
+          ],
+        }),
         chunk(
           {
             tool_calls: [
-              {
-                index: 0,
-                id: 'wire-lookup',
-                type: 'function',
-                function: { name: 'lookup', arguments: '{}' },
-              },
+              { index: 0, id: null, type: 'function', function: { name: null, arguments: '{}' } },
             ],
           },
           'tool_calls',
         ),
       ]),
       sse([
-        ...fragments.map((part) => chunk({ [field]: part })),
+        ...fragments.map((part) => chunk({ [field]: part, tool_calls: null })),
         chunk({ content: 'First answer' }, 'stop'),
       ]),
       sse([chunk({ content: 'Second answer' }, 'stop')]),
@@ -276,7 +281,7 @@ it.each(['chat-completions', 'eurouter'] as const)(
                     index: 0,
                     id: 'forbidden-call',
                     type: 'function',
-                    function: { name: 'forbidden', arguments: '{}' },
+                    function: { name: 'forbidden', arguments: '{"sensitive":"private value"}' },
                   },
                 ],
               },
@@ -318,7 +323,7 @@ it.each(['chat-completions', 'eurouter'] as const)(
     )
     expect(executions).toEqual([])
     expect(outcome).toMatchObject({
-      message: `${provider === 'eurouter' ? 'EUrouter' : 'Chat Completions'} returned an unadvertised tool`,
+      message: `${provider === 'eurouter' ? 'EUrouter' : 'Chat Completions'} returned an unadvertised tool "forbidden"; allowed tools: allowed`,
     })
     expect(requests).toBe(1)
   },

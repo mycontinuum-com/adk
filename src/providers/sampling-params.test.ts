@@ -131,13 +131,17 @@ type CapturedOpenAI = { temperature?: number; reasoning?: unknown }
 function stubOpenAIStream(capture: (request: CapturedOpenAI) => void) {
   return (request: CapturedOpenAI) => {
     capture(request)
+    const response = {
+      status: 'completed',
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }
     return {
-      [Symbol.asyncIterator]: async function* () {},
+      [Symbol.asyncIterator]: async function* () {
+        yield { type: 'response.completed', response }
+      },
       abort: () => {},
-      finalResponse: async () => ({
-        output: [],
-        usage: { input_tokens: 1, output_tokens: 1 },
-      }),
+      finalResponse: async () => response,
     }
   }
 }
@@ -191,14 +195,14 @@ describe('OpenAI sampling parameters', () => {
     expect(request.temperature).toBe(0.2)
   })
 
-  it.each(['minimal', 'low', 'medium', 'high'])(
+  it.each(['minimal', 'low', 'medium', 'high', 'xhigh'])(
     'drops temperature with active %s reasoning',
     async (effort) => {
       const request = await runOpenAIStep({
         temperature: 0.2,
         reasoning: { effort },
       })
-      expect(request.reasoning).toBeDefined()
+      expect(request.reasoning).toEqual({ effort })
       expect(request).not.toHaveProperty('temperature')
     },
   )
