@@ -35,6 +35,9 @@ Migration section:
 
 ### Added
 
+- `ToolExecutionContext.note(message, opts)` — the tool context type now declares `ctx.note`, which tools could already call at runtime.
+- `mayLeaveProcess(event)` — whether a stream event may be sent outside the process. It returns `false` for `state_change`.
+- `Session.addStateChangeListener(listener)` — adds a state change listener alongside the `onStateChange` callback and returns a function that removes it. The listener receives the recording session; clones copy listeners. `StateChangeListener` is its type. A custom `Session` implementation must add it; the runner already required `BaseSession` at runtime.
 - `app.evaluate.cli(cases, options)` runs text and voice cases through a noninteractive CLI with `list`, `run`, exact case selection, repetition, JSON evidence and pass/fail exit codes.
 - `app.evaluate` and `app.evaluate.cases` accept mixed text/voice cases. Common scheduling uses one concurrency limit; voice-specific hooks, metrics and room configuration live under `options.voice`.
 - `openai.live('gpt-live-1', options)` declares a GPT Live voice agent. `app.handler.voice({ agent, backend, hooks })` delegates each Live request to an ordinary ADK backend agent with tools, typed result hooks and call-owned workflow state. See `docs/gpt-live.md`.
@@ -54,11 +57,44 @@ Migration section:
 - `app.cli(...)` → `app.terminal(...)`; subpath `./cli` → `./terminal`; `src/cli` → `src/terminal`. `CLIOptions`/`CLIConfig`/`CLIHandle`/`CLIStatus` → `TerminalOptions`/`TerminalConfig`/`TerminalHandle`/`TerminalStatus`. Renames the interactive terminal UI to stop colliding in name with `app.evaluate.cli`, which is unrelated and keeps its name.
 - `app.hook.cli()` → `app.hook.console()`; `cliHook` → `consoleHook`; `CliHookOptions` → `ConsoleHookOptions`; `src/hook/cli.ts` → `src/hook/console.ts`. Renames the ANSI console-print hook for the same reason.
 - `app.terminal(...)`'s default session's app name is now `'terminal'` (was `'cli'`) when no `session` is passed.
+- `onEvent` hooks — receive exactly the run's stream events, in stream order. Parallel branch events, including notes and handoff events, reach hooks when the branches settle, not as they happen. A parallel branch that ran before `failFast` stopped the run no longer reaches hooks. After a run yields or fails, hooks still receive events from spawned or dispatched work it left running.
+- Hook state changes — a run's hooks receive only the `state_change` events its own invocations record, including nested, spawned and dispatched work, until the run is aborted or that work finishes. Before, a run's hooks received every later state change on the session, including direct `session.state` writes and other runs' writes.
+- `app.handler.agui` and `AgUIAdapter.transform` — runs started with `ctx.run`, `spawn` or `dispatch` stay out of the conversation; with `includeSteps` they map to step events only. Before, spawned and dispatched agents' text streamed into the chat.
+- `app.handler.rest` and `app.handler.agui` — drop events for which `mayLeaveProcess` returns `false`, so neither exposes `state_change`. REST `events` now include nested runs and `tool_yield`; AG-UI emits a `CUSTOM` `TOOL_YIELD` event before `RUN_INTERRUPTED` and a `TOOL_CALL_RESULT` for an answered yield.
 
 ### Fixed
 
+- Run streams — a run's `StreamResult` now carries every event its invocations append, which hooks already saw: `tool_yield`, `state_change`, `ctx.note` annotations, answered-yield `tool_result`s, `beforeAgent` replies, parallel `merge` events, and nested `ctx.run`, `spawn` and `dispatch` runs with their `invocation_start`, input `user` event and `invocation_end`. Each invocation's events arrive in ledger order.
+- Spawned and dispatched runs — the stream stays open until they finish, including ones started inside a sequence, a loop or a transferred agent. Before, they could be cut off when their parent finished.
+- `ctx.run` — a nested run that throws appends an `invocation_end` with reason `error`, like `spawn` and `dispatch`.
+- `RunResult.status` — the runner returns the root runnable's status unchanged. Before, any status it did not map was reported as `aborted`. For `skipped`, `terminated`, `disconnected`, `participant_left` and `transferred`, `app.handler.turn`, `rest` and `agui` now run `afterTurn` hooks and commit the session, and `agui` ends with `RUN_FINISHED` instead of `RUN_ERROR`.
+- `app.parallel` — appends the parallel invocation's `invocation_start` (or `invocation_resume`) once, not once per branch.
+- Resumed yields — each resumed invocation answers only its own yielded calls. Before, parallel branches that yielded the same tool answered each other's calls.
+- A run no longer replaces the session's `onStateChange` callback when it starts.
 - Claude usage — `inputTokens` now includes cache reads and cache writes, `cachedTokens` reports cache reads and `cacheWriteTokens` reports cache writes, matching the other providers. Before, Anthropic's uncached-only `input_tokens` made `calculateCost` underprice cached calls and never count cache writes.
 - Realtime cost estimates — treat audio and cached-audio tokens as part of the input and output totals, as providers report them. Audio is no longer also charged at the text rate.
+
+### Removed
+
+- `InvocationContext.onStream` and `ToolContext.onStream` — events reach hooks only through the run's stream. Return data from the tool or use `ctx.note` instead.
+
+### Migration from 0.6.1
+
+#### State changes on in-process streams
+
+`app.run` and `app.handler.turn` streams now carry `state_change` events for every scope, including `patient` and `practice` state. If you forward stream events outside the process, drop the events for which `mayLeaveProcess(event)` returns `false`. `app.handler.rest` and `app.handler.agui` already do. Annotations do leave the process, so keep patient data out of `ctx.note` data.
+
+#### Hooks and the stream
+
+`onEvent` hooks now receive the same events as the run's stream. A hook that tracked parallel branches live now receives their events when the branches settle. `ctx.onStream` is gone; use `ctx.note` to emit an annotation.
+
+#### Nested runs at the edges
+
+REST `events` include nested runs; group them by `invocationId` and `parentInvocationId`. AG-UI clients no longer see spawned or dispatched agents' text in the chat; the tool call and its result represent the nested run.
+
+#### State changes in hooks
+
+A hook that relied on seeing direct `session.state` writes made outside any invocation, or another run's writes, no longer receives them. Use `session.addStateChangeListener` to observe every state change on a session.
 
 ## [0.6.1]
 

@@ -3,6 +3,7 @@ import type { RunResult, RunStatus, Output, TurnResult, UsageSummary } from '../
 import type { StateSchema } from '../types/schema'
 import type { HandlerInput, HandlerConfig } from './types'
 
+import { mayLeaveProcess } from '../types/events'
 import { turn } from './turn'
 
 export interface RestResponse {
@@ -33,7 +34,9 @@ export function restHandler<S extends StateSchema>(
     const it = turnStream[Symbol.asyncIterator]()
     let iterResult = await it.next()
     while (!iterResult.done) {
-      if (responseConfig.events) streamEvents.push(iterResult.value)
+      if (responseConfig.events && mayLeaveProcess(iterResult.value)) {
+        streamEvents.push(iterResult.value)
+      }
       iterResult = await it.next()
     }
     const result: TurnResult = iterResult.value

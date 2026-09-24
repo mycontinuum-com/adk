@@ -20,6 +20,14 @@ interface QueuedItem {
   abortReason?: string
 }
 
+export interface InMemoryChannelOptions {
+  /**
+   * Observes each event a producer offers, before any consumer reads it. It keeps observing after
+   * the stream has closed, for producers still running, until the channel is aborted.
+   */
+  onEvent?: (event: StreamEvent) => void
+}
+
 export class InMemoryChannel implements EventChannel {
   private readonly cancellation = new AbortController()
   private activeOperations = 0
@@ -44,6 +52,7 @@ export class InMemoryChannel implements EventChannel {
   }
 
   private queue: QueuedItem[] = []
+  private readonly onEvent?: (event: StreamEvent) => void
   private producers = new Map<string, Producer>()
   private mainProducerId?: string
   private closed = false
@@ -51,6 +60,18 @@ export class InMemoryChannel implements EventChannel {
   private abortReason?: string
   private directProducerCount = 0
   private waitingResolve?: () => void
+
+  constructor(options?: InMemoryChannelOptions) {
+    this.onEvent = options?.onEvent
+  }
+
+  private enqueue(producerId: string, event: StreamEvent): void {
+    if (this.aborted) return
+    this.onEvent?.(event)
+    if (this.closed) return
+    this.queue.push({ type: 'event', producerId, event })
+    this.notify()
+  }
 
   private notify(): void {
     if (this.waitingResolve) {
@@ -80,9 +101,7 @@ export class InMemoryChannel implements EventChannel {
   }
 
   push(event: StreamEvent): void {
-    if (this.closed || this.aborted) return
-    this.queue.push({ type: 'event', producerId: '__direct__', event })
-    this.notify()
+    this.enqueue('__direct__', event)
   }
 
   complete(result?: ProducerResult): void {
@@ -162,12 +181,7 @@ export class InMemoryChannel implements EventChannel {
           while (!iterResult.done) iterResult = await generator.next()
           break
         }
-        this.queue.push({
-          type: 'event',
-          producerId: id,
-          event: iterResult.value,
-        })
-        this.notify()
+        this.enqueue(id, iterResult.value)
         iterResult = await generator.next()
       }
 

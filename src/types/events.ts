@@ -379,6 +379,39 @@ export type StreamEvent =
   | ArtifactUpdateEvent
   | AnnotationEvent
 
+const MAY_LEAVE_PROCESS = {
+  system: true,
+  user: true,
+  assistant: true,
+  assistant_delta: true,
+  thought: true,
+  thought_delta: true,
+  tool_call: true,
+  tool_yield: true,
+  tool_input: true,
+  tool_result: true,
+  state_change: false,
+  invocation_start: true,
+  invocation_end: true,
+  invocation_yield: true,
+  invocation_resume: true,
+  model_start: true,
+  model_end: true,
+  artifact_update: true,
+  annotation: true,
+} satisfies Record<EventType, boolean>
+
+/**
+ * Whether a stream event may be sent outside the process, for example to a browser or an API
+ * client. `state_change` may not: it carries every state scope, including patient and practice
+ * state. Every other event may, including annotations, so do not put patient data in `ctx.note`
+ * data. `app.handler.rest` and `app.handler.agui` apply this; apply it yourself before forwarding
+ * `app.run` or `app.handler.turn` events.
+ */
+export function mayLeaveProcess(event: StreamEvent): boolean {
+  return MAY_LEAVE_PROCESS[event.type]
+}
+
 export function isSystemEvent(e: Event | StreamEvent): e is SystemEvent {
   return e.type === 'system'
 }

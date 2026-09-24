@@ -24,7 +24,6 @@ interface YieldInfo {
 }
 
 export interface InvocationBoundaryOptions<T> {
-  onStream?: (event: StreamEvent) => void
   getIterations?: (result: T) => number
   getEndReason?: (result: T) => InvocationEndReason
   getError?: (result: T) => string | undefined
@@ -77,7 +76,6 @@ export async function* withInvocationBoundary<T>(
     }
     await sessionService.appendEvent(session, endEvent)
     terminal = true
-    options?.onStream?.(endEvent)
     yield endEvent
   }
 
@@ -97,7 +95,6 @@ export async function* withInvocationBoundary<T>(
     }
     await sessionService.appendEvent(session, yieldEvent)
     terminal = true
-    options?.onStream?.(yieldEvent)
     yield yieldEvent
   }
 
@@ -120,7 +117,6 @@ export async function* withInvocationBoundary<T>(
         yieldIndex: resumeContext.yieldIndex,
       }
       await sessionService.appendEvent(session, resumeEvent)
-      options?.onStream?.(resumeEvent)
       yield resumeEvent
     } else {
       const isRootInvocation = !parentInvocationId
@@ -137,7 +133,6 @@ export async function* withInvocationBoundary<T>(
         version: isRootInvocation ? session.version : undefined,
       }
       await sessionService.appendEvent(session, startEvent)
-      options?.onStream?.(startEvent)
       yield startEvent
     }
 

@@ -345,6 +345,72 @@ describe('AgUIAdapter', () => {
     })
   })
 
+  describe('nested runs', () => {
+    const start = (invocationId: string, extra: object) => ({
+      ...base,
+      type: 'invocation_start' as const,
+      invocationId,
+      agentName: invocationId,
+      kind: 'agent' as const,
+      ...extra,
+    })
+    const say = (invocationId: string, delta: string) => ({
+      ...base,
+      type: 'assistant_delta' as const,
+      invocationId,
+      delta,
+      text: delta,
+    })
+
+    it('shows a spawned run and its descendants only as steps', () => {
+      const adapter = new AgUIAdapter('thread_1', 'run_1', { includeSteps: true })
+      const out = [
+        start('spawned', {
+          parentInvocationId: 'root',
+          handoffOrigin: { type: 'spawn', invocationId: 'root' },
+        }),
+        say('spawned', 'hidden'),
+        start('child', { parentInvocationId: 'spawned' }),
+        say('child', 'hidden'),
+        say('root', 'shown'),
+      ].flatMap((event) => adapter.transform(event))
+
+      expect(out.map((e) => [e.type, 'delta' in e ? e.delta : undefined])).toEqual([
+        [EventType.STEP_STARTED, undefined],
+        [EventType.STEP_STARTED, undefined],
+        [EventType.TEXT_MESSAGE_START, undefined],
+        [EventType.TEXT_MESSAGE_CONTENT, 'shown'],
+      ])
+    })
+
+    it('hides a run that a nested run transferred to', () => {
+      const adapter = new AgUIAdapter('thread_1', 'run_1')
+      adapter.transform(
+        start('delegated', {
+          parentInvocationId: 'root',
+          handoffOrigin: { type: 'run', invocationId: 'root' },
+        }),
+      )
+      adapter.transform(
+        start('target', { handoffOrigin: { type: 'transfer', invocationId: 'delegated' } }),
+      )
+
+      expect(adapter.transform(say('target', 'hidden'))).toEqual([])
+    })
+
+    it('keeps a transferred run in the conversation', () => {
+      const adapter = new AgUIAdapter('thread_1', 'run_1')
+      adapter.transform(
+        start('target', { handoffOrigin: { type: 'transfer', invocationId: 'root' } }),
+      )
+
+      expect(adapter.transform(say('target', 'shown')).map((e) => e.type)).toEqual([
+        EventType.TEXT_MESSAGE_START,
+        EventType.TEXT_MESSAGE_CONTENT,
+      ])
+    })
+  })
+
   describe('yield transformers', () => {
     it('uses custom yield transformer when provided', () => {
       const adapter = new AgUIAdapter('thread_1', 'run_1', {

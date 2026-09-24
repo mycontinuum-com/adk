@@ -57,11 +57,13 @@ Commit statuses:
 
 `app.handler.rest(config)` returns an async function producing JSON with `sessionId`, `status`, `output`, `yieldedTools`, optional `events`, optional `usage`, optional `state`, `error`, and `warning`.
 
-Use `response: { events: true, usage: true, state: true }` only when the caller needs those fields.
+Use `response: { events: true, usage: true, state: true }` only when the caller needs those fields. `events` never includes `state_change`; use `state` for the session state.
 
 ## AG-UI
 
-`app.handler.agui(config)` returns an async iterable of AG-UI SSE events. It maps ADK stream events into AG-UI text, reasoning, tool, state, step, interrupted, and finished events.
+`app.handler.agui(config)` returns an async iterable of AG-UI SSE events. It maps ADK stream events into AG-UI text, reasoning, tool, step, interrupted, and finished events, plus an initial empty state snapshot. The handler drops events for which `mayLeaveProcess(event)` returns `false` before they reach the adapter, so `state_change`, which carries every scope including patient and practice state, never crosses this edge. `AgUIAdapter.transform` still maps `state_change` to `STATE_DELTA` for callers that use the adapter directly.
+
+A run started with `ctx.run`, `spawn` or `dispatch` stays out of the AG-UI conversation: the chat shows the tool call that started it and its result, and the nested run appears only as step events when steps are on. REST `events` include nested runs; use `invocationId` and `parentInvocationId` to group them.
 
 For lower-level AG-UI adapter work, see `src/agui/`.
 
@@ -151,7 +153,7 @@ Common stream events:
 - `model_start`, `model_end`
 - `artifact_update`
 
-Use `model_start`/`model_end` for observability, context inspection, usage, cost, duration, and provider finish metadata.
+A run's stream carries every event its invocations append to the session, plus the deltas. This includes the events of nested runs started with `ctx.run`, `spawn` or `dispatch`, with their `invocation_start` and `invocation_end`. Each invocation's events arrive in ledger order. Events from a spawned or dispatched run that proceeds alongside its parent interleave with the parent's in arrival order. Parallel branch events arrive when the branches settle. A spawn or dispatch started inside a parallel branch that outlives the branch keeps recording into the branch's session, so its later events reach neither the parent session nor the stream; await it inside the branch. A separate `runner.run` that a tool starts on the same session streams its events only to its own stream. `onEvent` hooks receive exactly the stream's events, in the same order. If a run yields or fails while spawned or dispatched work is still running, its hooks also receive that work's events until it finishes, although its stream has ended; an aborted run's hooks receive nothing further. A `state_change` belongs to a run when the run's own invocations recorded it, including its nested, spawned and dispatched work. Once its main work settles, a run keeps only the spawns and dispatches still open, so a later run that resumes the same invocation receives its own changes. A direct `session.state` write outside any invocation belongs to no run. `state_change` events cover every scope, including patient and practice state, so drop events for which `mayLeaveProcess(event)` returns `false` before forwarding them outside the process. Use `model_start`/`model_end` for observability: step index, message count, tool summaries, output schema, usage, cost, duration, and finish reason. They do not carry the rendered context.
 
 ## Terminal
 

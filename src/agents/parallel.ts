@@ -31,14 +31,11 @@ export interface ParallelResumeContext extends ResumeContext {
 async function executeBranch(
   branch: BranchExecution,
   generator: AsyncGenerator<StreamEvent, RunResult>,
-  onStream?: (event: StreamEvent) => void,
 ): Promise<void> {
   try {
     let iterResult = await generator.next()
     while (!iterResult.done) {
-      const event = iterResult.value
-      branch.events.push(event)
-      onStream?.(event)
+      branch.events.push(iterResult.value)
       iterResult = await generator.next()
     }
     branch.result = iterResult.value
@@ -49,6 +46,27 @@ async function executeBranch(
 
 function getNewBranchEvents(branchSession: Session, parentEventCount: number): Event[] {
   return branchSession.events.slice(parentEventCount)
+}
+
+function isDelta(event: StreamEvent): boolean {
+  return event.type === 'assistant_delta' || event.type === 'thought_delta'
+}
+
+function withBranchDeltas(ledgerSlice: Event[], branchStream: StreamEvent[]): StreamEvent[] {
+  const deltasBefore = new Map<string, StreamEvent[]>()
+  let pending: StreamEvent[] = []
+  for (const event of branchStream) {
+    if (isDelta(event)) {
+      pending.push(event)
+    } else {
+      deltasBefore.set(event.id, pending)
+      pending = []
+    }
+  }
+  return [
+    ...ledgerSlice.flatMap((event) => [...(deltasBefore.get(event.id) ?? []), event]),
+    ...pending,
+  ]
 }
 
 function createBranchAbortSignal(
@@ -83,7 +101,6 @@ export async function* runParallel(
   resumeContext?: ParallelResumeContext,
 ): AsyncGenerator<StreamEvent, RunResult> {
   const invocationId = resumeContext?.invocationId ?? createInvocationId()
-  const parentEventCount = session.events.length
   const currentYieldIndex = resumeContext ? resumeContext.yieldIndex + 1 : 0
 
   async function* execute(): AsyncGenerator<StreamEvent, WorkflowResult<Parallel>> {
@@ -91,6 +108,7 @@ export async function* runParallel(
       ? resumeContext.yieldedBranchIndices
       : runnable.runnables.map((_, i) => i)
     const alreadyCompleted = resumeContext?.completedBranchIndices ?? []
+    const parentEventCount = session.events.length
 
     const branchSignals = branchesToRun.map(() =>
       createBranchAbortSignal(signal, runnable.branchTimeout),
@@ -106,19 +124,17 @@ export async function* runParallel(
 
     const generators = branches.map((branch, i) => {
       const branchResumeContext = resumeContext?.branchResumeContexts.get(branch.index)
-      return runnerConfig.run(
+      return runnerConfig.runDetached(
         runnable.runnables[branch.index],
         branch.session,
-        { ...config, onStream: undefined },
+        config,
         branchSignals[i].signal,
         invocationId,
         branchResumeContext,
       )
     })
 
-    const branchPromises = branches.map((branch, i) =>
-      executeBranch(branch, generators[i], config?.onStream),
-    )
+    const branchPromises = branches.map((branch, i) => executeBranch(branch, generators[i]))
 
     try {
       if (runnable.failFast) {
@@ -151,10 +167,7 @@ export async function* runParallel(
       for (const event of newEvents) {
         await runnerConfig.sessionService.appendEvent(session, event)
       }
-    }
-
-    for (const event of branches.flatMap((b) => b.events)) {
-      yield event
+      yield* withBranchDeltas(newEvents, branch.events)
     }
 
     const totalIterations = branches.reduce((sum, b) => sum + (b.result?.iterations ?? 0), 0)
@@ -208,6 +221,7 @@ export async function* runParallel(
       }
       for (const event of runnable.merge(mergeCtx)) {
         await runnerConfig.sessionService.appendEvent(session, event)
+        yield event
       }
     }
 
@@ -222,7 +236,6 @@ export async function* runParallel(
     runnerConfig.sessionService,
     execute(),
     createInvocationBoundaryOptions<Parallel>({
-      onStream: config?.onStream,
       fingerprint: runnerConfig.fingerprint,
     }),
     resumeContext,

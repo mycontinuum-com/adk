@@ -149,14 +149,15 @@ async function applyAfterTool(
   return (await composedHook.afterTool?.(toolCtx, result)) ?? result
 }
 
-async function processResumedYields(
+async function* processResumedYields(
   agent: Agent,
   session: Session,
   ctx: InvocationContext,
   runnerConfig: AgentRunnerConfig,
-  onStream?: (event: StreamEvent) => void,
-): Promise<void> {
-  const toolYields = session.events.filter((e): e is ToolYieldEvent => e.type === 'tool_yield')
+): AsyncGenerator<StreamEvent, void> {
+  const toolYields = session.events.filter(
+    (e): e is ToolYieldEvent => e.type === 'tool_yield' && e.invocationId === ctx.invocationId,
+  )
 
   for (const yieldEvent of toolYields) {
     const existingResult = session.events.find(
@@ -183,7 +184,6 @@ async function processResumedYields(
       ctx.session,
       runnerConfig.sessionService,
       runnerConfig.subRunner,
-      onStream,
       runnerConfig.signal,
       runnerConfig.channel,
     )
@@ -206,7 +206,7 @@ async function processResumedYields(
           providerContext: toolCall.providerContext,
         }
         await runnerConfig.sessionService.appendEvent(session, errorResult)
-        onStream?.(errorResult)
+        yield errorResult
         continue
       }
       userInput = parsed.data
@@ -247,7 +247,7 @@ async function processResumedYields(
         providerContext: toolCall.providerContext,
       }
       await runnerConfig.sessionService.appendEvent(session, resultEvent)
-      onStream?.(resultEvent)
+      yield resultEvent
     } catch (error) {
       const errorResult: ToolResultEvent = {
         id: createEventId(),
@@ -262,7 +262,7 @@ async function processResumedYields(
         providerContext: toolCall.providerContext,
       }
       await runnerConfig.sessionService.appendEvent(session, errorResult)
-      onStream?.(errorResult)
+      yield errorResult
     }
   }
 }
@@ -575,8 +575,7 @@ async function* executeModelStep(
   stepStartTime: number,
   signal: AbortSignal,
 ): AsyncGenerator<StreamEvent, ModelStepOutcome> {
-  const { agent, composedHook, runnerConfig, ctx, config, errorHandler, invocationId, iterations } =
-    mctx
+  const { agent, composedHook, runnerConfig, ctx, errorHandler, invocationId, iterations } = mctx
   const adapter = await runnerConfig.getAdapter(agent.model)
 
   signal.throwIfAborted()
@@ -605,7 +604,6 @@ async function* executeModelStep(
       const stream = adapter.step(renderCtx, getInnerModel(agent.model), signal)
       let iterResult = await stream.next()
       while (!iterResult.done) {
-        config?.onStream?.(iterResult.value)
         yield iterResult.value
         iterResult = await stream.next()
       }
@@ -627,7 +625,6 @@ async function* executeModelStep(
             error: (err as Error).message,
           })
           await runnerConfig.sessionService.appendEvent(mctx.session, endEvent)
-          config?.onStream?.(endEvent)
           yield endEvent
           throw err
         }
@@ -677,7 +674,6 @@ async function* processToolCalls(
       ctx.session,
       runnerConfig.sessionService,
       runnerConfig.subRunner,
-      config?.onStream,
       runnerConfig.signal,
       runnerConfig.channel,
     )
@@ -697,7 +693,6 @@ async function* processToolCalls(
     )
 
     await runnerConfig.sessionService.appendEvent(session, resultEvent)
-    config?.onStream?.(resultEvent)
     yield resultEvent
     config?.onStep?.([resultEvent], session, agent)
 
@@ -814,7 +809,6 @@ async function* executeAgentLoop(
     agent,
     parentInvocationId,
     runnerConfig.subRunner,
-    config?.onStream,
     runnerConfig.signal,
     runnerConfig.channel,
     config?.voice,
@@ -837,7 +831,7 @@ async function* executeAgentLoop(
   }
 
   if (resumeContext) {
-    await processResumedYields(agent, session, ctx, runnerConfig, config?.onStream)
+    yield* processResumedYields(agent, session, ctx, runnerConfig)
   }
 
   const skipAgent = await composedHook.beforeAgent?.(ctx)
@@ -858,6 +852,7 @@ async function* executeAgentLoop(
   if (typeof skipAgent === 'string') {
     const skipEvent = textToAssistantEvent(skipAgent, invocationId, agent.name)
     await runnerConfig.sessionService.appendEvent(session, skipEvent)
+    yield skipEvent
     config?.onStep?.([skipEvent], session, agent)
     return {
       session,
@@ -934,7 +929,6 @@ async function* executeAgentLoop(
 
       const startEvent = createStartEvent(renderCtx, iterations + 1, invocationId)
       await runnerConfig.sessionService.appendEvent(session, startEvent)
-      config?.onStream?.(startEvent)
       yield startEvent
 
       const { stepResult, modelError, shouldAbort, transfer, synthetic } = yield* executeModelStep(
@@ -980,7 +974,6 @@ async function* executeAgentLoop(
           error: modelError,
         })
         await runnerConfig.sessionService.appendEvent(session, endEvent)
-        config?.onStream?.(endEvent)
         yield endEvent
         break
       }
@@ -995,7 +988,6 @@ async function* executeAgentLoop(
           error: modelError,
         })
         await runnerConfig.sessionService.appendEvent(session, endEvent)
-        config?.onStream?.(endEvent)
         yield endEvent
         continue
       }
@@ -1031,14 +1023,12 @@ async function* executeAgentLoop(
         finishReason: finalStepResult.finishReason,
       })
       await runnerConfig.sessionService.appendEvent(session, endEvent)
-      config?.onStream?.(endEvent)
       yield endEvent
 
       enrichToolCallsWithYieldFlag(finalStepResult.toolCalls, agent.tools.filter(isFunctionTool))
 
       for (const event of finalStepResult.stepEvents) {
         await runnerConfig.sessionService.appendEvent(session, event)
-        config?.onStream?.(event)
         yield event
       }
 
@@ -1071,7 +1061,6 @@ async function* executeAgentLoop(
             ctx.session,
             runnerConfig.sessionService,
             runnerConfig.subRunner,
-            config?.onStream,
             runnerConfig.signal,
             runnerConfig.channel,
           )
@@ -1084,7 +1073,6 @@ async function* executeAgentLoop(
             runnerConfig.channel,
           )
           await runnerConfig.sessionService.appendEvent(session, resultEvent)
-          config?.onStream?.(resultEvent)
           yield resultEvent
           config?.onStep?.([resultEvent], session, agent)
         }
@@ -1102,7 +1090,6 @@ async function* executeAgentLoop(
             ctx.session,
             runnerConfig.sessionService,
             runnerConfig.subRunner,
-            config?.onStream,
             runnerConfig.signal,
             runnerConfig.channel,
           )
@@ -1121,7 +1108,6 @@ async function* executeAgentLoop(
               durationMs: 0,
             }
             await runnerConfig.sessionService.appendEvent(session, errorResultEvent)
-            config?.onStream?.(errorResultEvent)
             yield errorResultEvent
             continue
           }
@@ -1149,7 +1135,7 @@ async function* executeAgentLoop(
             agentName: toolCall.agentName,
           }
           await runnerConfig.sessionService.appendEvent(session, yieldEvent)
-          config?.onStream?.(yieldEvent)
+          yield yieldEvent
           yieldEvents.push(yieldEvent)
         }
 
@@ -1285,7 +1271,6 @@ export async function* runAgent(
   )
 
   const options: InvocationBoundaryOptions<AgentResult> = {
-    onStream: config?.onStream,
     getIterations: (r) => r.iterations,
     getEndReason: (r) => (r.outcome === 'yielded' ? 'completed' : (r.outcome ?? 'completed')),
     getError: (r) => r.error,

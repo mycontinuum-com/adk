@@ -79,7 +79,6 @@ export async function* runSequence(
     runnerConfig.sessionService,
     execute(),
     createInvocationBoundaryOptions<Sequence>({
-      onStream: config?.onStream,
       fingerprint: runnerConfig.fingerprint,
     }),
     resumeContext,

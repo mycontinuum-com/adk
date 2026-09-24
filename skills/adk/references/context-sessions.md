@@ -75,7 +75,7 @@ Session API:
 - `id`, `appName`, `version`, `scopes`, `events`, `state`, `status`, `yieldedTools`, `currentAgentName`, `createdAt`.
 - `input.message(text | MessageInput)`, `input.tool({ callId, input })`, `input.tools([...])`.
 - `output.text`, `output.value`, `output.items`, `output.media`.
-- `boundState(invocationId)`, `clone()`, `eventIndexOf(id)`, `stateAt(index)`, `forkAt(index)`, `onStateChange(cb)`.
+- `boundState(invocationId)`, `clone()`, `eventIndexOf(id)`, `stateAt(index)`, `forkAt(index)`, `onStateChange(callback)` (one callback; a later call replaces it). `addStateChangeListener(listener)` adds a listener alongside it and returns a function that removes it; the listener receives the event and the session that recorded it, and a clone copies both.
 - Spawned task helpers: `getSpawnedTaskStatus`, `getRunningSpawnedTasks`, `getAllSpawnedTasks`, `waitForSpawnedTask`, `waitForAllSpawnedTasks`, `hasRunningSpawnedTasks`.
 
 `app.sessions` exposes `create`, `get`, `delete`, `list`, `commit`, and `merge`. Use `commit` for normal optimistic persistence and `merge` only when a handler-style conflict policy has deliberately accepted newer committed input.

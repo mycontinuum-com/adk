@@ -121,7 +121,6 @@ export async function* runLoop(
     runnerConfig.sessionService,
     execute(),
     createInvocationBoundaryOptions<Loop>({
-      onStream: config?.onStream,
       fingerprint: runnerConfig.fingerprint,
     }),
     resumeContext,

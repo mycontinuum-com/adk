@@ -484,6 +484,65 @@ describe('BaseSession', () => {
         }),
       )
     })
+
+    test('a later callback replaces the earlier one and the session is returned', () => {
+      const session = new BaseSession('app', { id: 'test' })
+      const first: string[] = []
+      const second: string[] = []
+
+      const returned = session.onStateChange((event) => first.push(event.changes[0].key))
+      session.onStateChange((event) => second.push(event.changes[0].key))
+      session.state.key = 'value'
+
+      expect(returned).toBe(session)
+      expect(first).toEqual([])
+      expect(second).toEqual(['key'])
+    })
+  })
+
+  describe('addStateChangeListener', () => {
+    test('every listener and the callback receive each change', () => {
+      const session = new BaseSession('app', { id: 'test' })
+      const callback: string[] = []
+      const first: string[] = []
+      const second: string[] = []
+
+      session.onStateChange((event) => callback.push(event.changes[0].key))
+      session.addStateChangeListener((event) => first.push(event.changes[0].key))
+      session.addStateChangeListener((event) => second.push(event.changes[0].key))
+      session.state.key = 'value'
+
+      expect(callback).toEqual(['key'])
+      expect(first).toEqual(['key'])
+      expect(second).toEqual(['key'])
+    })
+
+    test('a removed listener receives nothing further', () => {
+      const session = new BaseSession('app', { id: 'test' })
+      const seen: string[] = []
+
+      const remove = session.addStateChangeListener((event) => seen.push(event.changes[0].key))
+      session.state.before = 1
+      remove()
+      session.state.after = 2
+
+      expect(seen).toEqual(['before'])
+    })
+
+    test('a clone reports its changes to the callback and listeners it copied, naming itself', () => {
+      const session = new BaseSession('app', { id: 'test' })
+      const callback: string[] = []
+      const origins: unknown[] = []
+      session.onStateChange((event) => callback.push(event.changes[0].key))
+      session.addStateChangeListener((_event, origin) => origins.push(origin))
+
+      const clone = session.clone()
+      clone.state.key = 'value'
+
+      expect(callback).toEqual(['key'])
+      expect(origins).toEqual([clone])
+      expect(session.events.filter((e) => e.type === 'state_change')).toEqual([])
+    })
   })
 
   describe('toJSON', () => {

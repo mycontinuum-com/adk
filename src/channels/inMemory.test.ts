@@ -43,6 +43,41 @@ async function drainChannel(channel: InMemoryChannel) {
 }
 
 describe('InMemoryChannel', () => {
+  it('reports each enqueued event and settles once every producer finishes, unread', async () => {
+    const observed: string[] = []
+    const channel = new InMemoryChannel({
+      onEvent: (event) =>
+        observed.push(event.type === 'assistant_delta' ? event.delta : event.type),
+    })
+    void channel.settled.then(() => observed.push('settled'))
+    let releaseSlow: () => void = () => {}
+    const slowReleased = new Promise<void>((resolve) => {
+      releaseSlow = resolve
+    })
+    async function* main(): AsyncGenerator<
+      StreamEvent,
+      { status: 'completed'; iterations: number }
+    > {
+      yield createDeltaEvent('main')
+      return { status: 'completed', iterations: 1 }
+    }
+    async function* slow(): AsyncGenerator<StreamEvent, void> {
+      await slowReleased
+      yield createDeltaEvent('slow')
+    }
+
+    const mainDone = channel.registerGenerator('main', main(), true)
+    const slowDone = channel.registerGenerator('slow', slow())
+    await mainDone
+    const beforeSlow = [...observed]
+    releaseSlow()
+    await slowDone
+    await channel.settled
+
+    expect(beforeSlow).toEqual(['main'])
+    expect(observed).toEqual(['main', 'slow', 'settled'])
+  })
+
   let channel: InMemoryChannel
 
   beforeEach(() => {

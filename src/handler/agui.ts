@@ -3,6 +3,7 @@ import type { AGUIEvent } from '@ag-ui/core'
 import type { StateSchema } from '../types/schema'
 import type { HandlerInput, HandlerConfig } from './types'
 
+import { mayLeaveProcess } from '../types/events'
 import { turn } from './turn'
 
 export function aguiHandler<S extends StateSchema>(
@@ -32,8 +33,10 @@ async function* generateEvents<S extends StateSchema>(
     const it = turnStream[Symbol.asyncIterator]()
     let iterResult = await it.next()
     while (!iterResult.done) {
-      for (const aguiEvent of adapter.transform(iterResult.value)) {
-        yield aguiEvent
+      if (mayLeaveProcess(iterResult.value)) {
+        for (const aguiEvent of adapter.transform(iterResult.value)) {
+          yield aguiEvent
+        }
       }
       iterResult = await it.next()
     }

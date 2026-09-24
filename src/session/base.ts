@@ -21,6 +21,7 @@ import type { StateSchema, TypedState, ScopeState } from '../types/schema'
 import type {
   Session,
   SessionStatus,
+  StateChangeListener,
   SessionInputNamespace,
   SpawnedTaskStatus,
   MessageInput,
@@ -219,6 +220,7 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
   readonly createdAt: number
   private _events: Event[] = []
   private stateChangeCallback?: (event: StateChangeEvent) => void
+  private stateChangeListeners = new Set<StateChangeListener>()
   private sharedStates = new Map<string, SharedStateBinding>()
   private cachedState: TypedState<S> | null = null
   private tempState = new Map<string, Record<string, unknown>>()
@@ -398,8 +400,7 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
         invocationId,
         changes: [{ key, oldValue, newValue }],
       }
-      this.appendEvent(event)
-      this.stateChangeCallback?.(event)
+      this.recordStateChange(event)
     }
 
     const checkConcurrentWrite = (key: string) => {
@@ -469,8 +470,7 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
           invocationId,
           changes: [{ key, oldValue, newValue }],
         }
-        this.appendEvent(event)
-        this.stateChangeCallback?.(event)
+        this.recordStateChange(event)
       },
     })
 
@@ -575,9 +575,36 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
     return this.createTypedState(invocationId, 'mutation') as unknown as TypedState<T>
   }
 
+  /**
+   * Sets the single state change callback, replacing any earlier one.
+   *
+   * @param callback Receives each state change this session records.
+   * @returns This session, for chaining.
+   */
   onStateChange(callback: (event: StateChangeEvent) => void): this {
     this.stateChangeCallback = callback
     return this
+  }
+
+  /**
+   * Adds a listener for every state change this session records, alongside the `onStateChange`
+   * callback. A clone copies the listeners it was made with and reports its own changes to them
+   * with itself as `origin`.
+   *
+   * @param listener Receives the change and the session that recorded it.
+   * @returns A function that removes the listener from this session only.
+   */
+  addStateChangeListener(listener: StateChangeListener): () => void {
+    this.stateChangeListeners.add(listener)
+    return () => {
+      this.stateChangeListeners.delete(listener)
+    }
+  }
+
+  private recordStateChange(event: StateChangeEvent): void {
+    this.appendEvent(event)
+    this.stateChangeCallback?.(event)
+    for (const listener of this.stateChangeListeners) listener(event, this)
   }
 
   private appendEvent(event: Event): void {
@@ -742,6 +769,7 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
     })
     cloned._events = structuredClone(this._events)
     cloned.stateChangeCallback = this.stateChangeCallback
+    cloned.stateChangeListeners = new Set(this.stateChangeListeners)
     for (const [scope, binding] of this.sharedStates) {
       cloned.sharedStates.set(scope, binding)
     }

@@ -61,7 +61,6 @@ function createStepContext(
     sessionService: runnerConfig.sessionService,
     invocationId,
     subRunner: runnerConfig.subRunner,
-    onStream: runnerConfig.onStream,
     signal: runnerConfig.signal,
     channel: runnerConfig.channel,
   })
@@ -192,7 +191,6 @@ export async function* runStep(
               text: sig.text,
             }
             await runnerConfig.sessionService.appendEvent(session, assistantEvent)
-            config?.onStream?.(assistantEvent)
             yield assistantEvent
 
             return createTerminalResult(runnable, session, currentYieldIndex, 0, 'completed')
@@ -213,7 +211,6 @@ export async function* runStep(
     runnerConfig.sessionService,
     execute(),
     createInvocationBoundaryOptions<Step>({
-      onStream: config?.onStream,
       fingerprint: runnerConfig.fingerprint,
     }),
     resumeContext,

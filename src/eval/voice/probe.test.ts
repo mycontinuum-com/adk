@@ -315,7 +315,9 @@ describe('runVoiceProbe lifecycle', () => {
   })
 
   it('validates duration and complete fixture fit before allocating a driver', async () => {
-    const createDriver = vi.fn<Parameters<typeof executeVoiceProbe>[1]>(async () => fixture().driver)
+    const createDriver = vi.fn<Parameters<typeof executeVoiceProbe>[1]>(
+      async () => fixture().driver,
+    )
     await expect(
       executeVoiceProbe({ ...options, durationMs: 120_020 }, createDriver),
     ).rejects.toThrow('durationMs')

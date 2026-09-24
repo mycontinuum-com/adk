@@ -37,7 +37,6 @@ export interface RunConfig {
 
 export interface InternalRunConfig extends RunConfig {
   onStep?: (stepEvents: Event[], session: Session, runnable: Runnable<ErasedStateSchema>) => void
-  onStream?: (event: StreamEvent) => void
 }
 
 export interface CostEstimate {

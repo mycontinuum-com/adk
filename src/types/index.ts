@@ -61,10 +61,12 @@ export {
   isModelEndEvent,
   isArtifactUpdateEvent,
   isAnnotationEvent,
+  mayLeaveProcess,
 } from './events'
 
 export type {
   SessionStatus,
+  StateChangeListener,
   Session,
   SessionInputNamespace,
   Input,

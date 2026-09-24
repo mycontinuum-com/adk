@@ -210,6 +210,7 @@ export {
   isModelEndEvent,
   isArtifactUpdateEvent,
   isAnnotationEvent,
+  mayLeaveProcess,
 } from './types'
 
 export type {
@@ -265,6 +266,7 @@ export type {
   PartialOutputState,
   ParsedOutput,
   SessionStatus,
+  StateChangeListener,
   Session,
   SessionInputNamespace,
   Input,

@@ -283,7 +283,7 @@ describe('Event Consistency', () => {
   })
 
   describe('4. Parity - iterator and callbacks receive identical events', () => {
-    test('iterator and onStream receive same events', async () => {
+    test('iterator and onEvent hooks receive the same events', async () => {
       mockAdapter.setResponses([{ thought: 'Thinking', text: 'Response', streamChunks: true }])
 
       const iteratorEvents: StreamEvent[] = []

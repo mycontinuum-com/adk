@@ -5,9 +5,7 @@ import { z as z3 } from 'zod/v3'
 import { MockAdapter } from '../testing'
 import { adk } from './app'
 
-function stage(
-  value: z.ZodType<string> = z.string().default('stage default'),
-) {
+function stage(value: z.ZodType<string> = z.string().default('stage default')) {
   const app = adk({ name: 'stage', schema: { session: { value, result: z.string().optional() } } })
   const agent = app.agent({
     name: 'stage-model',
@@ -143,11 +141,13 @@ it('uses declared state input without forwarding the parent invocation message',
   await child.close()
 })
 
-
 it('binds a Zod 3 child inside a mixed-version parent', async () => {
   const child = adk({ name: 'v3-child', schema: { session: { value: z3.string().default('v3') } } })
   const runnable = child.step({ name: 'read-value', execute: (ctx) => ctx.output(ctx.state.value) })
-  const parent = adk({ name: 'mixed-parent', schema: { session: { ...child.schema.session, extra: z.number().default(7) } } })
+  const parent = adk({
+    name: 'mixed-parent',
+    schema: { session: { ...child.schema.session, extra: z.number().default(7) } },
+  })
   const result = await parent.run(parent.bind({ app: child, runnable }), { input: { state: {} } })
   expect(result.status).toBe('completed')
   expect(result.output.value).toBe('v3')

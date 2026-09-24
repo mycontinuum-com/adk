@@ -20,6 +20,7 @@ export class AgUIAdapter {
   private inReasoning = false
   private reasoningPhaseId: string | null = null
   private reasoningMsgId: string | null = null
+  private nestedInvocations = new Set<string>()
 
   constructor(sessionId: string, runId: string, options?: AdapterOptions) {
     this.sessionId = sessionId
@@ -43,7 +44,33 @@ export class AgUIAdapter {
     }
   }
 
+  /**
+   * A run started with ctx.run, spawn or dispatch, and every invocation beneath it, belongs to the
+   * tool that started it: the chat shows that tool's call and result, and the nested run only as a
+   * step. Its text, reasoning and tool calls stay out of the conversation.
+   */
+  private isNested(event: StreamEvent): boolean {
+    if (event.type === 'invocation_start') {
+      const origin = event.handoffOrigin
+      const enclosing = origin?.type === 'transfer' ? origin.invocationId : event.parentInvocationId
+      if (
+        (origin && origin.type !== 'transfer') ||
+        (enclosing && this.nestedInvocations.has(enclosing))
+      ) {
+        this.nestedInvocations.add(event.invocationId)
+      }
+    }
+    return event.invocationId !== undefined && this.nestedInvocations.has(event.invocationId)
+  }
+
   transform(event: StreamEvent): AGUIEvent[] {
+    if (
+      this.isNested(event) &&
+      event.type !== 'invocation_start' &&
+      event.type !== 'invocation_end'
+    ) {
+      return []
+    }
     const out: AGUIEvent[] = []
     const base = this.baseFields(event)
 

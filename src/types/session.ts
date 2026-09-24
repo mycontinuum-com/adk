@@ -6,6 +6,12 @@ import type { StateSchema, TypedState } from './schema'
 
 export type SessionStatus = 'active' | 'awaiting_input' | 'completed' | 'error'
 
+/**
+ * Receives a state change and the session that recorded it. `origin` is the session the listener
+ * was added to, or a clone of it, such as a parallel branch's session.
+ */
+export type StateChangeListener = (event: StateChangeEvent, origin: Session) => void
+
 export interface SpawnedTaskStatus {
   invocationId: string
   agentName: string
@@ -61,6 +67,12 @@ export interface Session<S extends StateSchema = StateSchema> {
   stateAt(eventIndex: number): SessionSnapshot
   forkAt(eventIndex: number): Session
   onStateChange(callback: (event: StateChangeEvent) => void): this
+  /**
+   * Adds a listener for every state change this session records, alongside the `onStateChange`
+   * callback. A clone copies the listeners it was made with and reports its own changes to them
+   * with itself as `origin`. Returns a function that removes the listener from this session only.
+   */
+  addStateChangeListener(listener: StateChangeListener): () => void
   getSpawnedTaskStatus(invocationId: string): SpawnedTaskStatus | undefined
   getRunningSpawnedTasks(): SpawnedTaskStatus[]
   getAllSpawnedTasks(): SpawnedTaskStatus[]

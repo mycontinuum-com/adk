@@ -1,5 +1,5 @@
 import type { WorkflowRunnerConfig } from '../agents/config'
-import type { EventChannel } from '../channels/types'
+import type { ChannelResult, EventChannel } from '../channels/types'
 import type { ErrorHandler } from '../errors/types'
 import type { Hook } from '../hook/types'
 import type {
@@ -339,6 +339,86 @@ export function createStreamResult<T>(
   }
 }
 
+/**
+ * Builds the caller-facing `RunResult` from the root runnable's own result.
+ *
+ * @param mainResult The root runnable's result, or `undefined` when the run ended before producing
+ *   one, which yields an `aborted` result.
+ * @param session The session the run executed on; its current state, usage and output are attached.
+ * @param runnable The root runnable.
+ * @returns The root status unchanged, with session, state and usage attached.
+ */
+export function resolveRunResult(
+  mainResult: RunResult | undefined,
+  session: Session,
+  runnable: Runnable<ErasedStateSchema>,
+): RunResult {
+  if (!mainResult) {
+    return {
+      session,
+      state: session.state,
+      iterations: 0,
+      runnable,
+      status: 'aborted',
+      output: computeOutput(session.events),
+    }
+  }
+  return {
+    ...mainResult,
+    runnable,
+    session,
+    state: session.state,
+    usage: computeUsageSummary(session.events),
+  }
+}
+
+function isHandoffStart(event: StreamEvent): event is InvocationStartEvent {
+  return (
+    event.type === 'invocation_start' &&
+    (event.handoffOrigin?.type === 'spawn' || event.handoffOrigin?.type === 'dispatch')
+  )
+}
+
+/**
+ * The invocations whose state changes a run delivers. While its main work runs, a run owns every
+ * invocation that starts or resumes on its stream. Once that work settles, it keeps only the spawns
+ * and dispatches still open and what runs beneath them, so a later run that resumes the same root
+ * invocation receives its own writes.
+ */
+function trackOwnership() {
+  const owned = new Set<string>()
+  const parents = new Map<string, string | undefined>()
+  const openHandoffs = new Set<string>()
+  let mainRunning = true
+
+  const underOpenHandoff = (invocationId: string): boolean => {
+    for (let id: string | undefined = invocationId; id; id = parents.get(id)) {
+      if (openHandoffs.has(id)) return true
+    }
+    return false
+  }
+
+  return {
+    owns: (invocationId: string | undefined) =>
+      invocationId !== undefined && owned.has(invocationId),
+    observe(event: StreamEvent) {
+      if (event.type === 'invocation_start' || event.type === 'invocation_resume') {
+        const parent = event.parentInvocationId
+        parents.set(event.invocationId, parent)
+        if (mainRunning || (parent && owned.has(parent))) owned.add(event.invocationId)
+      }
+      if (isHandoffStart(event)) openHandoffs.add(event.invocationId)
+      if (event.type === 'invocation_end') openHandoffs.delete(event.invocationId)
+    },
+    mainSettled() {
+      mainRunning = false
+      for (const invocationId of owned) {
+        if (!underOpenHandoff(invocationId)) owned.delete(invocationId)
+      }
+    },
+  }
+}
+
 export interface BaseRunnerConfig {
   sessionService?: SessionService
   adapters?: Map<string, ModelAdapter> | AdapterRegistry
@@ -474,27 +554,26 @@ export class BaseRunner implements Runner {
 
   run(runnable: Runnable<ErasedStateSchema>, session: Session, config?: RunConfig): StreamResult {
     const abortController = new AbortController()
-    const eventChannel = new InMemoryChannel()
 
     const runnableHooks = runnable.kind === 'agent' ? (runnable.hooks ?? []) : []
     const callSiteHooks = config?.hooks ?? []
     // Composition order: app hooks (outermost) → agent hooks → call-site hooks (innermost)
     const composed = composeHooks([...this.hooks, ...runnableHooks, ...callSiteHooks])
 
-    const mergedOnStream = (event: StreamEvent) => {
-      composed.onEvent?.(event)
-    }
+    // Every event reaches hooks and the stream through this channel, so both see the same events
+    // in the same order. Hooks observe on enqueue, so they keep observing if the consumer stops
+    // reading, and keep receiving work a run that yielded or failed left running.
+    const ownership = trackOwnership()
+    const eventChannel = new InMemoryChannel({
+      onEvent: (event) => {
+        ownership.observe(event)
+        composed.onEvent?.(event)
+      },
+    })
 
     const mergedConfig: InternalRunConfig = {
       ...config,
-      onStream: mergedOnStream,
       onStep: composed.onStep,
-    }
-
-    if (mergedConfig.onStream) {
-      session.onStateChange((event) => {
-        mergedConfig.onStream!(event)
-      })
     }
 
     let resumeContext = computeResumeContext(session.events, runnable)
@@ -506,6 +585,11 @@ export class BaseRunner implements Runner {
     if (resumeContext) {
       validatePipelineFingerprint(session, currentFingerprint)
     }
+
+    // Branch sessions report here too; their changes reach the stream from the ledger at merge.
+    const stopFollowingState = session.addStateChangeListener((event, origin) => {
+      if (origin === session && ownership.owns(event.invocationId)) eventChannel.push(event)
+    })
 
     const mainGenerator = this.execute(
       runnable,
@@ -523,6 +607,7 @@ export class BaseRunner implements Runner {
     abortController.signal.addEventListener(
       'abort',
       () => {
+        stopFollowingState()
         const reason = abortController.signal.reason
         eventChannel.abort(reason instanceof Error ? reason.message : 'Aborted')
       },
@@ -539,10 +624,19 @@ export class BaseRunner implements Runner {
         : setTimeout(() => {
             abortController.abort(new Error(`Timeout after ${config.timeout}ms`))
           }, config.timeout)
-    void eventChannel.settled.then(() => clearTimeout(timeout))
-    eventChannel.registerGenerator('main', mainGenerator, true)
+    void eventChannel.settled.then(() => {
+      clearTimeout(timeout)
+      stopFollowingState()
+    })
+    const mainOutcome = eventChannel.registerGenerator('main', mainGenerator, true)
+    void mainOutcome.then(ownership.mainSettled)
 
-    const generator = this.wrapChannelWithResult(eventChannel.events(), session, runnable)
+    const generator = this.wrapChannelWithResult(
+      eventChannel.events(),
+      mainOutcome,
+      session,
+      runnable,
+    )
 
     return createStreamResult(generator, abortController, eventChannel.settled)
   }
@@ -553,20 +647,13 @@ export class BaseRunner implements Runner {
     channel: EventChannel,
     config?: RunConfig & SubRunConfig,
   ): Promise<RunResult> {
-    const mergedConfig: InternalRunConfig = {
-      ...config,
-      onStream: (event) => {
-        channel.push(event)
-      },
-    }
-
     const resumeContext = computeResumeContext(session.events, runnable)
     const currentFingerprint = computePipelineFingerprint(runnable)
 
     const generator = this.execute(
       runnable,
       session,
-      mergedConfig,
+      config,
       channel.signal,
       config?.id,
       resumeContext,
@@ -595,7 +682,8 @@ export class BaseRunner implements Runner {
   }
 
   private async *wrapChannelWithResult(
-    channelEvents: AsyncGenerator<StreamEvent>,
+    channelEvents: AsyncGenerator<StreamEvent, ChannelResult>,
+    mainOutcome: Promise<{ result?: RunResult }>,
     session: Session,
     runnable: Runnable<ErasedStateSchema>,
   ): AsyncGenerator<StreamEvent, RunResult> {
@@ -617,64 +705,8 @@ export class BaseRunner implements Runner {
       throw new Error(channelResult.abortReason ?? 'Aborted')
     }
 
-    const mainResult = channelResult.mainResult
-
-    if (!mainResult) {
-      const abortOutput = computeOutput(session.events)
-      return {
-        session,
-        state: session.state,
-        iterations: 0,
-        runnable,
-        status: 'aborted',
-        output: abortOutput,
-      }
-    }
-
-    const resolvedOutput = mainResult.output ?? computeOutput(session.events)
-    const base = {
-      runnable,
-      session,
-      state: session.state,
-      iterations: mainResult.iterations,
-      usage: computeUsageSummary(session.events),
-      output: resolvedOutput,
-    }
-
-    switch (mainResult.status) {
-      case 'completed':
-        return { ...base, status: 'completed' }
-      case 'error':
-        return {
-          ...base,
-          status: 'error',
-          error: mainResult.error ?? 'Unknown error',
-        }
-      case 'yielded_message':
-        return {
-          ...base,
-          status: 'yielded_message',
-          yieldedInvocationId: mainResult.yieldedInvocationId ?? '',
-        }
-      case 'yielded_tool': {
-        const yieldedTools = mainResult.yieldedTools ?? []
-        return {
-          ...base,
-          status: 'yielded_tool',
-          yieldedTools,
-        }
-      }
-      case 'max_steps':
-        return { ...base, status: 'max_steps' }
-      case 'max_turns':
-        return { ...base, status: 'max_turns' }
-      case 'max_duration':
-        return { ...base, status: 'max_duration' }
-      case 'inactivity_timeout':
-        return { ...base, status: 'inactivity_timeout' }
-      default:
-        return { ...base, status: 'aborted' }
-    }
+    const mainResult = channelResult.mainResult ? (await mainOutcome).result : undefined
+    return resolveRunResult(mainResult, session, runnable)
   }
 
   private async *execute(
@@ -711,9 +743,21 @@ export class BaseRunner implements Runner {
 
     const workflowConfig: WorkflowRunnerConfig = {
       sessionService: this.sessionService,
-      run: this.execute.bind(this),
+      run: (child, childSession, childConfig, childSignal, parent, resume) =>
+        this.execute(
+          child,
+          childSession,
+          childConfig,
+          childSignal,
+          parent,
+          resume,
+          undefined,
+          undefined,
+          undefined,
+          channel,
+        ),
+      runDetached: this.execute.bind(this),
       subRunner,
-      onStream: config?.onStream,
       signal,
       fingerprint,
       channel,
@@ -775,6 +819,8 @@ export class BaseRunner implements Runner {
             { invocationId: toInvocationId, yieldIndex: -1 },
             false,
             transferOrigin,
+            undefined,
+            channel,
           )
         }
 

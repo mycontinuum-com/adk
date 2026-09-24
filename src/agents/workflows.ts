@@ -4,7 +4,6 @@ import type {
   RunStatus,
   ToolYieldEvent,
   InvocationEndReason,
-  StreamEvent,
   RunResult,
   AssistantEvent,
 } from '../types'
@@ -175,7 +174,6 @@ export function workflowResultToRunResult<TRunnable extends Runnable>(
 }
 
 export interface InvocationBoundaryConfig {
-  onStream?: (event: StreamEvent) => void
   fingerprint?: string
 }
 
@@ -183,7 +181,6 @@ export function createInvocationBoundaryOptions<TRunnable extends Runnable>(
   config: InvocationBoundaryConfig | undefined,
 ): InvocationBoundaryOptions<WorkflowResult<TRunnable>> {
   return {
-    onStream: config?.onStream as InvocationBoundaryOptions<WorkflowResult<TRunnable>>['onStream'],
     getIterations: (r) => r.iterations,
     getEndReason: (r) => r.status as InvocationEndReason,
     getError: (r) => r.error,

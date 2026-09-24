@@ -21,7 +21,7 @@ import type {
   NoteOpts,
 } from '../types'
 import type { Session } from '../types'
-import type { AnnotationEvent } from '../types/events'
+import type { AnnotationEvent, Event } from '../types/events'
 import type { StateSchema } from '../types/schema'
 
 import { createEventId, BaseSession } from '../session'
@@ -38,9 +38,14 @@ function statusToEndReason(status: RunResult['status']): InvocationEndReason {
   return status
 }
 
-async function drainGenerator<T>(stream: AsyncGenerator<unknown, T>): Promise<T> {
+/** Consumes a nested run, forwarding each event into the enclosing run's stream. */
+async function forward<T>(
+  stream: AsyncGenerator<StreamEvent, T>,
+  channel: EventChannel | undefined,
+): Promise<T> {
   let iterResult = await stream.next()
   while (!iterResult.done) {
+    channel?.push(iterResult.value)
     iterResult = await stream.next()
   }
   return iterResult.value
@@ -62,17 +67,23 @@ async function withTimeout<T>(
   }
 }
 
-async function emitHandoffStart(
+async function append<E extends Event>(
   session: Session,
   sessionService: SessionService,
-  onStream: ((e: StreamEvent) => void) | undefined,
+  event: E,
+): Promise<E> {
+  await sessionService.appendEvent(session, event)
+  return event
+}
+
+function handoffStartEvent(
   agent: Runnable,
   invocationId: string,
   handoffType: 'run' | 'spawn' | 'dispatch',
   parentInvocationId: string,
   callId?: string,
-) {
-  const event: InvocationStartEvent = {
+): InvocationStartEvent {
+  return {
     id: createEventId(),
     type: 'invocation_start',
     createdAt: Date.now(),
@@ -86,20 +97,15 @@ async function emitHandoffStart(
       callId,
     },
   }
-  await sessionService.appendEvent(session, event)
-  onStream?.(event)
 }
 
-async function emitHandoffEnd(
-  session: Session,
-  sessionService: SessionService,
-  onStream: ((e: StreamEvent) => void) | undefined,
+function handoffEndEvent(
   agent: Runnable,
   invocationId: string,
   parentInvocationId: string,
   result: RunResult,
-) {
-  const event: InvocationEndEvent = {
+): InvocationEndEvent {
+  return {
     id: createEventId(),
     type: 'invocation_end',
     createdAt: Date.now(),
@@ -111,20 +117,15 @@ async function emitHandoffEnd(
     iterations: result.iterations,
     error: result.status === 'error' ? result.error : undefined,
   }
-  await sessionService.appendEvent(session, event)
-  onStream?.(event)
 }
 
-async function emitHandoffEndError(
-  session: Session,
-  sessionService: SessionService,
-  onStream: ((e: StreamEvent) => void) | undefined,
+function handoffErrorEvent(
   agent: Runnable,
   invocationId: string,
   parentInvocationId: string,
   error: unknown,
-) {
-  const event: InvocationEndEvent = {
+): InvocationEndEvent {
+  return {
     id: createEventId(),
     type: 'invocation_end',
     createdAt: Date.now(),
@@ -135,8 +136,6 @@ async function emitHandoffEndError(
     reason: 'error',
     error: error instanceof Error ? error.message : String(error),
   }
-  await sessionService.appendEvent(session, event)
-  onStream?.(event)
 }
 
 function resolveHandoffInput(optionsOrInput?: string | HandoffOptions): {
@@ -154,18 +153,15 @@ function resolveMedia(input: MessageInput): MediaPart[] | undefined {
   return input.media?.length ? input.media : undefined
 }
 
-async function emitMessage(
-  session: Session,
-  sessionService: SessionService,
-  onStream: ((e: StreamEvent) => void) | undefined,
+function messageEvent(
   message: string | MessageInput,
   invocationId: string,
   agentName: string,
-) {
+): UserEvent {
   const text = typeof message === 'string' ? message : (message.text ?? '')
   const media = typeof message === 'string' ? undefined : resolveMedia(message)
 
-  const event: UserEvent = {
+  return {
     id: createEventId(),
     type: 'user',
     createdAt: Date.now(),
@@ -174,32 +170,99 @@ async function emitMessage(
     invocationId,
     agentName,
   }
-  await sessionService.appendEvent(session, event)
-  onStream?.(event)
 }
 
-function createSpawnHandler(deps: {
+interface HandoffDeps {
   session: Session
   sessionService: SessionService
   invocationId: string
-  subRunner?: SubRunner
-  onStream?: (e: StreamEvent) => void
-  signal?: AbortSignal
   callId?: string
-  channel?: EventChannel
-}) {
-  const { session, sessionService, invocationId, subRunner, onStream, signal, callId, channel } =
-    deps
+}
 
-  return (agent: Runnable, optionsOrInput?: string | HandoffOptions): SpawnHandle => {
-    if (!subRunner) {
-      throw new Error(
-        'Orchestration methods (run/spawn/dispatch) require a runner context. ' +
-          'This usually means the tool is being executed outside of BaseRunner.run(). ' +
-          'Ensure your agent is executed via BaseRunner.',
+/**
+ * A nested run with its handoff boundary: the start, the input message, the nested run's own events
+ * and the end, each appended to the session and then yielded, so the enclosing run streams them in
+ * ledger order. A handoff left open (a ctx.run that yielded or transferred) keeps its temp state
+ * and appends no end.
+ */
+async function* handoff(
+  deps: HandoffDeps,
+  agent: Runnable,
+  handoffType: 'run' | 'spawn' | 'dispatch',
+  childInvocationId: string,
+  message: string | MessageInput | undefined,
+  run: AsyncGenerator<StreamEvent, RunResult>,
+  leavesOpen: (result: RunResult) => boolean = () => false,
+): AsyncGenerator<StreamEvent, RunResult> {
+  const { session, sessionService, invocationId, callId } = deps
+  let result: RunResult
+  try {
+    yield await append(
+      session,
+      sessionService,
+      handoffStartEvent(agent, childInvocationId, handoffType, invocationId, callId),
+    )
+    if (message) {
+      yield await append(
+        session,
+        sessionService,
+        messageEvent(message, childInvocationId, agent.name),
       )
     }
+    result = yield* run
+  } catch (error) {
+    ;(session as BaseSession).clearTempState(childInvocationId)
+    yield await append(
+      session,
+      sessionService,
+      handoffErrorEvent(agent, childInvocationId, invocationId, error),
+    )
+    throw error
+  }
+  if (leavesOpen(result)) return result
+  ;(session as BaseSession).clearTempState(childInvocationId)
+  yield await append(
+    session,
+    sessionService,
+    handoffEndEvent(agent, childInvocationId, invocationId, result),
+  )
+  return result
+}
 
+/** Runs a concurrent handoff as its own producer on the run's channel, which stays open for it. */
+async function runConcurrently(
+  id: string,
+  stream: AsyncGenerator<StreamEvent, RunResult>,
+  channel: EventChannel | undefined,
+): Promise<RunResult> {
+  if (!channel?.registerGenerator) return forward(stream, channel)
+  const { result, error } = await channel.registerGenerator(id, stream)
+  if (error) throw error
+  return result as RunResult
+}
+
+interface OrchestrationDeps extends HandoffDeps {
+  subRunner?: SubRunner
+  signal?: AbortSignal
+  channel?: EventChannel
+}
+
+function requireSubRunner(subRunner: SubRunner | undefined): SubRunner {
+  if (!subRunner) {
+    throw new Error(
+      'Orchestration methods (run/spawn/dispatch) require a runner context. ' +
+        'This usually means the tool is being executed outside of BaseRunner.run(). ' +
+        'Ensure your agent is executed via BaseRunner.',
+    )
+  }
+  return subRunner
+}
+
+function createSpawnHandler(deps: OrchestrationDeps) {
+  const { session, sessionService, invocationId, signal, channel } = deps
+
+  return (agent: Runnable, optionsOrInput?: string | HandoffOptions): SpawnHandle => {
+    const subRunner = requireSubRunner(deps.subRunner)
     const resolved = resolveHandoffInput(optionsOrInput)
     const timeout = typeof optionsOrInput === 'object' ? optionsOrInput?.timeout : undefined
 
@@ -208,131 +271,83 @@ function createSpawnHandler(deps: {
 
     ;(session as BaseSession).inheritTempState(invocationId, spawnInvocationId, resolved.state)
 
-    channel?.registerProducer()
     const spawnedPromise = (async (): Promise<SpawnResult> => {
       if (signal?.aborted) {
-        await emitHandoffEndError(
-          session,
-          sessionService,
-          onStream,
-          agent,
-          spawnInvocationId,
-          invocationId,
-          new Error('Aborted before start'),
+        channel?.push(
+          await append(
+            session,
+            sessionService,
+            handoffErrorEvent(
+              agent,
+              spawnInvocationId,
+              invocationId,
+              new Error('Aborted before start'),
+            ),
+          ),
         )
         return { status: 'aborted', output: { items: [] } }
       }
 
+      const stream = subRunner.run(agent, invocationId, {
+        id: spawnInvocationId,
+        managed: true,
+      })
+
+      abortController = new AbortController()
+      const emptyOutput: Output = { items: [] }
+      const abortHandler = signal
+        ? () => {
+            stream.return?.({
+              status: 'aborted',
+              session,
+              state: session.state,
+              iterations: 0,
+              runnable: agent,
+              output: emptyOutput,
+            })
+          }
+        : undefined
+
+      signal?.addEventListener('abort', abortHandler!, { once: true })
+
+      let result: RunResult
       try {
-        await emitHandoffStart(
-          session,
-          sessionService,
-          onStream,
-          agent,
+        result = await runConcurrently(
           spawnInvocationId,
-          'spawn',
-          invocationId,
-          callId,
+          handoff(deps, agent, 'spawn', spawnInvocationId, resolved.message, stream),
+          channel,
         )
-
-        if (resolved.message) {
-          await emitMessage(
-            session,
-            sessionService,
-            onStream,
-            resolved.message,
-            spawnInvocationId,
-            agent.name,
-          )
-        }
-
-        const stream = subRunner.run(agent, invocationId, {
-          id: spawnInvocationId,
-          managed: true,
-        })
-
-        abortController = new AbortController()
-        const emptyOutput: Output = { items: [] }
-        const abortHandler = signal
-          ? () => {
-              stream.return?.({
-                status: 'aborted',
-                session,
-                state: session.state,
-                iterations: 0,
-                runnable: agent,
-                output: emptyOutput,
-              })
-            }
-          : undefined
-
-        signal?.addEventListener('abort', abortHandler!, { once: true })
-
-        let result: RunResult
-        try {
-          if (channel?.registerGenerator) {
-            const { result: genResult, error } = await channel.registerGenerator(
-              spawnInvocationId,
-              stream,
-            )
-            if (error) throw error
-            result = genResult as RunResult
-          } else {
-            result = await drainGenerator(stream)
-          }
-        } finally {
-          if (abortHandler) {
-            signal?.removeEventListener('abort', abortHandler)
-          }
-        }
-
-        ;(session as BaseSession).clearTempState(spawnInvocationId)
-
-        await emitHandoffEnd(
-          session,
-          sessionService,
-          onStream,
-          agent,
-          spawnInvocationId,
-          invocationId,
-          result,
-        )
-
-        const status =
-          result.status === 'completed'
-            ? 'completed'
-            : result.status === 'error'
-              ? 'error'
-              : 'aborted'
-
-        return {
-          status,
-          output: {
-            text: result.output.text,
-            value: result.output.value,
-            items: result.output.items,
-            media: result.output.media,
-          },
-          error: result.status === 'error' ? result.error : undefined,
-        }
       } catch (error) {
         ;(session as BaseSession).clearTempState(spawnInvocationId)
-        await emitHandoffEndError(
-          session,
-          sessionService,
-          onStream,
-          agent,
-          spawnInvocationId,
-          invocationId,
-          error,
-        )
         return {
           status: 'error',
           output: { items: [] },
           error: error instanceof Error ? error.message : String(error),
         }
+      } finally {
+        if (abortHandler) {
+          signal?.removeEventListener('abort', abortHandler)
+        }
       }
-    })().finally(() => channel?.complete())
+
+      const status =
+        result.status === 'completed'
+          ? 'completed'
+          : result.status === 'error'
+            ? 'error'
+            : 'aborted'
+
+      return {
+        status,
+        output: {
+          text: result.output.text,
+          value: result.output.value,
+          items: result.output.items,
+          media: result.output.media,
+        },
+        error: result.status === 'error' ? result.error : undefined,
+      }
+    })()
 
     ;(session as BaseSession).trackSpawnedTask(
       spawnInvocationId,
@@ -360,30 +375,14 @@ function createSpawnHandler(deps: {
   }
 }
 
-export function createRunHandler(deps: {
-  session: Session
-  sessionService: SessionService
-  invocationId: string
-  subRunner?: SubRunner
-  onStream?: (e: StreamEvent) => void
-  signal?: AbortSignal
-  callId?: string
-  channel?: EventChannel
-}) {
-  const { session, sessionService, invocationId, subRunner, onStream, callId, channel } = deps
+export function createRunHandler(deps: OrchestrationDeps) {
+  const { session, invocationId, channel } = deps
 
   return async (
     agent: Runnable,
     optionsOrInput?: string | HandoffOptions,
   ): Promise<SubRunResult> => {
-    if (!subRunner) {
-      throw new Error(
-        'Orchestration methods (run/spawn/dispatch) require a runner context. ' +
-          'This usually means the tool is being executed outside of BaseRunner.run(). ' +
-          'Ensure your agent is executed via BaseRunner.',
-      )
-    }
-
+    const subRunner = requireSubRunner(deps.subRunner)
     deps.signal?.throwIfAborted()
     const resolved = resolveHandoffInput(optionsOrInput)
     const timeout = typeof optionsOrInput === 'object' ? optionsOrInput?.timeout : undefined
@@ -392,46 +391,28 @@ export function createRunHandler(deps: {
 
     ;(session as BaseSession).inheritTempState(invocationId, callInvocationId, resolved.state)
 
-    await emitHandoffStart(
-      session,
-      sessionService,
-      onStream,
+    const stream = handoff(
+      deps,
       agent,
-      callInvocationId,
       'run',
-      invocationId,
-      callId,
+      callInvocationId,
+      resolved.message,
+      subRunner.run(agent, invocationId, { id: callInvocationId, managed: true }),
+      (result) =>
+        result.status === 'yielded_tool' ||
+        (result.status === 'transferred' && result.transfer !== undefined),
     )
 
-    if (resolved.message) {
-      await emitMessage(
-        session,
-        sessionService,
-        onStream,
-        resolved.message,
-        callInvocationId,
-        agent.name,
-      )
-    }
-
-    deps.signal?.throwIfAborted()
-    const stream = subRunner.run(agent, invocationId, {
-      id: callInvocationId,
-      managed: true,
-    })
-
+    // The calling tool is awaiting this run, so its events belong in the stream at this point.
     const complete = channel?.registerOperation()
-    const execution = drainGenerator(stream).finally(() => complete?.())
-    let result
-    if (timeout) {
-      result = await withTimeout(
-        execution,
-        timeout,
-        `ctx.run('${agent.name}') timed out after ${timeout}ms`,
-      )
-    } else {
-      result = await execution
-    }
+    const forwarded = forward(stream, channel).finally(() => complete?.())
+    const result = timeout
+      ? await withTimeout(
+          forwarded,
+          timeout,
+          `ctx.run('${agent.name}') timed out after ${timeout}ms`,
+        )
+      : await forwarded
 
     if (result.status === 'yielded_tool') {
       throw new Error(
@@ -457,18 +438,6 @@ export function createRunHandler(deps: {
         },
       }
     }
-
-    await emitHandoffEnd(
-      session,
-      sessionService,
-      onStream,
-      agent,
-      callInvocationId,
-      invocationId,
-      result,
-    )
-
-    ;(session as BaseSession).clearTempState(callInvocationId)
 
     const callStatus: SubRunResult['status'] =
       result.status === 'yielded_message' ||
@@ -497,105 +466,35 @@ export function createRunHandler(deps: {
   }
 }
 
-function createDispatchHandler(deps: {
-  session: Session
-  sessionService: SessionService
-  invocationId: string
-  subRunner?: SubRunner
-  onStream?: (e: StreamEvent) => void
-  signal?: AbortSignal
-  callId?: string
-  channel?: EventChannel
-}) {
-  const { session, sessionService, invocationId, subRunner, onStream, callId, channel } = deps
+function createDispatchHandler(deps: OrchestrationDeps) {
+  const { session, invocationId, channel } = deps
 
   return (agent: Runnable, optionsOrInput?: string | HandoffOptions): DispatchHandle => {
-    if (!subRunner) {
-      throw new Error(
-        'Orchestration methods (run/spawn/dispatch) require a runner context. ' +
-          'This usually means the tool is being executed outside of BaseRunner.run(). ' +
-          'Ensure your agent is executed via BaseRunner.',
-      )
-    }
-
+    const subRunner = requireSubRunner(deps.subRunner)
     const resolved = resolveHandoffInput(optionsOrInput)
 
     const dispatchInvocationId = createInvocationId()
 
     ;(session as BaseSession).inheritTempState(invocationId, dispatchInvocationId, resolved.state)
 
-    channel?.registerProducer()
-    ;(async () => {
-      await emitHandoffStart(
-        session,
-        sessionService,
-        onStream,
+    runConcurrently(
+      dispatchInvocationId,
+      handoff(
+        deps,
         agent,
-        dispatchInvocationId,
         'dispatch',
-        invocationId,
-        callId,
+        dispatchInvocationId,
+        resolved.message,
+        subRunner.run(agent, invocationId, { id: dispatchInvocationId, managed: true }),
+      ),
+      channel,
+    ).catch((err) => {
+      ;(session as BaseSession).clearTempState(dispatchInvocationId)
+      console.error(
+        `[ADK] Unhandled error in dispatched agent '${agent.name}' (${dispatchInvocationId}):`,
+        err,
       )
-
-      if (resolved.message) {
-        await emitMessage(
-          session,
-          sessionService,
-          onStream,
-          resolved.message,
-          dispatchInvocationId,
-          agent.name,
-        )
-      }
-
-      try {
-        const stream = subRunner.run(agent, invocationId, {
-          id: dispatchInvocationId,
-          managed: true,
-        })
-
-        let result: RunResult
-        if (channel?.registerGenerator) {
-          const { result: genResult, error } = await channel.registerGenerator(
-            dispatchInvocationId,
-            stream,
-          )
-          if (error) throw error
-          result = genResult as RunResult
-        } else {
-          result = await drainGenerator(stream)
-        }
-
-        await emitHandoffEnd(
-          session,
-          sessionService,
-          onStream,
-          agent,
-          dispatchInvocationId,
-          invocationId,
-          result,
-        )
-      } catch (error) {
-        await emitHandoffEndError(
-          session,
-          sessionService,
-          onStream,
-          agent,
-          dispatchInvocationId,
-          invocationId,
-          error,
-        )
-      } finally {
-        ;(session as BaseSession).clearTempState(dispatchInvocationId)
-      }
-    })()
-      .catch((err) => {
-        console.error(
-          `[ADK] Unhandled error in dispatched agent '${agent.name}' (${dispatchInvocationId}):`,
-          err,
-        )
-      })
-      .finally(() => channel?.complete())
+    })
 
     return {
       invocationId: dispatchInvocationId,
@@ -606,16 +505,9 @@ function createDispatchHandler(deps: {
 
 let callDeprecationWarned = false
 
-export function createOrchestrationContext<S extends StateSchema = StateSchema>(deps: {
-  session: Session
-  sessionService: SessionService
-  invocationId: string
-  subRunner?: SubRunner
-  onStream?: (e: StreamEvent) => void
-  signal?: AbortSignal
-  callId?: string
-  channel?: EventChannel
-}): OrchestrationContext<S> {
+export function createOrchestrationContext<S extends StateSchema = StateSchema>(
+  deps: OrchestrationDeps,
+): OrchestrationContext<S> {
   const runHandler = createRunHandler(deps) as OrchestrationContext<S>['run']
 
   const note = (message: string, opts?: NoteOpts): void => {
@@ -634,7 +526,7 @@ export function createOrchestrationContext<S extends StateSchema = StateSchema>(
     ;(deps.session as unknown as BaseSession).pushEvent(
       event as unknown as import('../types/events').Event,
     )
-    deps.onStream?.(event)
+    deps.channel?.push(event)
   }
 
   return {

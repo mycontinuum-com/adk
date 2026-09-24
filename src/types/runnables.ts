@@ -227,6 +227,8 @@ export interface ToolExecutionContext<
    * agent.
    */
   end(): EndSignal
+  /** Emit an annotation event into the run's stream and session. See `OrchestrationContext.note`. */
+  note(message: string, opts?: NoteOpts): void
   run<TOut>(
     agent: Agent<S, TOut>,
     inputOrOptions?: string | HandoffOptions,
@@ -476,7 +478,6 @@ export interface InvocationContext<
     | import('../voice/types').VoiceSession
     | import('../voice/live-types').LiveVoiceControls
   readonly signal?: AbortSignal
-  readonly onStream?: (event: StreamEvent) => void
   endInvocation: boolean
 }
 
