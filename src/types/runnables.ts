@@ -19,6 +19,7 @@ export interface RetryConfig {
 }
 
 interface BaseModelConfig {
+  kind?: never
   name: string
   temperature?: number
   maxTokens?: number
@@ -153,6 +154,16 @@ export type ProviderModelConfig =
   | EurouterModel
   | ChatCompletionsModel
 
+export interface LiveModelConfig {
+  kind: 'live'
+  provider: 'openai'
+  name: string
+  voice?: string | Record<string, unknown>
+  apiKey?: string
+  baseURL?: string
+  maxSessionDuration?: number | null
+}
+
 /** Unified wrapper for realtime (voice-capable) model configs. */
 export interface RealtimeModelConfig {
   realtime: true
@@ -205,8 +216,8 @@ export interface ToolExecutionContext<
   readonly args: TInput
   readonly input?: TYield
   readonly result?: TResult
-  /** Voice session for audio-mode capabilities. `undefined` in text mode. */
-  readonly voice?: import('../voice/types').VoiceSession
+  /** Native voice capabilities for this run. Undefined in ordinary text runs. */
+  readonly voice?: InvocationContext<S>['voice']
   readonly waitForPlayout?: () => Promise<void>
   /** End the invocation with an explicit output value. The value becomes RunResult.output.value. */
   output<V = unknown>(value: V): OutputSignal
@@ -282,7 +293,7 @@ export interface RenderContext<S extends StateSchema = StateSchema> {
   readonly agentName: string
   readonly session: Session<S>
   readonly state: TypedState<S>
-  readonly agent: Agent<S>
+  readonly agent: Agent<S> | LiveAgent<S>
   readonly events: readonly Event[]
   readonly functionTools: readonly FunctionTool<unknown, unknown, unknown, S>[]
   readonly providerTools: readonly ProviderTool[]
@@ -334,6 +345,21 @@ interface RunnableBase {
   name: string
   description?: string
 }
+
+export interface LiveAgent<S extends StateSchema = StateSchema> {
+  kind: 'live-agent'
+  name: string
+  model: LiveModelConfig
+  context: ContextRenderer<S>[]
+  tools: never[]
+  output?: never
+  toolChoice?: never
+}
+
+export type LiveAgentConfig<S extends StateSchema = StateSchema> = Pick<
+  LiveAgent<S>,
+  'name' | 'model' | 'context'
+>
 
 export interface AgentTimeouts {
   /** End the session if no user speech (audio mode) or no user input (text mode) for this duration. */
@@ -445,6 +471,10 @@ export interface InvocationContext<
   readonly session: Session<S>
   readonly sessionService: SessionService
   readonly state: TypedState<S>
+  /** Native controls supplied by the active voice handler; absent in text runs. */
+  readonly voice?:
+    | import('../voice/types').VoiceSession
+    | import('../voice/live-types').LiveVoiceControls
   readonly signal?: AbortSignal
   readonly onStream?: (event: StreamEvent) => void
   endInvocation: boolean
@@ -571,8 +601,6 @@ export interface ToolContext<S extends StateSchema = StateSchema> extends Invoca
   readonly toolName: ToolCallEvent['name']
   readonly args: ToolCallEvent['args']
   readonly subRunner?: SubRunner<S>
-  /** Voice session for audio-mode capabilities. `undefined` in text mode. */
-  readonly voice?: import('../voice/types').VoiceSession
   /**
    * Wait for the agent's speech (prior to this tool call) to finish playing out to the user. Only
    * available in voice mode with realtime models. Resolves immediately in text mode or if no speech

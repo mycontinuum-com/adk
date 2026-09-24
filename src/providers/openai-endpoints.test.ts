@@ -1,6 +1,7 @@
 import {
   resolveModelName,
   getDefaultEndpoints,
+  resolveOpenAIConnection,
   isRetryableForFallback,
   type OpenAIEndpoint,
 } from './openai-endpoints'
@@ -47,6 +48,7 @@ describe('openai-endpoints', () => {
       delete process.env.AZURE_OPENAI_API_VERSION
       delete process.env.OPENAI_EU_API_KEY
       delete process.env.OPENAI_API_KEY
+      delete process.env.OPENAI_BASE_URL
     })
 
     afterEach(() => {
@@ -85,6 +87,52 @@ describe('openai-endpoints', () => {
       const endpoints = getDefaultEndpoints()
       expect(endpoints[0].type).toBe('openai')
       expect(endpoints[0].baseUrl).toBe('https://eu.api.openai.com/v1')
+    })
+
+    it('uses the configured standard endpoint for both backend and voice', () => {
+      process.env.OPENAI_API_KEY = 'test-key'
+      process.env.OPENAI_BASE_URL = 'https://eu.api.openai.com/v1'
+
+      expect(getDefaultEndpoints()).toEqual([
+        expect.objectContaining({
+          type: 'openai',
+          apiKey: 'test-key',
+          baseUrl: 'https://eu.api.openai.com/v1',
+        }),
+      ])
+      expect(resolveOpenAIConnection()).toEqual({
+        apiKey: 'test-key',
+        baseURL: 'https://eu.api.openai.com/v1',
+      })
+    })
+
+    it('keeps the EU key paired with its endpoint ahead of the standard endpoint', () => {
+      process.env.OPENAI_EU_API_KEY = 'eu-key'
+      process.env.OPENAI_API_KEY = 'standard-key'
+      process.env.OPENAI_BASE_URL = 'https://api.openai.com/v1'
+
+      expect(getDefaultEndpoints()[0]).toMatchObject({
+        apiKey: 'eu-key',
+        baseUrl: 'https://eu.api.openai.com/v1',
+      })
+      expect(resolveOpenAIConnection()).toEqual({
+        apiKey: 'eu-key',
+        baseURL: 'https://eu.api.openai.com/v1',
+      })
+    })
+
+    it('preserves the standard SDK default when no base URL is configured', () => {
+      process.env.OPENAI_API_KEY = 'standard-key'
+
+      expect(getDefaultEndpoints()[0].baseUrl).toBeUndefined()
+      expect(resolveOpenAIConnection()).toEqual({
+        apiKey: 'standard-key',
+        baseURL: undefined,
+      })
+    })
+
+    it('leaves an unconfigured voice connection to the SDK', () => {
+      expect(resolveOpenAIConnection()).toBeUndefined()
     })
 
     it('should create full fallback chain when all configured', () => {

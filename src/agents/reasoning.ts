@@ -1,3 +1,4 @@
+import type { EventChannel } from '../channels/types'
 import type { ComposedErrorHandler, ErrorRecovery } from '../errors/types'
 import type {
   Agent,
@@ -294,8 +295,11 @@ async function executeToolCall(
   composedHook: Hook,
   toolCtx: ToolContext,
   errorHandler: ComposedErrorHandler,
+  channel?: EventChannel,
 ): Promise<ExecuteToolResult> {
+  toolCtx.signal?.throwIfAborted()
   const skipTool = await composedHook.beforeTool?.(toolCtx, toolCall)
+  toolCtx.signal?.throwIfAborted()
   if (skipTool) return { event: skipTool }
 
   const startTime = Date.now()
@@ -357,15 +361,24 @@ async function executeToolCall(
   let lastError: Error | undefined
 
   while (attempt < MAX_TOOL_RETRY_ATTEMPTS) {
+    toolCtx.signal?.throwIfAborted()
     attempt++
     let timedOut = false
 
     try {
       const executeTool = async () => {
+        toolCtx.signal?.throwIfAborted()
         return await tool.execute!(hookCtx)
       }
 
-      let execution = tool.retry ? withRetry(executeTool, tool.retry) : executeTool()
+      const complete = channel?.registerOperation()
+      let execution = (async () => {
+        try {
+          return await (tool.retry ? withRetry(executeTool, tool.retry) : executeTool())
+        } finally {
+          complete?.()
+        }
+      })()
 
       if (tool.timeout) {
         execution = withToolTimeout(
@@ -566,7 +579,9 @@ async function* executeModelStep(
     mctx
   const adapter = await runnerConfig.getAdapter(agent.model)
 
+  signal.throwIfAborted()
   const skipModel = await composedHook.beforeModel?.(ctx, renderCtx)
+  signal.throwIfAborted()
   if (isRunnable(skipModel)) {
     return {
       stepResult: null,
@@ -584,6 +599,7 @@ async function* executeModelStep(
   let shouldAbort = false
 
   while (stepResult === null && !shouldAbort) {
+    signal.throwIfAborted()
     modelAttempt++
     try {
       const stream = adapter.step(renderCtx, getInnerModel(agent.model), signal)
@@ -671,7 +687,14 @@ async function* processToolCalls(
       delegateYielded,
       transfer,
       outputSignal,
-    } = await executeToolCall(toolCall, agent, composedHook, toolCtx, errorHandler)
+    } = await executeToolCall(
+      toolCall,
+      agent,
+      composedHook,
+      toolCtx,
+      errorHandler,
+      runnerConfig.channel,
+    )
 
     await runnerConfig.sessionService.appendEvent(session, resultEvent)
     config?.onStream?.(resultEvent)
@@ -794,6 +817,7 @@ async function* executeAgentLoop(
     config?.onStream,
     runnerConfig.signal,
     runnerConfig.channel,
+    config?.voice,
   )
 
   const currentYieldIndex = resumeContext ? resumeContext.yieldIndex + 1 : 0
@@ -1057,6 +1081,7 @@ async function* executeAgentLoop(
             composedHook,
             toolCtx,
             errorHandler,
+            runnerConfig.channel,
           )
           await runnerConfig.sessionService.appendEvent(session, resultEvent)
           config?.onStream?.(resultEvent)
@@ -1280,6 +1305,7 @@ export async function* runAgent(
     managed: runnerConfig.managed,
     handoffOrigin: runnerConfig.handoffOrigin,
     fingerprint: runnerConfig.fingerprint,
+    signal,
   }
 
   const result = yield* withInvocationBoundary(

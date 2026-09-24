@@ -105,6 +105,35 @@ Use `app.evaluate(cases, options)` for the same mixed suite without command-line
 Voice-specific hooks, metrics and room configuration belong in `options.voice`.
 See [the mixed voice example](examples/voice-eval.ts).
 
+For native voice with ADK backend tools, [GPT Live voice handler](docs/gpt-live.md) documents `openai.live(...)` with `app.handler.voice(...)`, typed result hooks, and transcript persistence.
+
+## Execution completion and persistence
+
+`app.run()` starts execution immediately. Awaiting it returns its outcome; a run deadline or
+`run.abort()` rejects promptly. `run.settled` always fulfills after ADK-owned execution and cleanup
+finish and their ledger events are buffered. Use it before committing or closing a session store:
+
+```ts
+const run = app.run(assistant, { session, timeout: 30_000 })
+try {
+  return await run
+} finally {
+  run.abort()
+  await run.settled
+  await app.sessions.commit(session)
+}
+```
+
+Completion is neither success nor durable storage. Admitted tools, their retry chains, inline child
+runs and spawned/dispatched work remain owned until they finish. A tool can outlive its own timeout;
+the timeout receipt stays authoritative and `settled` waits for the underlying work. A tool or hook
+that never finishes can keep `settled` pending. Detached application promises are outside this contract.
+Root run cancellation prevents new model/tool admissions after awaited hooks. `ctx.run`'s local
+handoff timeout and an agent's duration policy retain their existing behavior; a local handoff timeout
+does not itself cancel the child or guarantee its terminal invocation event. Cancel the root run before
+draining when stopping the whole operation. Breaking stream iteration cancels it; `handler.turn`
+provides the same separate completion barrier, including its persistence work.
+
 ## What's in the box
 
 | Entry point | Surface |

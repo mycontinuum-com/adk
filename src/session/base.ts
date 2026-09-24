@@ -382,7 +382,6 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
     writeSource: StateChangeSource = 'direct',
   ): T {
     const getBinding = () => this.sharedStates.get(scope)
-    const emptyStorage: Record<string, unknown> = {}
 
     const logStateChange = (
       source: StateChangeSource,
@@ -425,7 +424,7 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
 
     return createScopeProxy<T>({
       scopeName: scope,
-      getStorage: () => getBinding()?.ref ?? emptyStorage,
+      getStorage: () => getBinding()?.ref ?? computeStateFromEvents(this._events, scope),
       onChange: (key, oldValue, newValue) => {
         checkConcurrentWrite(key)
         logStateChange(writeSource, key, oldValue, newValue)

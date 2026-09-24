@@ -6,6 +6,7 @@ import type {
   ModelConfig,
   ProviderModelConfig,
   RealtimeModelConfig,
+  LiveModelConfig,
   TurnDetectionConfig,
   InputTranscriptionConfig,
   NoiseReductionConfig,
@@ -14,7 +15,9 @@ import type {
 } from '../types/runnables'
 
 /** Check whether a ModelConfig is a RealtimeModelConfig wrapper. */
-export function isRealtimeConfig(config: ModelConfig): config is RealtimeModelConfig {
+export function isRealtimeConfig(
+  config: ModelConfig | LiveModelConfig,
+): config is RealtimeModelConfig {
   return 'realtime' in config && config.realtime === true
 }
 
@@ -29,8 +32,8 @@ export function getModelProvider(config: ModelConfig): Provider {
 }
 
 /** Extract the model name from any ModelConfig. */
-export function getModelName(config: ModelConfig): string {
-  return getInnerModel(config).name
+export function getModelName(config: ModelConfig | LiveModelConfig): string {
+  return config.name
 }
 
 export interface RealtimeOptions {
@@ -85,6 +88,7 @@ interface GeminiRealtimeOptions extends RealtimeOptions {
 interface OpenAIFactory {
   (name: string, config?: Omit<OpenAIModel, 'provider' | 'name'>): OpenAIModel
   realtime(name: string, config?: OpenAIRealtimeOptions): RealtimeModelConfig
+  live(name: string, config?: Omit<LiveModelConfig, 'kind' | 'provider' | 'name'>): LiveModelConfig
 }
 
 interface GeminiFactory {
@@ -103,6 +107,12 @@ interface GeminiFactory {
  *   openai.realtime('gpt-4o-realtime', { voice: 'alloy' })
  */
 export const openai: OpenAIFactory = Object.assign(createOpenAI, {
+  live(
+    name: string,
+    config?: Omit<LiveModelConfig, 'kind' | 'provider' | 'name'>,
+  ): LiveModelConfig {
+    return { ...config, kind: 'live', provider: 'openai', name }
+  },
   realtime(name: string, config?: OpenAIRealtimeOptions): RealtimeModelConfig {
     const {
       voice,

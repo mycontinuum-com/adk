@@ -5,6 +5,7 @@ import type { Event } from '../../types/events'
 import type { UsageSummary } from '../../types/runtime'
 import type { StateSchema } from '../../types/schema'
 import type { Session } from '../../types/session'
+import type { LiveVoiceAppContext } from '../../voice/live-handler'
 import type { VoiceEvent } from '../../voice/types'
 import type { Metric, MetricResult } from '../metrics/types'
 import type { EvalStatus } from '../types'
@@ -39,7 +40,10 @@ import { createCaseWriter } from './case-writer'
 import { isProcessWorker, getWorkerCaseIndex, sendWorkerResult, forkCase } from './process-pool'
 import { runVoiceCase } from './runner'
 
-type SerializedVoiceRun = Omit<VoiceRunResult, 'session'>
+type SerializedVoiceRun = Omit<VoiceRunResult, 'session'> & {
+  sessionId: string
+  sessionEvents: readonly Event[]
+}
 type SerializedVoiceResult = Omit<VoiceEvalCaseResult, 'run'> & { run: SerializedVoiceRun }
 const EVAL_STATUSES = new Set<EvalStatus>([
   'passed',
@@ -229,6 +233,9 @@ function isSerializedVoiceResult(value: unknown): value is SerializedVoiceResult
     typeof run.status === 'string' &&
     VOICE_RUN_STATUSES.has(run.status as VoiceRunStatus) &&
     isFiniteNumber(run.startedAtMs) &&
+    typeof run.sessionId === 'string' &&
+    Array.isArray(run.sessionEvents) &&
+    run.sessionEvents.every(isEvent) &&
     Array.isArray(run.events) &&
     run.events.every(isEvent) &&
     Array.isArray(run.voiceEvents) &&
@@ -277,6 +284,7 @@ async function runSingleVoiceEval<S extends StateSchema>(
   suiteMetrics: Metric<VoiceRunResult<S>>[],
   dirName: string,
   repeat?: { index: number; total: number },
+  appContext?: LiveVoiceAppContext<S>,
 ): Promise<VoiceEvalCaseResult<S>> {
   const maxAttempts = Math.max(1, (evalCase.retries ?? 0) + 1)
   let lastResult: VoiceEvalCaseResult<S> | undefined
@@ -286,7 +294,7 @@ async function runSingleVoiceEval<S extends StateSchema>(
     const writer = options.output ? createCaseWriter(options.output, evalCase, dirName) : undefined
 
     const startMs = Date.now()
-    const run = await runVoiceCase(evalCase, options, writer, caseDir)
+    const run = await runVoiceCase(evalCase, options, writer, caseDir, appContext)
 
     const merged = mergeMetrics(suiteMetrics, evalCase.metrics ?? [], evalCase.name, 'voice-eval')
     const metricResults = await runMetrics(run, merged)
@@ -355,6 +363,7 @@ function resolveRoomConfig<S extends StateSchema>(
 async function runAsWorker<S extends StateSchema>(
   cases: VoiceEvalCase<S>[],
   options: VoiceEvalOptions<S>,
+  appContext?: LiveVoiceAppContext<S>,
 ): Promise<never> {
   process.stdout?.on?.('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EPIPE' || err.code === 'ERR_STREAM_DESTROYED') return
@@ -388,6 +397,7 @@ async function runAsWorker<S extends StateSchema>(
     suiteMetrics,
     caseRunDirName(run, caseIndex),
     repeat,
+    appContext,
   )
 
   await sendWorkerResult(caseIndex, serializeWorkerResult(result))
@@ -422,8 +432,8 @@ function hydrateWorkerResult<S extends StateSchema>(raw: unknown): VoiceEvalCase
   }
   if (!isSerializedVoiceResult(result))
     throw new Error('Voice worker returned an invalid evaluation result')
-  const session = createEvalSession() as BaseSession
-  for (const event of result.run.events) session.pushEvent(event)
+  const session = new BaseSession('eval', { id: result.run.sessionId })
+  for (const event of result.run.sessionEvents) session.pushEvent(event)
   return {
     ...result,
     run: { ...result.run, session: session as unknown as Session<S> },
@@ -467,17 +477,18 @@ function workerError<S extends StateSchema>(
 export async function evaluateVoice<S extends StateSchema = StateSchema>(
   caseOrCases: VoiceEvalCase<S> | VoiceEvalCase<S>[],
   options: VoiceEvalOptions<S>,
+  appContext?: LiveVoiceAppContext<S>,
 ): Promise<VoiceEvalResult<S>> {
   const cases = Array.isArray(caseOrCases) ? caseOrCases : [caseOrCases]
 
   // ── Worker mode: run assigned case, send result, exit ──────────────
   if (isProcessWorker()) {
-    await runAsWorker(cases, options)
+    await runAsWorker(cases, options, appContext)
     return undefined as never
   }
 
   const startTime = Date.now()
-  const { caseRuns, runCase, concurrency } = prepareVoiceEvaluation(cases, options)
+  const { caseRuns, runCase, concurrency } = prepareVoiceEvaluation(cases, options, appContext)
   const shouldStop = options.stopOnFirstFailure
     ? (result: VoiceEvalCaseResult<S>) => result.status !== 'passed'
     : undefined
@@ -489,6 +500,7 @@ export async function evaluateVoice<S extends StateSchema = StateSchema>(
 export function prepareVoiceEvaluation<S extends StateSchema>(
   cases: VoiceEvalCase<S>[],
   options: VoiceEvalOptions<S>,
+  appContext?: LiveVoiceAppContext<S>,
 ) {
   const resolvedOptions = resolveRoomConfig(options)
   const concurrency = Math.max(1, resolvedOptions.concurrency ?? 4)
@@ -551,6 +563,7 @@ export function prepareVoiceEvaluation<S extends StateSchema>(
           suiteMetrics,
           runMeta[runIndex].dirName,
           repeat,
+          appContext,
         )
 
     caseStatuses.set(runIndex, `${result.status} (${(result.durationMs / 1000).toFixed(1)}s)`)

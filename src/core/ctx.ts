@@ -25,6 +25,7 @@ export function createInvocationContext<S extends StateSchema = StateSchema>(
   onStream?: (e: StreamEvent) => void,
   signal?: AbortSignal,
   channel?: EventChannel,
+  voice?: InvocationContext<S>['voice'],
 ): InvocationContext<S> {
   const orchestration = createOrchestrationContext<S>({
     session,
@@ -46,6 +47,7 @@ export function createInvocationContext<S extends StateSchema = StateSchema>(
     signal,
     onStream,
     endInvocation: false,
+    voice,
     ...orchestration,
   }
 }

@@ -1,5 +1,5 @@
 import type { StateSchema, InferScope } from '../types/schema'
-import type { BaseSession } from './base'
+import type { Session } from '../types/session'
 
 import { applySchemaDefaults } from '../types/schema'
 
@@ -12,7 +12,11 @@ export type StateChanges<S extends StateSchema = StateSchema> = {
   team?: Partial<InferScope<S['team']>>
 }
 
-export function seedState(session: BaseSession, changes: StateChanges, schema?: StateSchema): void {
+/**
+ * Writes initial values into each scope of `session` that `changes` names, after applying the
+ * schema defaults for that scope. Scopes without a binding on the session are skipped.
+ */
+export function seedState(session: Session, changes: StateChanges, schema?: StateSchema): void {
   if (changes.session) session.state.update(applySchemaDefaults(changes.session, schema?.session))
   for (const scope of ['user', 'patient', 'practice', 'org', 'team'] as const) {
     const scopeChanges = changes[scope]

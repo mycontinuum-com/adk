@@ -33,3 +33,24 @@ export { voiceHandler } from './handler'
 // Re-export realtime factory for convenience:
 // import { realtime } from '@animahealth/adk/voice'
 export { realtime } from '../providers/models'
+
+export { openGPTLiveTranscript } from './gpt-live-transcript'
+export type {
+  GPTLiveTranscript,
+  GPTLiveTranscriptSource,
+  GPTLiveTranscriptObservation,
+  GPTLiveTranscriptFragment,
+  GPTLiveTranscriptSnapshot,
+} from './gpt-live-transcript'
+
+/** @internal */
+export { createLiveVoiceHandler } from './live-handler'
+export type {
+  LiveVoiceControls,
+  LiveVoiceContext,
+  LiveVoiceDelegation,
+  LiveVoiceResultContext,
+  LiveVoiceErrorContext,
+  LiveVoiceHook,
+  LiveVoiceHandlerConfig,
+} from './live-types'

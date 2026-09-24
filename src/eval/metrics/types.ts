@@ -1,9 +1,13 @@
-import type { EventType, EventMap } from '../../types/events'
+import type { Event, EventType, EventMap } from '../../types/events'
 import type { StateSchema } from '../../types/schema'
 import type { Session } from '../../types/session'
 
 /** Minimal run shape shared by text and voice metrics. */
-export type MetricRun<S extends StateSchema = StateSchema> = { session: Session<S> }
+export type MetricRun<S extends StateSchema = StateSchema> = {
+  session: Session<S>
+  /** Optional observed-event view; session.events retains durable ledger order. */
+  events?: readonly Event[]
+}
 
 export interface Metric<TRun = MetricRun> {
   name: string

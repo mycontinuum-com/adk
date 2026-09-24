@@ -3,6 +3,8 @@ import type { Agent } from '../../types/runnables'
 import type { UsageSummary } from '../../types/runtime'
 import type { StateSchema } from '../../types/schema'
 import type { Session } from '../../types/session'
+import type { GPTLiveTranscriptSnapshot } from '../../voice/gpt-live-transcript'
+import type { LiveVoiceHandlerConfig } from '../../voice/live-types'
 import type { VoiceEvent, VoiceHook } from '../../voice/types'
 import type { Metric } from '../metrics/types'
 import type { BaseEvalCaseResult, BaseEvalResult, ToolMocks, StateChanges } from '../types'
@@ -11,10 +13,9 @@ import type { BaseEvalCaseResult, BaseEvalResult, ToolMocks, StateChanges } from
 // Case
 // ---------------------------------------------------------------------------
 
-export interface VoiceEvalCase<S extends StateSchema = StateSchema> {
+interface VoiceEvalCaseBase<S extends StateSchema = StateSchema> {
   name: string
   description?: string
-  agent: Agent<any, any>
   userAgent: Agent<any, any>
   /** @internal Bound by `app.evaluate.voice.case((control) => ...)`. */
   evalControl?: VoiceEvalControl
@@ -25,6 +26,24 @@ export interface VoiceEvalCase<S extends StateSchema = StateSchema> {
   /** Wall-clock timeout in ms. Default: 300_000 (5 min). */
   timeout?: number
 }
+
+export type RealtimeVoiceEvalCase<S extends StateSchema = StateSchema> = VoiceEvalCaseBase<S> & {
+  agent: Agent<any, any>
+  backend?: never
+}
+
+export type LiveVoiceEvalCase<S extends StateSchema = StateSchema, T = any> = VoiceEvalCaseBase<S> &
+  Pick<
+    LiveVoiceHandlerConfig<S, T>,
+    'agent' | 'backend' | 'hooks' | 'setup' | 'backendTimeoutMs'
+  > & {
+    /** Successful observation window after startup. Default: 30_000. */
+    durationMs?: number
+  }
+
+export type VoiceEvalCase<S extends StateSchema = StateSchema, T = any> =
+  | RealtimeVoiceEvalCase<S>
+  | LiveVoiceEvalCase<S, T>
 
 export type VoiceEvalControlDisconnectMode = 'livekit' | 'lifecycle'
 
@@ -44,9 +63,9 @@ export interface VoiceEvalControlBinding {
   disconnectUser(options?: VoiceEvalControlDisconnectOptions): Promise<void>
 }
 
-export type VoiceEvalCaseFactory<S extends StateSchema = StateSchema> = (
+export type VoiceEvalCaseFactory<S extends StateSchema = StateSchema, T = any> = (
   control: VoiceEvalControl,
-) => VoiceEvalCase<S>
+) => VoiceEvalCase<S, T>
 
 // ---------------------------------------------------------------------------
 // Options
@@ -125,9 +144,12 @@ export interface VoiceRunResult<S extends StateSchema = StateSchema> {
   events: readonly Event[]
   voiceEvents: readonly VoiceDiagnosticEvent[]
   transcript: TranscriptEntry[]
+  liveTranscript?: GPTLiveTranscriptSnapshot
   timing: VoiceTiming
   recording: { path: string }
   usage?: UsageSummary
+  /** Live currently reports backend model usage only, excluding voice audio usage. */
+  usageScope?: 'backend'
   error?: { message: string; stack?: string }
   durationMs: number
 }

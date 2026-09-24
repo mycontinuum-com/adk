@@ -34,6 +34,7 @@ export interface InvocationBoundaryOptions<T> {
   handoffOrigin?: HandoffOrigin
   managed?: boolean
   fingerprint?: string
+  signal?: AbortSignal
 }
 
 export interface ResumeContext {
@@ -51,56 +52,11 @@ export async function* withInvocationBoundary<T>(
   options?: InvocationBoundaryOptions<T>,
   resumeContext?: ResumeContext,
 ): AsyncGenerator<StreamEvent, T> {
-  if (options?.managed) {
-    let iterResult = await generator.next()
-    while (!iterResult.done) {
-      yield iterResult.value
-      iterResult = await generator.next()
-    }
-    return iterResult.value
-  }
-
-  if (!parentInvocationId) {
-    const tagId = resumeContext?.invocationId ?? invocationId
-    ;(session as BaseSession).tagTrailingEvents(tagId)
-  }
-
-  if (resumeContext && resumeContext.yieldIndex >= 0) {
-    const resumeEvent: InvocationResumeEvent = {
-      id: createEventId(),
-      type: 'invocation_resume',
-      createdAt: Date.now(),
-      invocationId: resumeContext.invocationId,
-      agentName: runnable.name,
-      parentInvocationId,
-      yieldIndex: resumeContext.yieldIndex,
-    }
-    await sessionService.appendEvent(session, resumeEvent)
-    options?.onStream?.(resumeEvent)
-    yield resumeEvent
-  } else {
-    const isRootInvocation = !parentInvocationId
-    const startEvent: InvocationStartEvent = {
-      id: createEventId(),
-      type: 'invocation_start',
-      createdAt: Date.now(),
-      invocationId: resumeContext?.invocationId ?? invocationId,
-      agentName: runnable.name,
-      parentInvocationId,
-      kind: runnable.kind,
-      handoffOrigin: options?.handoffOrigin,
-      fingerprint: isRootInvocation ? options?.fingerprint : undefined,
-      version: isRootInvocation ? session.version : undefined,
-    }
-    await sessionService.appendEvent(session, startEvent)
-    options?.onStream?.(startEvent)
-    yield startEvent
-  }
-
   const effectiveInvocationId = resumeContext?.invocationId ?? invocationId
   let endReason: InvocationEndReason = 'completed'
   let endError: string | undefined
   let result: T | undefined
+  let terminal = false
 
   const emitEndEvent = async function* (): AsyncGenerator<InvocationEndEvent, void> {
     const iterations = result && options?.getIterations ? options.getIterations(result) : undefined
@@ -120,6 +76,7 @@ export async function* withInvocationBoundary<T>(
       handoffTarget,
     }
     await sessionService.appendEvent(session, endEvent)
+    terminal = true
     options?.onStream?.(endEvent)
     yield endEvent
   }
@@ -139,32 +96,70 @@ export async function* withInvocationBoundary<T>(
       awaitingInput: yieldInfo.awaitingInput,
     }
     await sessionService.appendEvent(session, yieldEvent)
+    terminal = true
     options?.onStream?.(yieldEvent)
     yield yieldEvent
   }
 
-  try {
-    let iterResult = await generator.next()
-    while (!iterResult.done) {
-      yield iterResult.value
-      iterResult = await generator.next()
-    }
-    result = iterResult.value
+  if (options?.managed) return yield* generator
 
+  try {
+    if (!parentInvocationId) {
+      const tagId = resumeContext?.invocationId ?? invocationId
+      ;(session as BaseSession).tagTrailingEvents(tagId)
+    }
+
+    if (resumeContext && resumeContext.yieldIndex >= 0) {
+      const resumeEvent: InvocationResumeEvent = {
+        id: createEventId(),
+        type: 'invocation_resume',
+        createdAt: Date.now(),
+        invocationId: resumeContext.invocationId,
+        agentName: runnable.name,
+        parentInvocationId,
+        yieldIndex: resumeContext.yieldIndex,
+      }
+      await sessionService.appendEvent(session, resumeEvent)
+      options?.onStream?.(resumeEvent)
+      yield resumeEvent
+    } else {
+      const isRootInvocation = !parentInvocationId
+      const startEvent: InvocationStartEvent = {
+        id: createEventId(),
+        type: 'invocation_start',
+        createdAt: Date.now(),
+        invocationId: resumeContext?.invocationId ?? invocationId,
+        agentName: runnable.name,
+        parentInvocationId,
+        kind: runnable.kind,
+        handoffOrigin: options?.handoffOrigin,
+        fingerprint: isRootInvocation ? options?.fingerprint : undefined,
+        version: isRootInvocation ? session.version : undefined,
+      }
+      await sessionService.appendEvent(session, startEvent)
+      options?.onStream?.(startEvent)
+      yield startEvent
+    }
+
+    result = yield* generator
     const isYielded = options?.isYielded?.(result) ?? false
     if (isYielded && options?.getYieldInfo) {
-      const yieldInfo = options.getYieldInfo(result)
-      yield* emitYieldEvent(yieldInfo)
+      yield* emitYieldEvent(options.getYieldInfo(result))
     } else {
       endReason = options?.getEndReason?.(result) ?? 'completed'
       endError = options?.getError?.(result)
       yield* emitEndEvent()
     }
   } catch (error) {
-    endReason = 'error'
+    endReason = options?.signal?.aborted ? 'aborted' : 'error'
     endError = error instanceof Error ? error.message : String(error)
-    yield* emitEndEvent()
+    if (!terminal) yield* emitEndEvent()
     throw error
+  } finally {
+    if (!terminal) {
+      endReason = 'aborted'
+      yield* emitEndEvent()
+    }
   }
 
   return result as T

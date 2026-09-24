@@ -1,20 +1,25 @@
+import type {
+  Room,
+  RemoteTrack,
+  RemoteTrackPublication,
+  RemoteParticipant,
+} from '@livekit/rtc-node' with { 'resolution-mode': 'import' }
+
 import { mkdirSync, createWriteStream } from 'node:fs'
 import { join } from 'node:path'
 
 import { mixAndWrite, isAudioPub, sanitize } from '../../voice/recording'
 import { createSpeakerTracker, type SpeakerTracker } from './speaker-tracker'
 
-// ---------------------------------------------------------------------------
-// Public interface
-// ---------------------------------------------------------------------------
-
-export interface RecorderHandle {
+export interface RecordingHandle {
   tracker: SpeakerTracker
   /** Resolves when both agent and user audio tracks are subscribed. */
   mediaReady: Promise<void>
   /** Stop recording and write WAV file. Returns the file path. */
   stop(): Promise<string>
-  /** Disconnect the recorder participant from the room. */
+}
+
+export interface RecorderHandle extends RecordingHandle {
   disconnect(): Promise<void>
 }
 
@@ -27,143 +32,138 @@ export interface RecorderConfig {
   caseName: string
 }
 
-// ---------------------------------------------------------------------------
-// Implementation
-// ---------------------------------------------------------------------------
+type RecordingRoom = Pick<Room, 'on' | 'off' | 'remoteParticipants'>
+type RecordingConfig = Pick<
+  RecorderConfig,
+  'agentIdentity' | 'userIdentity' | 'recordingDir' | 'caseName'
+>
+type RecorderSDK = Pick<
+  typeof import('@livekit/rtc-node', { with: { 'resolution-mode': 'import' } }),
+  'Room' | 'AudioStream'
+>
 
-const SAMPLE_RATE = 48_000
-const CHANNELS = 1
-
-export async function connectRecorder(config: RecorderConfig): Promise<RecorderHandle> {
-  let rtc: any
+function loadSDK(): RecorderSDK {
   try {
-    rtc = require('@livekit/rtc-node')
+    return require('@livekit/rtc-node')
   } catch {
     throw new Error(
-      '[adk/voice-eval] @livekit/rtc-node is required for voice evaluation. ' +
-        'Install it with: npm install @livekit/rtc-node',
+      '[adk/voice-eval] @livekit/rtc-node is required for voice evaluation. Install it with: npm install @livekit/rtc-node',
     )
   }
+}
 
+/** Record remote audio already subscribed by these rooms; their owner controls connection lifetime. */
+export function recordRooms(
+  config: RecordingConfig & { rooms: readonly RecordingRoom[] },
+  sdk: Pick<RecorderSDK, 'AudioStream'> = loadSDK(),
+): RecordingHandle {
   mkdirSync(config.recordingDir, { recursive: true })
-
-  const room = new rtc.Room()
-  await room.connect(config.roomUrl, config.token, { autoSubscribe: true })
-
   const tracker = createSpeakerTracker(config.agentIdentity, config.userIdentity)
-
-  // --- Media readiness tracking ---
-  let agentTrackReady = false
-  let userTrackReady = false
+  const ready = new Set<string>()
   let resolveMediaReady!: () => void
-  const mediaReady = new Promise<void>((r) => {
-    resolveMediaReady = r
+  const mediaReady = new Promise<void>((resolve) => {
+    resolveMediaReady = resolve
   })
-
-  // --- Audio capture state ---
   let active = true
-  let trackIndex = 0
+  let stopping: Promise<string> | undefined
   const trackPaths: string[] = []
   const trackStreams: ReturnType<typeof createWriteStream>[] = []
-  const cleanups: Array<() => void> = []
-  const capturedSids = new Set<string>()
+  const cleanups: Array<() => void | Promise<void>> = []
+  const captured = new Set<string | RemoteTrack>()
 
-  const captureTrack = (track: any) => {
-    const path = join(config.recordingDir, `.${sanitize(config.caseName)}_track${trackIndex++}.raw`)
-    const stream = createWriteStream(path)
-    trackPaths.push(path)
-    trackStreams.push(stream)
-
-    const audioStream = new rtc.AudioStream(track, SAMPLE_RATE, CHANNELS)
-    const pump = async () => {
-      try {
-        for await (const frame of audioStream) {
-          if (!active) break
-          const pcm = frame.data
-          if (pcm?.buffer) {
-            stream.write(Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength))
-          }
-        }
-      } catch {
-        /* stream closed or track ended */
-      }
-    }
-    pump()
-    cleanups.push(() => {
-      try {
-        audioStream.close?.()
-      } catch {
-        /* ignore */
-      }
-    })
-  }
-
-  const captureOnce = (track: any, pub?: any) => {
-    if (pub && !isAudioPub(pub)) return
-    const sid = track.sid as string | undefined
-    if (sid) {
-      if (capturedSids.has(sid)) return
-      capturedSids.add(sid)
-    }
-    captureTrack(track)
-  }
-
-  // --- Room event wiring ---
-
-  const debug = !!process.env.ADK_VOICE_EVAL_DEBUG
-
-  room.on('trackSubscribed', (track: any, pub: any, participant: any) => {
-    const isAudio = isAudioPub(pub)
-    const identity = participant.identity as string
-    if (debug) {
-      console.log(`[voice-eval:recorder] trackSubscribed: ${identity} audio=${isAudio}`)
-    }
-    if (!isAudio) return
-    captureOnce(track, pub)
-
-    if (identity === config.agentIdentity) agentTrackReady = true
-    if (identity === config.userIdentity) userTrackReady = true
-
-    if (agentTrackReady && userTrackReady) {
-      if (debug) console.log('[voice-eval:recorder] mediaReady — both tracks subscribed')
+  const subscribe = (
+    track: RemoteTrack,
+    publication: RemoteTrackPublication,
+    participant: RemoteParticipant,
+  ) => {
+    if (!active || !isAudioPub(publication)) return
+    const identity = participant.identity
+    if (identity !== config.agentIdentity && identity !== config.userIdentity) return
+    const sid = publication.sid ?? track.sid ?? track
+    if (captured.has(sid)) return
+    captured.add(sid)
+    ready.add(identity)
+    if (ready.size === 2) {
       tracker.setMediaReady()
       resolveMediaReady()
     }
-  })
-
-  room.on('activeSpeakersChanged', (speakers: any[]) => {
-    const identities = speakers.map((s: any) => s.identity as string)
-    if (debug) {
-      console.log(`[voice-eval:recorder] activeSpeakers: [${identities.join(', ')}]`)
+    const path = join(
+      config.recordingDir,
+      `.${sanitize(config.caseName)}_track${trackPaths.length}.raw`,
+    )
+    const stream = createWriteStream(path)
+    trackPaths.push(path)
+    trackStreams.push(stream)
+    const reader = new sdk.AudioStream(track, 48_000, 1).getReader()
+    void (async () => {
+      try {
+        while (active) {
+          const frame = await reader.read()
+          if (frame.done || !active) break
+          const pcm = frame.value.data
+          stream.write(Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength))
+        }
+      } catch {
+        /* Audio tracks can close before recording stops. */
+      }
+    })()
+    cleanups.push(() => reader.cancel())
+  }
+  for (const room of config.rooms) {
+    room.on('trackSubscribed', subscribe)
+    cleanups.push(() => {
+      room.off('trackSubscribed', subscribe)
+    })
+    for (const participant of room.remoteParticipants.values()) {
+      for (const publication of participant.trackPublications.values()) {
+        if (publication.track) subscribe(publication.track, publication, participant)
+      }
     }
-    tracker.onActiveSpeakersChanged(identities)
+  }
+  const timingRoom = config.rooms[0]
+  const speakers = (participants: Array<{ identity: string }>) => {
+    tracker.onActiveSpeakersChanged(participants.map((participant) => participant.identity))
+  }
+  timingRoom?.on('activeSpeakersChanged', speakers)
+  cleanups.push(() => {
+    timingRoom?.off('activeSpeakersChanged', speakers)
   })
 
   return {
     tracker,
     mediaReady,
-
-    async stop(): Promise<string> {
-      active = false
-      for (const fn of cleanups) fn()
-      cleanups.length = 0
-
-      await Promise.all(trackStreams.map((s) => new Promise<void>((resolve) => s.end(resolve))))
-
-      const outputPath = join(config.recordingDir, 'recording.wav')
-
-      if (trackPaths.length > 0) {
+    stop() {
+      return (stopping ??= (async () => {
+        active = false
+        for (const cleanup of cleanups.splice(0)) await cleanup()
+        await Promise.all(
+          trackStreams.map((stream) => new Promise<void>((resolve) => stream.end(resolve))),
+        )
+        if (trackPaths.length === 0)
+          throw new Error(
+            'Voice eval recording received no audio tracks. Check participant audio publication and recorder subscriptions.',
+          )
+        const outputPath = join(config.recordingDir, 'recording.wav')
         await mixAndWrite(trackPaths, outputPath)
-        // Clean up temp raw files
         const { unlink } = await import('node:fs/promises')
-        await Promise.all(trackPaths.map((p) => unlink(p).catch(() => {})))
-      }
-
-      return outputPath
-    },
-
-    async disconnect() {
-      await room.disconnect()
+        await Promise.all(trackPaths.map((path) => unlink(path).catch(() => {})))
+        return outputPath
+      })())
     },
   }
+}
+
+/**
+ * Joins `config.roomUrl` as a separate participant and records the room's remote audio.
+ *
+ * @returns The recording handle plus `disconnect()`, which leaves the room.
+ */
+export async function connectRecorder(
+  config: RecorderConfig,
+  sdk = loadSDK(),
+): Promise<RecorderHandle> {
+  const room = new sdk.Room()
+  await room.connect(config.roomUrl, config.token, { autoSubscribe: true, dynacast: false })
+  const recording = recordRooms({ ...config, rooms: [room] }, sdk)
+  return { ...recording, disconnect: () => room.disconnect() }
 }

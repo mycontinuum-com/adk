@@ -26,13 +26,29 @@ export function turn<S extends StateSchema>(
     resolveResult = r
   })
 
+  let started = false
+  let resolveSettled: () => void = () => {}
+  const settled = new Promise<void>((resolve) => {
+    resolveSettled = resolve
+  })
+  abortController.signal.addEventListener(
+    'abort',
+    () => {
+      if (!started) resolveSettled()
+    },
+    { once: true },
+  )
+
   async function* generate(): AsyncGenerator<StreamEvent, TurnResult> {
+    started = true
     if (!config.sessionService) {
+      resolveSettled()
       throw new Error('sessionService is required. Pass it or use app.handler.turn().')
     }
     const cfg = { ...config, sessionService: config.sessionService }
 
     let session: Session<S> | undefined
+    let execution: ReturnType<BaseRunner['run']> | undefined
     try {
       session = await resolveSession(cfg, sessionId)
       const eventCountBeforeInput = session.events.length
@@ -50,11 +66,14 @@ export function turn<S extends StateSchema>(
         timeout: cfg.timeout,
         errorHandlers: cfg.errorHandlers,
       })
+      execution = stream
+      if (abortController.signal.aborted) stream.abort()
       abortController.signal.addEventListener('abort', () => stream.abort(), {
         once: true,
       })
 
       const result: RunResult = yield* stream
+      await stream.settled
       let commitStatus: TurnResult['commitStatus']
 
       if (result.status !== 'aborted') {
@@ -102,10 +121,14 @@ export function turn<S extends StateSchema>(
       }
       resolveResult(turnResult)
       return turnResult
+    } finally {
+      execution?.abort()
+      if (execution) void execution.settled.then(resolveSettled)
+      else resolveSettled()
     }
   }
 
-  const stream = createStreamResult(generate(), abortController)
+  const stream = createStreamResult(generate(), abortController, settled)
   return Object.assign(stream, {
     invocationId,
     sessionId,

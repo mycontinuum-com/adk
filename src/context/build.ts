@@ -11,6 +11,8 @@ import type {
   OutputMode,
 } from '../types'
 import type { Session } from '../types'
+import type { LiveAgent } from '../types/runnables'
+import type { StateSchema } from '../types/schema'
 import type { AnyZodSchema } from '../types/zod'
 
 import { partitionTools, expandMCPTools, signalOutput, isOutputSignal } from '../core/tools'
@@ -226,5 +228,29 @@ export async function buildContextAsync(
     const result = renderer(ctx)
     ctx = result instanceof Promise ? await result : result
   }
+  return ctx
+}
+
+/**
+ * Renders a Live agent's context renderers against the call session.
+ *
+ * @returns The rendered context. The Live handler accepts system instructions only.
+ */
+export async function buildLiveContextAsync<S extends StateSchema>(
+  session: Session<S>,
+  agent: LiveAgent<S>,
+  invocationId: string,
+): Promise<RenderContext<S>> {
+  let ctx: RenderContext<S> = {
+    invocationId,
+    agentName: agent.name,
+    session,
+    state: createStateAccessor<S>(session, invocationId),
+    agent,
+    events: [],
+    functionTools: [],
+    providerTools: [],
+  }
+  for (const renderer of agent.context) ctx = await renderer(ctx)
   return ctx
 }

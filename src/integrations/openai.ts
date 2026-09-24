@@ -14,19 +14,21 @@ function attach<T extends object>(config: T): T {
 interface OpenAIFactory {
   (name: string, config?: Omit<OpenAIModel, 'provider' | 'name'>): OpenAIModel
   realtime: typeof _openai.realtime
+  live: typeof _openai.live
 }
 
 export const openai: OpenAIFactory = Object.assign(
   (name: string, config?: Omit<OpenAIModel, 'provider' | 'name'>): OpenAIModel =>
     attach(_openai(name, config)),
   {
+    live: _openai.live,
     realtime(...args: Parameters<typeof _openai.realtime>): RealtimeModelConfig {
       return attach(_openai.realtime(...args))
     },
   },
 )
 
-export type { OpenAIModel } from '../types/runnables'
+export type { OpenAIModel, LiveModelConfig } from '../types/runnables'
 export type { OpenAIEndpoint } from '../providers/openai-endpoints'
 // The adapter seam: `new OpenAIAdapter(endpoints)` + `adk({ adapters: { openai } })` is how a
 // caller injects endpoints programmatically (multi-endpoint fallback chains, or a browser page

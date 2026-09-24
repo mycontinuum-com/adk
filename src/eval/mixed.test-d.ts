@@ -43,3 +43,20 @@ void app.evaluate(cases, {
     void result.events
   },
 })
+
+const backend = app.agent({
+  name: 'backend',
+  model: openai('unused'),
+  output: { schema: z.object({ message: z.string() }) },
+  context: [],
+})
+const live = app.evaluate.voice.case({
+  name: 'live',
+  agent: app.agent({ name: 'live', model: openai.live('gpt-live-1'), context: [] }),
+  backend,
+  userAgent: agent,
+  hooks: [{ onResult: (ctx) => ctx.voice.appendCommentary(ctx.output.message) }],
+})
+const allCases = app.evaluate.cases([text, voice, live])
+expectTypeOf(app.evaluate(allCases)).toEqualTypeOf<Promise<MixedEvalResult<typeof schema>>>()
+expectTypeOf(app.evaluate.cli(allCases)).toEqualTypeOf<Promise<0 | 1 | 2>>()

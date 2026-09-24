@@ -21,6 +21,28 @@ interface QueuedItem {
 }
 
 export class InMemoryChannel implements EventChannel {
+  private readonly cancellation = new AbortController()
+  private activeOperations = 0
+  private admissionClosed = false
+  private resolveSettled: () => void = () => {}
+  readonly settled = new Promise<void>((resolve) => {
+    this.resolveSettled = resolve
+  })
+  get signal(): AbortSignal {
+    return this.cancellation.signal
+  }
+
+  private settleIfComplete(): void {
+    if (
+      this.activeOperations === 0 &&
+      this.directProducerCount === 0 &&
+      [...this.producers.values()].every((p) => p.status !== 'active')
+    ) {
+      this.admissionClosed = true
+      this.resolveSettled()
+    }
+  }
+
   private queue: QueuedItem[] = []
   private producers = new Map<string, Producer>()
   private mainProducerId?: string
@@ -38,7 +60,22 @@ export class InMemoryChannel implements EventChannel {
     }
   }
 
+  registerOperation(): () => void {
+    this.signal.throwIfAborted()
+    if (this.admissionClosed) throw new Error('Channel execution settled')
+    this.activeOperations++
+    let active = true
+    return () => {
+      if (!active) return
+      active = false
+      this.activeOperations--
+      this.settleIfComplete()
+    }
+  }
+
   registerProducer(): void {
+    this.signal.throwIfAborted()
+    if (this.closed || this.admissionClosed) throw new Error('Channel closed')
     this.directProducerCount++
   }
 
@@ -59,6 +96,8 @@ export class InMemoryChannel implements EventChannel {
       })
       this.notify()
     }
+    this.settleIfComplete()
+    this.notify()
   }
 
   error(err: Error): void {
@@ -73,6 +112,8 @@ export class InMemoryChannel implements EventChannel {
   }
 
   abort(reason?: string): void {
+    if (this.aborted) return
+    this.cancellation.abort(new Error(reason ?? 'Aborted'))
     this.aborted = true
     this.abortReason = reason ?? 'Aborted'
     this.queue.push({
@@ -81,6 +122,7 @@ export class InMemoryChannel implements EventChannel {
       abortReason: this.abortReason,
     })
     this.notify()
+    this.settleIfComplete()
   }
 
   registerGenerator<T>(
@@ -88,7 +130,7 @@ export class InMemoryChannel implements EventChannel {
     generator: AsyncGenerator<StreamEvent, T>,
     isMain: boolean = false,
   ): Promise<{ result?: T; error?: Error }> {
-    if (this.closed || this.aborted) {
+    if (this.closed || this.aborted || this.admissionClosed) {
       return Promise.resolve({ error: new Error('Channel closed') })
     }
 
@@ -116,7 +158,8 @@ export class InMemoryChannel implements EventChannel {
       let iterResult = await generator.next()
       while (!iterResult.done) {
         if (this.aborted) {
-          await generator.return?.(undefined as T)
+          iterResult = await generator.return(undefined as T)
+          while (!iterResult.done) iterResult = await generator.next()
           break
         }
         this.queue.push({
@@ -152,6 +195,8 @@ export class InMemoryChannel implements EventChannel {
       })
       this.notify()
       producer.resolve?.({ error: err })
+    } finally {
+      this.settleIfComplete()
     }
   }
 
@@ -239,6 +284,8 @@ export class InMemoryChannel implements EventChannel {
   }
 
   async cleanup(): Promise<void> {
+    this.abort()
+    await this.settled
     this.producers.clear()
     this.queue = []
     this.closed = true

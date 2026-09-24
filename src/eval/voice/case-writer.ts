@@ -157,6 +157,8 @@ function renderResult(
   lines.push('')
   lines.push(`## Result: ${status}`)
   lines.push('')
+  if (result.usageScope === 'backend')
+    lines.push('Usage and cost cover backend models only; voice audio usage is unavailable.')
   const costStr = result.usage?.cost ? ` — ${formatCost(result.usage.cost.totalCost)}` : ''
   lines.push(`**Duration**: ${formatMs(result.durationMs)}${costStr}`)
   if (result.recording.path) {

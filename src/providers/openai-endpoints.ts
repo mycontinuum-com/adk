@@ -64,6 +64,7 @@ export function getDefaultEndpoints(): OpenAIEndpoint[] {
   if (process.env.OPENAI_API_KEY) {
     endpoints.push({
       type: 'openai',
+      baseUrl: process.env.OPENAI_BASE_URL,
       apiKey: process.env.OPENAI_API_KEY,
       modelMapping: OPENAI_MODEL_MAPPING,
     })
@@ -85,15 +86,20 @@ Set one of these environment variables:
 
 /**
  * Resolve the best OpenAI connection for contexts that don't support fallback (e.g.
- * realtime/voice). Uses the same priority as getDefaultEndpoints(): EU first, then US. Returns
- * undefined when no explicit baseURL/apiKey is needed (LiveKit picks up OPENAI_API_KEY
- * automatically).
+ * realtime/voice). Prefers the EU key, then the standard key and its configured base URL. Azure
+ * endpoints are not supported by this connection resolver.
  */
 export function resolveOpenAIConnection(): { baseURL?: string; apiKey?: string } | undefined {
   if (process.env.OPENAI_EU_API_KEY) {
     return {
       baseURL: 'https://eu.api.openai.com/v1',
       apiKey: process.env.OPENAI_EU_API_KEY,
+    }
+  }
+  if (process.env.OPENAI_API_KEY || process.env.OPENAI_BASE_URL) {
+    return {
+      baseURL: process.env.OPENAI_BASE_URL,
+      apiKey: process.env.OPENAI_API_KEY,
     }
   }
   return undefined

@@ -49,9 +49,13 @@ export function bindVoiceEvalControl(
   return assertInternal(control).bind(binding)
 }
 
-export function createVoiceEvalCase<S extends StateSchema>(
-  input: VoiceEvalCase<S> | VoiceEvalCaseFactory<S>,
-): VoiceEvalCase<S> {
+/**
+ * Returns a voice eval case. A factory receives a fresh eval control, which the runner binds to the
+ * case's room while it runs.
+ */
+export function createVoiceEvalCase<S extends StateSchema, T>(
+  input: VoiceEvalCase<S, T> | VoiceEvalCaseFactory<S, T>,
+): VoiceEvalCase<S, T> {
   if (typeof input !== 'function') return input
 
   const control = createVoiceEvalControl()

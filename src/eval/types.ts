@@ -3,12 +3,17 @@ import type { Hook } from '../hook/types'
 import type { SimulateOptions, Transform } from '../run/simulate'
 import type { StateChanges } from '../session/seedState'
 import type { Event } from '../types/events'
-import type { FunctionTool, Runnable, Agent, HandoffOptions } from '../types/runnables'
+import type {
+  FunctionTool,
+  Runnable,
+  Agent,
+  HandoffOptions,
+  ToolExecutionContext,
+} from '../types/runnables'
 import type { SubRunResult } from '../types/runnables'
 import type { RunResult, TerminationReason, UsageSummary } from '../types/runtime'
 import type { TypedState } from '../types/schema'
 import type { StateSchema } from '../types/schema'
-import type { VoiceSession } from '../voice/types'
 import type { Metric, MetricRun, MetricResult } from './metrics/types'
 import type { VoiceEvalCase, VoiceEvalCaseResult, VoiceEvalOptions } from './voice/types'
 
@@ -29,7 +34,7 @@ export interface MockToolContext<S extends StateSchema = StateSchema> {
   readonly toolName: string
   readonly invocationId: string
   readonly state: TypedState<S>
-  readonly voice?: VoiceSession
+  readonly voice?: ToolExecutionContext<unknown, unknown, unknown, S>['voice']
   readonly waitForPlayout?: () => Promise<void>
   now(): number
   output<V = unknown>(value: V): OutputSignal

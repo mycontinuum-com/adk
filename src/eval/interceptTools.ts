@@ -11,10 +11,10 @@ export interface InterceptToolsOptions {
 
 // Throws by default when a tool has no mock — pass strict: false to allow passthrough
 export function interceptTools<S extends StateSchema = StateSchema>(
-  runnable: Runnable,
+  runnable: Runnable<any>,
   mocks: ToolMocks<S>,
   options?: InterceptToolsOptions,
-): Runnable {
+): Runnable<any> {
   const strict = options?.strict !== false
   return interceptRunnable(runnable, mocks as ToolMocks, strict)
 }

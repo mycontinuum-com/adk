@@ -79,6 +79,13 @@ export interface ParsedOutput {
   totalScore: number
 }
 
+export interface TranscriptFragment {
+  connection: { id: string | null; index: number }
+  sequence: number
+  startMs: number | null
+  endMs: number | null
+}
+
 export type SystemEvent = TextEvent<'system'>
 export type UserEvent = Omit<EventBase, 'invocationId' | 'agentName'> & {
   type: 'user'
@@ -91,6 +98,7 @@ export type UserEvent = Omit<EventBase, 'invocationId' | 'agentName'> & {
    * model transcription.
    */
   source?: 'text' | 'transcript'
+  transcriptFragment?: TranscriptFragment
 }
 export type AssistantEvent = TextEvent<'assistant'> & {
   output?: ParsedOutput
@@ -100,6 +108,7 @@ export type AssistantEvent = TextEvent<'assistant'> & {
    * model transcription.
    */
   source?: 'text' | 'transcript'
+  transcriptFragment?: TranscriptFragment
 }
 export type ThoughtEvent = TextEvent<'thought'>
 

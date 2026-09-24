@@ -1,3 +1,4 @@
+import { openai as integratedOpenai } from '../integrations/openai'
 import { runTest, user, model, testAgent, setupAdkMatchers } from '../testing'
 import {
   openai,
@@ -12,6 +13,30 @@ import {
 
 await setupAdkMatchers()
 describe('model factories', () => {
+  test('openai.live() selects client Live configuration without text adapter defaults', () => {
+    const config = openai.live('gpt-live-1', {
+      voice: 'marin',
+      baseURL: 'https://eu.api.openai.com/v1',
+      apiKey: 'synthetic-key',
+      maxSessionDuration: null,
+    })
+    expect(config).toEqual({
+      kind: 'live',
+      provider: 'openai',
+      name: 'gpt-live-1',
+      voice: 'marin',
+      baseURL: 'https://eu.api.openai.com/v1',
+      apiKey: 'synthetic-key',
+      maxSessionDuration: null,
+    })
+    expect(integratedOpenai.live('gpt-live-1')).toEqual({
+      kind: 'live',
+      provider: 'openai',
+      name: 'gpt-live-1',
+    })
+    expect(Object.getOwnPropertySymbols(integratedOpenai.live('gpt-live-1'))).toEqual([])
+  })
+
   test('openai() creates an OpenAI model config', () => {
     const config = openai('gpt-4o')
     expect(config).toEqual({ provider: 'openai', name: 'gpt-4o' })

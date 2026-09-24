@@ -27,6 +27,9 @@ export interface ChannelResult {
 }
 
 export interface EventChannel {
+  readonly signal: AbortSignal
+  readonly settled: Promise<void>
+  registerOperation(): () => void
   registerProducer(): void
   push(event: StreamEvent): void
   complete(result?: ProducerResult): void

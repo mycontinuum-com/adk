@@ -46,6 +46,8 @@ import type { SessionOptions } from '../session'
 import type { StateChanges } from '../session/seedState'
 import type {
   Agent,
+  LiveAgent,
+  LiveAgentConfig,
   Sequence,
   Parallel,
   Loop,
@@ -66,8 +68,9 @@ import type { RunConfig, RunResult, StreamResult, TurnResult } from '../types/ru
 import type { ErasedStateSchema, StateSchema } from '../types/schema'
 import type { Session, Input, SessionStore, Sessions } from '../types/session'
 import type { AnyZodSchema, ZodSchema } from '../types/zod'
+import type { LiveVoiceHandlerConfig } from '../voice/live-types'
 import type { VoiceLoggingOptions } from '../voice/logging'
-import type { VoiceHook } from '../voice/types'
+import type { VoiceHook, VoiceHandlerConfig, VoiceHandlerHandle } from '../voice/types'
 import type { SearchResult, FetchPageResult } from '../web/types'
 import type { Spec } from './spec'
 
@@ -159,6 +162,12 @@ export interface AgentConfig<S extends StateSchema = StateSchema, TOutput = unkn
   output?: SessionKeyOf<S> | OutputConfig<S, TOutput>
 }
 
+function isLiveAgentConfig<S extends StateSchema, T>(
+  config: AgentConfig<S, T> | LiveAgentConfig<S>,
+): config is LiveAgentConfig<S> {
+  return config.model != null && 'kind' in config.model && config.model.kind === 'live'
+}
+
 export type { StepConfig, SequenceConfig, ParallelConfig, LoopConfig }
 
 import type { ToolConfig as SpecToolConfig } from './spec'
@@ -170,6 +179,7 @@ export type ToolConfig<TInput, TOutput, TYield, S extends StateSchema> = SpecToo
 >
 
 export interface RunOptions {
+  voice?: RunConfig['voice']
   session?: Session
   input?: string | Input
   hooks?: Hook<ErasedStateSchema>[]
@@ -303,6 +313,12 @@ interface HookNamespace<S extends StateSchema = StateSchema> {
 }
 
 type UserHandlerConfig<S extends StateSchema> = Omit<HandlerConfig<S>, 'appName'>
+type UserVoiceHandlerConfig<S extends StateSchema> = Omit<
+  VoiceHandlerConfig<S>,
+  'sessionService' | 'appName'
+> & {
+  sessionService?: import('../types/session').SessionService
+}
 
 interface HandlerNamespace<S extends StateSchema = StateSchema> {
   rest(config: UserHandlerConfig<S>): (input: HandlerInput) => Promise<RestResponse>
@@ -310,11 +326,8 @@ interface HandlerNamespace<S extends StateSchema = StateSchema> {
   turn(
     config: UserHandlerConfig<S>,
   ): (input: HandlerInput) => StreamResult<TurnResult> & { invocationId: string }
-  voice(
-    config: Omit<import('../voice/types').VoiceHandlerConfig<S>, 'sessionService' | 'appName'> & {
-      sessionService?: import('../types/session').SessionService
-    },
-  ): import('../voice/types').VoiceHandlerHandle
+  voice<T>(config: LiveVoiceHandlerConfig<S, T>): VoiceHandlerHandle
+  voice(config: UserVoiceHandlerConfig<S>): VoiceHandlerHandle
 }
 
 export interface AdkApp<S extends StateSchema> {
@@ -336,6 +349,7 @@ export interface AdkApp<S extends StateSchema> {
 
   use<T>(s: Spec<T, S>): T
 
+  agent(config: LiveAgentConfig<S>): LiveAgent<S>
   agent<K extends SessionKeyOf<S>>(
     config: Omit<AgentConfig<S, SessionValueOf<S, K>>, 'output'> & {
       output: K
@@ -412,11 +426,10 @@ export interface AdkApp<S extends StateSchema> {
       options?: MixedEvalOptions<S>,
     ): Promise<MixedEvalResult<S>>
     cli(cases: AnyEvalCase<S>[], options?: MixedEvalOptions<S>): Promise<0 | 1 | 2>
-    voice: ((
-      cases: VoiceEvalCase<S> | VoiceEvalCase<S>[],
-      options?: VoiceEvalOptions<S>,
-    ) => Promise<VoiceEvalResult<S>>) & {
-      case(config: VoiceEvalCase<S> | VoiceEvalCaseFactory<S>): VoiceEvalCase<S>
+    voice: {
+      <T>(cases: VoiceEvalCase<S, T>, options?: VoiceEvalOptions<S>): Promise<VoiceEvalResult<S>>
+      (cases: VoiceEvalCase<S>[], options?: VoiceEvalOptions<S>): Promise<VoiceEvalResult<S>>
+      case<T>(config: VoiceEvalCase<S, T> | VoiceEvalCaseFactory<S, T>): VoiceEvalCase<S, T>
       cases(config: (VoiceEvalCase<S> | VoiceEvalCaseFactory<S>)[]): VoiceEvalCase<S>[]
       report(options?: ReportOptions<S, VoiceEvalResult<S>>): (result: VoiceEvalResult<S>) => string
     }
@@ -599,6 +612,7 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
     }
 
     const runConfig: RunConfig = {
+      voice: opts.voice,
       timeout: opts.timeout,
       hooks: opts.hooks,
       errorHandlers: opts.errorHandlers,
@@ -653,6 +667,20 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
       const results = await Promise.all(mcpManager.servers().map((s) => s.promptDefinitions()))
       return results.flat()
     },
+  }
+
+  function appAgent(agentConfig: LiveAgentConfig<S>): LiveAgent<S>
+  function appAgent<T>(agentConfig: AgentConfig<S, T>): Agent<S, T>
+  function appAgent<T>(
+    agentConfig: AgentConfig<S, T> | LiveAgentConfig<S>,
+  ): Agent<S, T> | LiveAgent<S> {
+    if (isLiveAgentConfig(agentConfig)) return { ...agentConfig, kind: 'live-agent', tools: [] }
+    return createAgent<S, T>({
+      ...agentConfig,
+      output: normalizeOutput<S, T>(schema, agentConfig.output),
+      hooks: agentConfig.hooks ?? appHooks,
+      errorHandlers: agentConfig.errorHandlers ?? appErrorHandlers,
+    })
   }
 
   const app: AdkApp<S> = {
@@ -728,9 +756,16 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
         }
         return (input) => turn(merged, input)
       },
-      voice: (cfg) => {
+      voice: <T>(cfg: LiveVoiceHandlerConfig<S, T> | UserVoiceHandlerConfig<S>) => {
         // Lazy require to avoid loading @livekit/agents until voice() is actually called
-        const { voiceHandler } = require('../voice') as typeof import('../voice')
+        const { voiceHandler, createLiveVoiceHandler } =
+          require('../voice') as typeof import('../voice')
+        if ('backend' in cfg)
+          return createLiveVoiceHandler(cfg, {
+            app,
+            store: resolvedStore,
+            sessionService: appSessionService,
+          })
         // appHooks are Hook[] which are structurally valid VoiceHook[] (no lifecycle fields set)
         const mergedHooks = prepend(appHooks as import('../voice/types').VoiceHook<S>[], cfg.hooks)
         return voiceHandler({
@@ -749,15 +784,7 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
       return s(this)
     },
 
-    agent<TOutput = unknown>(agentConfig: AgentConfig<S, TOutput>): Agent<S, TOutput> {
-      const normalizedOutput = normalizeOutput<S, TOutput>(schema, agentConfig.output)
-      return createAgent<S, TOutput>({
-        ...agentConfig,
-        output: normalizedOutput,
-        hooks: agentConfig.hooks ?? appHooks,
-        errorHandlers: agentConfig.errorHandlers ?? appErrorHandlers,
-      })
-    },
+    agent: appAgent,
 
     bind<C extends StateSchema>(
       component: { app: Pick<AdkApp<C>, 'schema'>; runnable: Runnable<C> } & (S extends C
@@ -974,24 +1001,22 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
         return evalCli(app, cases, options)
       },
       voice: Object.assign(
-        (
-          caseOrCases: VoiceEvalCase<S> | VoiceEvalCase<S>[],
+        async <T>(
+          caseOrCases: VoiceEvalCase<S, T> | VoiceEvalCase<S>[],
           options?: VoiceEvalOptions<S>,
         ): Promise<VoiceEvalResult<S>> => {
-          const { evaluateVoice } =
-            require('../eval/voice/evaluate') as typeof import('../eval/voice/evaluate')
-          return evaluateVoice(caseOrCases, {
-            ...options,
-            schema: options?.schema ?? schema,
-          })
+          const { evaluateVoice } = await import('../eval/voice/evaluate.js')
+          return evaluateVoice(
+            caseOrCases,
+            { ...options, schema: options?.schema ?? schema },
+            { app, store: resolvedStore, sessionService: appSessionService },
+          )
         },
         {
-          case: (evalCase: VoiceEvalCase<S> | VoiceEvalCaseFactory<S>) => {
-            return createVoiceEvalCase(evalCase)
-          },
-          cases: (evalCases: (VoiceEvalCase<S> | VoiceEvalCaseFactory<S>)[]) => {
-            return evalCases.map(createVoiceEvalCase)
-          },
+          case: <T>(evalCase: VoiceEvalCase<S, T> | VoiceEvalCaseFactory<S, T>) =>
+            createVoiceEvalCase(evalCase),
+          cases: (evalCases: (VoiceEvalCase<S> | VoiceEvalCaseFactory<S>)[]) =>
+            evalCases.map(createVoiceEvalCase),
           report:
             (options?: ReportOptions<S, VoiceEvalResult<S>>) =>
             (result: VoiceEvalResult<S>): string =>
@@ -1045,7 +1070,11 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
     cases: AnyEvalCase<S> | AnyEvalCase<S>[],
     options?: EvalDispatchOptions<S>,
   ): Promise<MixedEvalResult<S>> {
-    return runEval(app, cases, options)
+    return runEval(app, cases, options, {
+      app,
+      store: resolvedStore,
+      sessionService: appSessionService,
+    })
   }
 
   return app

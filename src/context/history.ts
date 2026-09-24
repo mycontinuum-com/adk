@@ -1,5 +1,31 @@
 import type { SyncContextRenderer, Session, Event, StateSchema } from '../types'
 
+function renderTranscriptFragments(events: readonly Event[]): Event[] {
+  const first = events.find(
+    (event) => (event.type === 'user' || event.type === 'assistant') && event.transcriptFragment,
+  )
+  if (!first) return [...events]
+  return [
+    {
+      id: `${first.id}/transcript-context`,
+      type: 'system',
+      text: 'Transcript fragments may overlap or be unfinished. Receipt order is not turn order. Offsets are milliseconds within each connection, not across reconnects. Assistant transcript is not proof the caller heard it. Do not infer confirmation from message adjacency.',
+      createdAt: first.createdAt,
+      invocationId: first.invocationId ?? '',
+      agentName: first.agentName ?? '',
+    },
+    ...events.map((event) => {
+      if ((event.type !== 'user' && event.type !== 'assistant') || !event.transcriptFragment)
+        return event
+      const { connection, sequence, startMs, endMs } = event.transcriptFragment
+      return {
+        ...event,
+        text: `[fragment #${sequence}; connection ${connection.index}; ${startMs ?? '?'}–${endMs ?? '?'} ms] ${event.text}`,
+      }
+    }),
+  ]
+}
+
 export type HistoryScope = 'direct' | 'all' | 'invocation' | 'ancestors' | 'agent'
 
 function isUserHistoryEvent(e: Event): boolean {
@@ -118,7 +144,7 @@ export function includeHistory<S extends StateSchema = StateSchema>(
     if (scope === 'all') {
       return {
         ...ctx,
-        events: [...ctx.events, ...sessionEvents],
+        events: [...ctx.events, ...renderTranscriptFragments(sessionEvents)],
       }
     }
 
@@ -128,7 +154,7 @@ export function includeHistory<S extends StateSchema = StateSchema>(
       )
       return {
         ...ctx,
-        events: [...ctx.events, ...filtered],
+        events: [...ctx.events, ...renderTranscriptFragments(filtered)],
       }
     }
 
@@ -137,7 +163,7 @@ export function includeHistory<S extends StateSchema = StateSchema>(
       const filtered = sessionEvents.filter((e) => !e.invocationId || lineage.has(e.invocationId))
       return {
         ...ctx,
-        events: [...ctx.events, ...filtered],
+        events: [...ctx.events, ...renderTranscriptFragments(filtered)],
       }
     }
 
@@ -152,7 +178,7 @@ export function includeHistory<S extends StateSchema = StateSchema>(
       )
       return {
         ...ctx,
-        events: [...ctx.events, ...filtered],
+        events: [...ctx.events, ...renderTranscriptFragments(filtered)],
       }
     }
 
@@ -160,7 +186,7 @@ export function includeHistory<S extends StateSchema = StateSchema>(
     const filtered = sessionEvents.filter((e) => !e.invocationId || directIds.has(e.invocationId))
     return {
       ...ctx,
-      events: [...ctx.events, ...filtered],
+      events: [...ctx.events, ...renderTranscriptFragments(filtered)],
     }
   }
 }

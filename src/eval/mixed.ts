@@ -1,5 +1,6 @@
 import type { AdkApp } from '../api'
 import type { StateSchema } from '../types/schema'
+import type { LiveVoiceAppContext } from '../voice/live-handler'
 import type {
   AnyEvalCase,
   AnyEvalCaseResult,
@@ -28,16 +29,19 @@ export function evaluate<S extends StateSchema>(
   app: AdkApp<S>,
   cases: EvalCase<S> | EvalCase<S>[],
   options?: EvalOptions<S>,
+  appContext?: LiveVoiceAppContext<S>,
 ): Promise<EvalResult<S>>
 export function evaluate<S extends StateSchema>(
   app: AdkApp<S>,
   cases: AnyEvalCase<S> | AnyEvalCase<S>[],
   options?: MixedEvalOptions<S>,
+  appContext?: LiveVoiceAppContext<S>,
 ): Promise<MixedEvalResult<S>>
 export async function evaluate<S extends StateSchema>(
   app: AdkApp<S>,
   caseOrCases: AnyEvalCase<S> | AnyEvalCase<S>[],
   options: EvalDispatchOptions<S> = {},
+  appContext?: LiveVoiceAppContext<S>,
 ): Promise<MixedEvalResult<S>> {
   const cases = Array.isArray(caseOrCases) ? caseOrCases : [caseOrCases]
   const voiceCases = cases.filter((item): item is VoiceEvalCase<S> => !('runnable' in item))
@@ -56,10 +60,10 @@ export async function evaluate<S extends StateSchema>(
     output: options.output,
     metrics: [...(options.metrics ?? []), ...(options.voice?.metrics ?? [])],
   }
-  if (isProcessWorker()) return evaluateVoice(voiceCases, voiceOptions)
+  if (isProcessWorker()) return evaluateVoice(voiceCases, voiceOptions, appContext)
 
   const start = Date.now()
-  const voice = prepareVoiceEvaluation(voiceCases, voiceOptions)
+  const voice = prepareVoiceEvaluation(voiceCases, voiceOptions, appContext)
   const caseRuns = expandCaseRuns(cases, options.repeat)
   let completed = 0
   let nextVoiceIndex = 0

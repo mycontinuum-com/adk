@@ -19,6 +19,10 @@ export function serializeEvent(event: Event): Record<string, unknown> {
 
 export function voiceEvidence(run: VoiceRunResult) {
   return {
+    sessionId: run.session.id,
+    sessionEvents: run.session.events.map(serializeEvent),
+    ...(run.liveTranscript === undefined ? {} : { liveTranscript: run.liveTranscript }),
+    ...(run.usageScope === undefined ? {} : { usageScope: run.usageScope }),
     events: run.events.map(serializeEvent),
     voiceEvents: run.voiceEvents.map(omitUndefinedProperties),
     transcript: run.transcript.map(omitUndefinedProperties),

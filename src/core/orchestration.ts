@@ -208,6 +208,7 @@ function createSpawnHandler(deps: {
 
     ;(session as BaseSession).inheritTempState(invocationId, spawnInvocationId, resolved.state)
 
+    channel?.registerProducer()
     const spawnedPromise = (async (): Promise<SpawnResult> => {
       if (signal?.aborted) {
         await emitHandoffEndError(
@@ -219,7 +220,6 @@ function createSpawnHandler(deps: {
           invocationId,
           new Error('Aborted before start'),
         )
-        channel?.complete({ status: 'aborted', iterations: 0 })
         return { status: 'aborted', output: { items: [] } }
       }
 
@@ -332,7 +332,7 @@ function createSpawnHandler(deps: {
           error: error instanceof Error ? error.message : String(error),
         }
       }
-    })()
+    })().finally(() => channel?.complete())
 
     ;(session as BaseSession).trackSpawnedTask(
       spawnInvocationId,
@@ -368,8 +368,9 @@ export function createRunHandler(deps: {
   onStream?: (e: StreamEvent) => void
   signal?: AbortSignal
   callId?: string
+  channel?: EventChannel
 }) {
-  const { session, sessionService, invocationId, subRunner, onStream, callId } = deps
+  const { session, sessionService, invocationId, subRunner, onStream, callId, channel } = deps
 
   return async (
     agent: Runnable,
@@ -383,6 +384,7 @@ export function createRunHandler(deps: {
       )
     }
 
+    deps.signal?.throwIfAborted()
     const resolved = resolveHandoffInput(optionsOrInput)
     const timeout = typeof optionsOrInput === 'object' ? optionsOrInput?.timeout : undefined
 
@@ -412,20 +414,23 @@ export function createRunHandler(deps: {
       )
     }
 
+    deps.signal?.throwIfAborted()
     const stream = subRunner.run(agent, invocationId, {
       id: callInvocationId,
       managed: true,
     })
 
+    const complete = channel?.registerOperation()
+    const execution = drainGenerator(stream).finally(() => complete?.())
     let result
     if (timeout) {
       result = await withTimeout(
-        drainGenerator(stream),
+        execution,
         timeout,
         `ctx.run('${agent.name}') timed out after ${timeout}ms`,
       )
     } else {
-      result = await drainGenerator(stream)
+      result = await execution
     }
 
     if (result.status === 'yielded_tool') {
@@ -519,6 +524,7 @@ function createDispatchHandler(deps: {
 
     ;(session as BaseSession).inheritTempState(invocationId, dispatchInvocationId, resolved.state)
 
+    channel?.registerProducer()
     ;(async () => {
       await emitHandoffStart(
         session,
@@ -582,12 +588,14 @@ function createDispatchHandler(deps: {
       } finally {
         ;(session as BaseSession).clearTempState(dispatchInvocationId)
       }
-    })().catch((err) => {
-      console.error(
-        `[ADK] Unhandled error in dispatched agent '${agent.name}' (${dispatchInvocationId}):`,
-        err,
-      )
-    })
+    })()
+      .catch((err) => {
+        console.error(
+          `[ADK] Unhandled error in dispatched agent '${agent.name}' (${dispatchInvocationId}):`,
+          err,
+        )
+      })
+      .finally(() => channel?.complete())
 
     return {
       invocationId: dispatchInvocationId,

@@ -37,9 +37,15 @@ Migration section:
 
 - `app.evaluate.cli(cases, options)` runs text and voice cases through a noninteractive CLI with `list`, `run`, exact case selection, repetition, JSON evidence and pass/fail exit codes.
 - `app.evaluate` and `app.evaluate.cases` accept mixed text/voice cases. Common scheduling uses one concurrency limit; voice-specific hooks, metrics and room configuration live under `options.voice`.
+- `openai.live('gpt-live-1', options)` declares a GPT Live voice agent. `app.handler.voice({ agent, backend, hooks })` delegates each Live request to an ordinary ADK backend agent with tools, typed result hooks and call-owned workflow state. See `docs/gpt-live.md`.
+- `ctx.voice` exposes `appendThinking`, `appendCommentary`, `appendInstructions` and `end()` to Live backend tools and hooks, scoped to the active delegation.
+- `openGPTLiveTranscript` (`@animahealth/adk/voice`) records native GPT Live transcript observations in a dedicated session. See `docs/gpt-live-transcript.md`.
+- `app.evaluate` runs voice cases against Live handlers. `runVoiceProbe` and `disposeVoiceProbeRuntime` (`@animahealth/adk/eval`) drive a single scripted audio probe. See `docs/voice-probes.md`.
+- `run.settled` fulfills after ADK-owned execution and cleanup finish. Await it before committing or closing a session store.
 
 ### Changed
 
+- LiveKit agents peer range is now `^1.9.0`. GPT Live requires LiveKit Agents and its OpenAI plugin 1.9 or later.
 - Voice evidence directories start with an execution index to prevent collisions between case names. Follow `index.md` or returned recording paths instead of constructing paths from case names.
 - Concurrent suites retain results from already-running cases after stopping scheduling on failure.
 - Voice metric data must be JSON-compatible before worker IPC; unsupported values fail rather than disappearing from evidence.

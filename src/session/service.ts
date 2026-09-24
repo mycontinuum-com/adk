@@ -22,6 +22,7 @@ interface SessionMeta {
   bindings: Map<string, ScopeBinding>
   dirtyChanges: Map<string, Map<string, unknown>>
   eventCursor: number
+  pendingCommit: Promise<void>
 }
 
 function sessionToStoredSession(session: Session): StoredSession {
@@ -64,7 +65,12 @@ export function sessionService(store: SessionStore): SessionService {
   function getMeta(session: Session): SessionMeta {
     let m = meta.get(session)
     if (!m) {
-      m = { bindings: new Map(), dirtyChanges: new Map(), eventCursor: 0 }
+      m = {
+        bindings: new Map(),
+        dirtyChanges: new Map(),
+        eventCursor: 0,
+        pendingCommit: Promise.resolve(),
+      }
       meta.set(session, m)
     }
     return m
@@ -105,6 +111,61 @@ export function sessionService(store: SessionStore): SessionService {
     for (const { scope, id, state } of loaded) {
       bindScopeWithState(session, scope as SharedScope, id, state)
     }
+  }
+
+  function persist(
+    session: Session,
+    operation: { kind: 'commit'; expectedVersion?: number } | { kind: 'merge'; latest?: Session },
+  ): Promise<CommitResult> {
+    const m = getMeta(session)
+    const pending = m.pendingCommit.then(async (): Promise<CommitResult> => {
+      const endCursor = session.events.length
+      const newEvents = session.events.slice(m.eventCursor, endCursor)
+      const scopedChanges = collectScopedChanges(m)
+      const dirtyChanges = m.dirtyChanges
+      m.dirtyChanges = new Map()
+      let committed = false
+      try {
+        let stored = sessionToStoredSession(session)
+        if (operation.kind === 'merge') {
+          if (operation.latest) {
+            stored = sessionToStoredSession(operation.latest)
+          } else {
+            const reloaded = await store.load(session.appName, session.id)
+            if (!reloaded) return { ok: false, conflict: true, currentVersion: 0 }
+            stored = reloaded.session
+          }
+        }
+        const expectedVersion =
+          operation.kind === 'commit'
+            ? (operation.expectedVersion ?? stored.version)
+            : stored.version
+        const result = await store.commit(stored, newEvents, expectedVersion, scopedChanges)
+        if (!result.ok) return result
+        ;(session as BaseSession).setVersion(result.version)
+        m.eventCursor = endCursor
+        committed = true
+        return operation.kind === 'merge' ? { ...result, merged: true } : result
+      } finally {
+        if (!committed) {
+          for (const [scope, changes] of dirtyChanges) {
+            const current = m.dirtyChanges.get(scope)
+            if (!current) {
+              m.dirtyChanges.set(scope, changes)
+              continue
+            }
+            for (const [key, value] of changes) {
+              if (!current.has(key)) current.set(key, value)
+            }
+          }
+        }
+      }
+    })
+    m.pendingCommit = pending.then(
+      () => {},
+      () => {},
+    )
+    return pending
   }
 
   const service: SessionService = {
@@ -160,61 +221,12 @@ export function sessionService(store: SessionStore): SessionService {
       await store.delete(appName, normalizeSessionId(sessionId))
     },
 
-    async commitSession(session: Session, expectedVersion?: number): Promise<CommitResult> {
-      const m = getMeta(session)
-      const newEvents = session.events.slice(m.eventCursor)
-      const sc = collectScopedChanges(m)
-      const stored = sessionToStoredSession(session)
-
-      const result = await store.commit(
-        stored,
-        newEvents,
-        expectedVersion ?? session.version ?? 0,
-        sc,
-      )
-
-      if (result.ok) {
-        ;(session as BaseSession).setVersion(result.version)
-        m.eventCursor = session.events.length
-        m.dirtyChanges.clear()
-        return result
-      }
-
-      return result
+    commitSession(session: Session, expectedVersion?: number): Promise<CommitResult> {
+      return persist(session, { kind: 'commit', expectedVersion })
     },
 
-    async mergeSession(session: Session, latest?: Session): Promise<CommitResult> {
-      const m = getMeta(session)
-      const newEvents = session.events.slice(m.eventCursor)
-      const sc = collectScopedChanges(m)
-
-      let target: Session | null = latest ?? null
-      if (!target) {
-        const reloaded = await store.load(session.appName, session.id)
-        if (!reloaded) {
-          return { ok: false, conflict: true, currentVersion: 0 }
-        }
-        target = BaseSession.fromSnapshot({
-          id: reloaded.session.id,
-          appName: reloaded.session.appName,
-          version: reloaded.session.version,
-          events: reloaded.events,
-          scopes: reloaded.session.scopes,
-          createdAt: reloaded.session.createdAt,
-        })
-      }
-
-      const stored = sessionToStoredSession(target)
-      const result = await store.commit(stored, newEvents, stored.version ?? 0, sc)
-
-      if (result.ok) {
-        ;(session as BaseSession).setVersion(result.version)
-        m.eventCursor = session.events.length
-        m.dirtyChanges.clear()
-        return { ok: true, version: result.version, merged: true }
-      }
-
-      return result
+    mergeSession(session: Session, latest?: Session): Promise<CommitResult> {
+      return persist(session, { kind: 'merge', latest })
     },
 
     async bindSessionScope(session: Session, scope: string, id: string): Promise<void> {

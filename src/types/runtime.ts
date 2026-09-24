@@ -1,7 +1,7 @@
 import type { ErrorHandler } from '../errors/types'
 import type { Hook } from '../hook/types'
 import type { Event, StreamEvent, ToolYieldEvent, AssistantEvent, MediaPart } from './events'
-import type { Provider, Runnable } from './runnables'
+import type { Provider, InvocationContext, Runnable } from './runnables'
 import type { ErasedStateSchema, StateSchema, TypedState } from './schema'
 import type { Session } from './session'
 
@@ -12,6 +12,8 @@ import type { Session } from './session'
  */
 export interface StreamResult<T = RunResult> extends AsyncIterable<StreamEvent>, PromiseLike<T> {
   [Symbol.asyncIterator](): AsyncIterator<StreamEvent, T>
+  /** Fulfills when owned execution and cleanup have finished and ledger events are buffered. */
+  readonly settled: Promise<void>
   abort(): void
 }
 
@@ -25,6 +27,8 @@ export interface Output<TOutput = unknown> {
 export type CommitStatus = 'committed' | 'merged' | 'skipped' | 'orphaned'
 
 export interface RunConfig {
+  /** Run-scoped native voice controls, inherited by backend subruns. */
+  voice?: InvocationContext['voice']
   timeout?: number
   hooks?: Hook<ErasedStateSchema>[]
   errorHandlers?: ErrorHandler[]

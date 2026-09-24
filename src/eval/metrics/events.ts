@@ -14,7 +14,7 @@ export function eventCountMetric<T extends EventType = EventType>(
   return {
     name: config.name,
     evaluate: (run: MetricRun): MetricResult => {
-      const events = [...run.session.events]
+      const events = run.events ?? run.session.events
 
       const count = events.filter((e) => {
         if (config.eventType && e.type !== config.eventType) return false
@@ -51,7 +51,7 @@ export function eventSequenceMetric(config: EventSequenceMetricConfig): Metric {
   return {
     name: config.name,
     evaluate: (run: MetricRun): MetricResult => {
-      const events = [...run.session.events]
+      const events = run.events ?? run.session.events
       let sequenceIndex = 0
       const matchedEvents: Event[] = []
 

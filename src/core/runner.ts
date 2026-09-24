@@ -62,7 +62,12 @@ function validatePipelineFingerprint(session: Session, currentFingerprint: strin
   }
 }
 
-function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined {
+/**
+ * Totals token usage and cost from the `model_end` events in `events`, per model and overall.
+ *
+ * @returns `undefined` when there are no `model_end` events.
+ */
+export function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined {
   const modelEndEvents = events.filter((e): e is ModelEndEvent => e.type === 'model_end')
 
   if (modelEndEvents.length === 0) return undefined
@@ -242,75 +247,92 @@ function computeOutput<TOutput>(
 export function createStreamResult<T>(
   generator: AsyncGenerator<StreamEvent, T>,
   abortController: AbortController,
+  producerSettled?: Promise<void>,
 ): StreamResult<T> {
   let consumed = false
+  let started = false
+  let completed = false
   let cachedPromise: Promise<T> | undefined
-
-  const consumeGenerator = async (): Promise<T> => {
-    let iterResult = await generator.next()
-    while (!iterResult.done) {
-      iterResult = await generator.next()
-    }
-    return iterResult.value
-  }
-
-  const getPromise = (): Promise<T> => {
-    if (cachedPromise) return cachedPromise
-    consumed = true
-    cachedPromise = consumeGenerator()
-    return cachedPromise
-  }
-
-  const iterable: StreamResult<T> = {
-    [Symbol.asyncIterator]() {
-      if (consumed) {
-        throw new Error('Stream already consumed')
-      }
-      consumed = true
-      return generator
-    },
-    // oxlint-disable-next-line eslint-plugin-unicorn(no-thenable)
-    then(onFulfilled, onRejected) {
-      return getPromise().then(onFulfilled, onRejected)
-    },
-    abort() {
-      abortController.abort()
-    },
-  }
-
-  return iterable
-}
-
-function withTimeout<T>(
-  generator: AsyncGenerator<StreamEvent, T>,
-  timeoutMs: number,
-  signal: AbortSignal,
-): AsyncGenerator<StreamEvent, T> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs)
+  let resolveCompletion: () => void = () => {}
+  const completion = new Promise<void>((resolve) => {
+    resolveCompletion = resolve
   })
-
-  const cleanup = () => {
-    if (timeoutId) clearTimeout(timeoutId)
+  let resolveOutcome: (value: T) => void = () => {}
+  let rejectOutcome: (error: unknown) => void = () => {}
+  const outcome = new Promise<T>((resolve, reject) => {
+    resolveOutcome = resolve
+    rejectOutcome = reject
+  })
+  void outcome.catch(() => {})
+  const abort = () => abortController.abort(new Error('Aborted'))
+  const onAbort = () => {
+    if (!started) {
+      rejectOutcome(abortController.signal.reason)
+      resolveCompletion()
+    }
   }
-  signal.addEventListener('abort', cleanup)
-
-  return (async function* (): AsyncGenerator<StreamEvent, T> {
+  abortController.signal.addEventListener('abort', onAbort, { once: true })
+  if (abortController.signal.aborted) onAbort()
+  const tracked = (async function* (): AsyncGenerator<StreamEvent, T> {
+    started = true
+    let finished = false
     try {
-      let result = await Promise.race([generator.next(), timeoutPromise])
-      while (!result.done) {
-        yield result.value
-        result = await Promise.race([generator.next(), timeoutPromise])
-      }
-      cleanup()
-      return result.value
+      abortController.signal.throwIfAborted()
+      const result = yield* generator
+      finished = true
+      resolveOutcome(result)
+      return result
     } catch (error) {
-      cleanup()
+      rejectOutcome(error)
       throw error
+    } finally {
+      if (!finished) {
+        abort()
+        rejectOutcome(abortController.signal.reason)
+      }
+      completed = true
+      resolveCompletion()
     }
   })()
+  const consumeGenerator = async (): Promise<T> => {
+    let iterResult = await tracked.next()
+    while (!iterResult.done) iterResult = await tracked.next()
+    return iterResult.value
+  }
+  return {
+    settled: producerSettled ?? completion,
+    [Symbol.asyncIterator]() {
+      if (consumed) throw new Error('Stream already consumed')
+      consumed = true
+      return {
+        next: () => tracked.next(),
+        return: async (value?: T) => {
+          abort()
+          let result = await tracked.return(value as T)
+          while (!result.done) result = await tracked.next()
+          resolveCompletion()
+          return result
+        },
+        throw: async (error?: unknown) => {
+          abort()
+          let result = await tracked.throw(error)
+          while (!result.done) result = await tracked.next()
+          resolveCompletion()
+          return result
+        },
+      }
+    },
+    then(onFulfilled, onRejected) {
+      if (!cachedPromise) {
+        if (!completed && (started || !abortController.signal.aborted))
+          void consumeGenerator().catch(() => {})
+        cachedPromise = outcome
+        consumed = true
+      }
+      return cachedPromise.then(onFulfilled, onRejected)
+    },
+    abort,
+  }
 }
 
 export interface BaseRunnerConfig {
@@ -494,21 +516,31 @@ export class BaseRunner implements Runner {
       eventChannel,
     )
 
+    abortController.signal.addEventListener(
+      'abort',
+      () => {
+        const reason = abortController.signal.reason
+        eventChannel.abort(reason instanceof Error ? reason.message : 'Aborted')
+      },
+      { once: true },
+    )
+    eventChannel.signal.addEventListener(
+      'abort',
+      () => abortController.abort(eventChannel.signal.reason),
+      { once: true },
+    )
+    const timeout =
+      config?.timeout === undefined
+        ? undefined
+        : setTimeout(() => {
+            abortController.abort(new Error(`Timeout after ${config.timeout}ms`))
+          }, config.timeout)
+    void eventChannel.settled.then(() => clearTimeout(timeout))
     eventChannel.registerGenerator('main', mainGenerator, true)
 
-    abortController.signal.addEventListener('abort', () => {
-      eventChannel.abort('Aborted')
-    })
+    const generator = this.wrapChannelWithResult(eventChannel.events(), session, runnable)
 
-    let generator = this.wrapChannelWithResult(
-      eventChannel.events(),
-      session,
-      runnable,
-      config?.timeout,
-      abortController.signal,
-    )
-
-    return createStreamResult(generator, abortController)
+    return createStreamResult(generator, abortController, eventChannel.settled)
   }
 
   async runToChannel(
@@ -531,7 +563,7 @@ export class BaseRunner implements Runner {
       runnable,
       session,
       mergedConfig,
-      new AbortController().signal,
+      channel.signal,
       config?.id,
       resumeContext,
       config?.managed,
@@ -562,14 +594,8 @@ export class BaseRunner implements Runner {
     channelEvents: AsyncGenerator<StreamEvent>,
     session: Session,
     runnable: Runnable<ErasedStateSchema>,
-    timeout?: number,
-    signal?: AbortSignal,
   ): AsyncGenerator<StreamEvent, RunResult> {
-    let generator: AsyncGenerator<StreamEvent> = channelEvents
-
-    if (timeout && signal) {
-      generator = withTimeout(channelEvents, timeout, signal)
-    }
+    const generator = channelEvents
 
     let result = await generator.next()
     while (!result.done) {

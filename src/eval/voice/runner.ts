@@ -5,6 +5,7 @@ import type { Agent, RealtimeModelConfig } from '../../types/runnables'
 import type { UsageSummary } from '../../types/runtime'
 import type { StateSchema } from '../../types/schema'
 import type { Session, SessionService } from '../../types/session'
+import type { LiveVoiceAppContext } from '../../voice/live-handler'
 import type { LifecycleHookContext, VoiceEvent, VoiceHook } from '../../voice/types'
 import type { CaseWriter } from './case-writer'
 import type { RecorderHandle } from './recorder'
@@ -53,6 +54,7 @@ import { interceptTools } from '../interceptTools'
 import { createEvalSession } from '../session'
 import { withTimeout } from '../suite-runner'
 import { bindVoiceEvalControl } from './control'
+import { requireLiveKit } from './livekit-sdk'
 import { connectRecorder } from './recorder'
 
 interface TranscriptSource {
@@ -185,55 +187,6 @@ function emptyTiming(): VoiceTiming {
 }
 
 // ---------------------------------------------------------------------------
-// Lazy-require LiveKit SDKs (peer dependencies)
-// ---------------------------------------------------------------------------
-
-let lkLoggerInitialized = false
-
-function requireLiveKit() {
-  let serverSdk: any
-  let lk: any
-  let rtc: any
-  try {
-    serverSdk = require('livekit-server-sdk')
-  } catch {
-    throw new Error(
-      '[adk/voice-eval] livekit-server-sdk is required. Install with: npm install livekit-server-sdk',
-    )
-  }
-  try {
-    lk = require('@livekit/agents')
-  } catch {
-    throw new Error(
-      '[adk/voice-eval] @livekit/agents is required. Install with: npm install @livekit/agents',
-    )
-  }
-  try {
-    rtc = require('@livekit/rtc-node')
-  } catch {
-    throw new Error(
-      '[adk/voice-eval] @livekit/rtc-node is required. Install with: npm install @livekit/rtc-node',
-    )
-  }
-  if (!lkLoggerInitialized) {
-    try {
-      lk.initializeLogger({ pretty: false, level: 'error' })
-    } catch {
-      /* non-fatal */
-    }
-    try {
-      const rtcEntry = require.resolve('@livekit/rtc-node')
-      require(require('path').join(require('path').dirname(rtcEntry), 'log.cjs')).log.level =
-        'silent'
-    } catch {
-      /* non-fatal — internal path may change across versions */
-    }
-    lkLoggerInitialized = true
-  }
-  return { serverSdk, lk, rtc }
-}
-
-// ---------------------------------------------------------------------------
 // Profiling — enabled via ADK_VOICE_EVAL_TRACE=1
 // ---------------------------------------------------------------------------
 
@@ -342,7 +295,13 @@ export async function runVoiceCase<S extends StateSchema>(
   options: VoiceEvalOptions<S> & { room: VoiceRoomConfig },
   writer?: CaseWriter,
   recordingDir?: string,
+  appContext?: LiveVoiceAppContext<S>,
 ): Promise<VoiceRunResult<S>> {
+  if (evalCase.backend) {
+    if (!appContext) throw new Error('Live voice evals require app.evaluate.voice')
+    const { runLiveVoiceCase } = require('./live-runner') as typeof import('./live-runner')
+    return runLiveVoiceCase(evalCase, options, appContext, writer, recordingDir)
+  }
   const startMs = Date.now()
 
   if (!isRealtimeConfig(evalCase.agent.model)) {
