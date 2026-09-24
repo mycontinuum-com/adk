@@ -184,9 +184,12 @@ Either:
 
       const accumulator = createStreamAccumulator()
       const contentBlocks: ParsedContentBlock[] = []
-      let inputTokens = 0
-      let outputTokens = 0
-      let cachedInputTokens = 0
+      let usage: AnthropicUsage = {
+        input_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        output_tokens: 0,
+      }
       let stopReason: string | null = null
 
       let toolChoice = ctx.toolChoice ?? ctx.agent.toolChoice
@@ -251,14 +254,11 @@ Either:
         }
 
         if (event.type === 'message_start') {
-          inputTokens = event.message.usage?.input_tokens ?? 0
-          cachedInputTokens =
-            (event.message.usage as { cache_read_input_tokens?: number | null })
-              ?.cache_read_input_tokens ?? 0
+          usage = mergeAnthropicUsage(usage, event.message.usage)
         }
 
         if (event.type === 'message_delta') {
-          outputTokens = event.usage?.output_tokens ?? 0
+          usage = mergeAnthropicUsage(usage, event.usage)
           stopReason = event.delta?.stop_reason ?? null
         }
 
@@ -326,7 +326,7 @@ Either:
 
       return parseResponse(
         contentBlocks,
-        { inputTokens, outputTokens, cachedTokens: cachedInputTokens },
+        normalizeAnthropicUsage(usage),
         stopReason,
         ctx.invocationId,
         ctx.agentName,
@@ -581,6 +581,43 @@ interface ClaudeUsage {
   inputTokens: number
   outputTokens: number
   cachedTokens?: number
+  cacheWriteTokens?: number
+}
+
+interface AnthropicUsage {
+  input_tokens: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
+  output_tokens: number
+}
+
+type AnthropicUsageReport = {
+  [K in keyof AnthropicUsage]?: number | null
+}
+
+// message_delta repeats cumulative counts and leaves unreported fields null.
+function mergeAnthropicUsage(
+  usage: AnthropicUsage,
+  report: AnthropicUsageReport | null | undefined,
+): AnthropicUsage {
+  return {
+    input_tokens: report?.input_tokens ?? usage.input_tokens,
+    cache_read_input_tokens: report?.cache_read_input_tokens ?? usage.cache_read_input_tokens,
+    cache_creation_input_tokens:
+      report?.cache_creation_input_tokens ?? usage.cache_creation_input_tokens,
+    output_tokens: report?.output_tokens ?? usage.output_tokens,
+  }
+}
+
+// Anthropic's input_tokens excludes cache reads and writes; ModelUsage counts them as subsets.
+function normalizeAnthropicUsage(usage: AnthropicUsage): ClaudeUsage {
+  return {
+    inputTokens:
+      usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens,
+    outputTokens: usage.output_tokens,
+    cachedTokens: usage.cache_read_input_tokens,
+    cacheWriteTokens: usage.cache_creation_input_tokens,
+  }
 }
 
 function parseClaudeUsage(usage: ClaudeUsage): ModelUsage {
@@ -588,6 +625,7 @@ function parseClaudeUsage(usage: ClaudeUsage): ModelUsage {
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     ...(usage.cachedTokens !== undefined && { cachedTokens: usage.cachedTokens }),
+    ...(usage.cacheWriteTokens !== undefined && { cacheWriteTokens: usage.cacheWriteTokens }),
   }
 }
 

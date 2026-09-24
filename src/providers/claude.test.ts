@@ -20,6 +20,7 @@ import {
   serializeToolChoice,
   ClaudeAdapter,
 } from './claude'
+import { calculateCost } from './pricing'
 
 const TEST_INV_ID = 'test-invocation-id'
 const TEST_AGENT = 'test_agent'
@@ -723,6 +724,111 @@ describe('Claude provider', () => {
       // so the adapter must omit it rather than fail the request.
       expect(request.thinking).toBeDefined()
       expect(request).not.toHaveProperty('temperature')
+    })
+  })
+
+  describe('Claude usage', () => {
+    async function streamUsage(events: unknown[]) {
+      const adapter = new ClaudeAdapter()
+      // @ts-expect-error replacing the private client factory so no network call happens
+      adapter.getClient = () => ({
+        messages: {
+          create: async () =>
+            (async function* () {
+              yield* events
+            })(),
+        },
+      })
+      const ctx = {
+        events: [{ type: 'user', text: 'hi' }],
+        functionTools: [],
+        invocationId: TEST_INV_ID,
+        agentName: TEST_AGENT,
+        agent: {},
+        session: {},
+      } as unknown as RenderContext
+      const stream = adapter.step(ctx, {
+        provider: 'claude',
+        name: 'claude-sonnet-4',
+        vertex: { project: 'p', location: 'l' },
+      } as never)
+      let next = await stream.next()
+      while (!next.done) next = await stream.next()
+      return next.value.usage
+    }
+
+    it('counts cache reads and writes inside inputTokens', async () => {
+      const usage = await streamUsage([
+        {
+          type: 'message_start',
+          message: {
+            usage: {
+              input_tokens: 100,
+              cache_read_input_tokens: 3000,
+              cache_creation_input_tokens: 900,
+              output_tokens: 1,
+            },
+          },
+        },
+        {
+          type: 'message_delta',
+          delta: { stop_reason: 'end_turn' },
+          usage: {
+            input_tokens: null,
+            cache_read_input_tokens: null,
+            cache_creation_input_tokens: null,
+            output_tokens: 250,
+          },
+        },
+      ])
+
+      expect(usage).toEqual({
+        inputTokens: 4000,
+        outputTokens: 250,
+        cachedTokens: 3000,
+        cacheWriteTokens: 900,
+      })
+
+      // The catalog has no Claude entry and calculateCost takes no catalog argument, so price the
+      // normalized usage against a catalog entry with distinct read and write rates
+      // (gpt-5.6-luna: $0.20 input, $0.02 cached, $0.25 cache write, $1.20 output per million).
+      const cost = calculateCost({ ...usage, modelName: 'gpt-5.6-luna' })
+      expect(cost).not.toBeNull()
+      expect(cost!.inputCost).toBeCloseTo((100 * 0.2 + 3000 * 0.02 + 900 * 0.25) / 1_000_000, 12)
+      expect(cost!.outputCost).toBeCloseTo((250 * 1.2) / 1_000_000, 12)
+    })
+
+    it('takes cumulative input counts reported on message_delta', async () => {
+      const usage = await streamUsage([
+        {
+          type: 'message_start',
+          message: {
+            usage: {
+              input_tokens: 10,
+              cache_read_input_tokens: null,
+              cache_creation_input_tokens: null,
+              output_tokens: 1,
+            },
+          },
+        },
+        {
+          type: 'message_delta',
+          delta: { stop_reason: 'end_turn' },
+          usage: {
+            input_tokens: 12,
+            cache_read_input_tokens: 500,
+            cache_creation_input_tokens: 40,
+            output_tokens: 30,
+          },
+        },
+      ])
+
+      expect(usage).toEqual({
+        inputTokens: 552,
+        outputTokens: 30,
+        cachedTokens: 500,
+        cacheWriteTokens: 40,
+      })
     })
   })
 })

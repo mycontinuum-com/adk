@@ -50,6 +50,10 @@ Migration section:
 - Concurrent suites retain results from already-running cases after stopping scheduling on failure.
 - Voice metric data must be JSON-compatible before worker IPC; unsupported values fail rather than disappearing from evidence.
 
+### Fixed
+
+- Claude usage — `inputTokens` now includes cache reads and cache writes, `cachedTokens` reports cache reads and `cacheWriteTokens` reports cache writes, matching the other providers. Before, Anthropic's uncached-only `input_tokens` made `calculateCost` underprice cached calls and never count cache writes.
+
 ## [0.6.1]
 
 ### Added
