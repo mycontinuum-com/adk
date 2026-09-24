@@ -4,7 +4,11 @@ import type { AdkApp } from '../api/app'
 import type { ModelUsage } from '../types/events'
 import type { StateSchema } from '../types/schema'
 import type { Session, SessionService, SessionStore } from '../types/session'
-import type { GPTLiveTranscript, GPTLiveTranscriptSnapshot } from './gpt-live-transcript'
+import type {
+  GPTLiveTranscript,
+  GPTLiveTranscriptSnapshot,
+  GPTLiveTranscriptSource,
+} from './gpt-live-transcript'
 import type {
   LiveCallUsage,
   LiveVoiceContext,
@@ -47,16 +51,30 @@ export type LiveVoiceJob = Pick<
   'room' | 'connect' | 'waitForParticipant' | 'addShutdownCallback' | 'shutdown'
 >
 
+interface GPTLiveSession extends GPTLiveTranscriptSource {
+  appendThinking(text: string, options: { delegationId?: string }): unknown
+  appendCommentary(text: string, options: { delegationId?: string }): unknown
+  appendInstructions(text: string, options: { delegationId?: string }): unknown
+  on(
+    event: 'openai_server_event_received' | 'openai_client_event_queued',
+    listener: (event: unknown) => void,
+  ): unknown
+  on(event: 'delegation_created', listener: (event: { id: string }) => void): unknown
+}
+
+interface GPTLiveRealtime {
+  GPTLiveModel: new (options: Record<string, unknown>) => InstanceType<LiveKitAgents['llm']['LLM']>
+  GPTLiveSession: new (...args: never[]) => GPTLiveSession
+}
+
 interface LiveDeps {
   agents(): typeof import('@livekit/agents')
-  openai(): typeof import('@livekit/agents-plugin-openai')
+  openai(): { realtime: GPTLiveRealtime }
   livekitServer: VoiceDeps['livekitServer']
   clock?: () => number
 }
 
 type LiveKitAgents = ReturnType<LiveDeps['agents']>
-type GPTLiveRealtime = ReturnType<LiveDeps['openai']>['realtime']
-type GPTLiveSession = InstanceType<GPTLiveRealtime['GPTLiveSession']>
 type VoiceSession = InstanceType<LiveKitAgents['voice']['AgentSession']>
 
 /** Handler configuration shared by every call the worker accepts. */
@@ -194,7 +212,7 @@ function createLiveAgent(
 ) {
   return new (class extends Agent {
     override async onEnter() {
-      await call.enter(this.duplexSession, recorder)
+      await call.enter(Reflect.get(this, 'duplexSession'), recorder)
     }
     override async onExit() {
       call.stop()
@@ -286,9 +304,9 @@ class LiveCall<S extends StateSchema, T> {
         throw new Error('Expected GPT Live session')
       const live = duplexSession
       recorder.attach(live)
-      if (live.sessionId) this.meter.observeConnection(live.sessionId)
+      if (live.sessionId) this.meter.observeConnection(live.sessionId ?? undefined)
       live.on('openai_server_event_received', (event) =>
-        this.meter.observeServerEvent(event, live.sessionId),
+        this.meter.observeServerEvent(event, live.sessionId ?? undefined),
       )
       const entered = liveContext(this, recorder, this.controls(live))
       this.context = entered
@@ -718,7 +736,7 @@ export function createLiveVoiceHandler<S extends StateSchema, T>(
 ): VoiceHandlerHandle {
   const agents = deps.agents()
   const { realtime } = deps.openai()
-  if (!realtime.GPTLiveModel)
+  if (!realtime.GPTLiveModel || !realtime.GPTLiveSession)
     throw new Error('openai.live requires LiveKit agents and OpenAI plugin 1.9 or later')
   const hooks = config.hooks ?? []
   if (!hooks.some((hook) => hook.onResult))

@@ -57,6 +57,7 @@ Migration section:
 - `ModelUsage.provider` — text model calls record the agent's provider.
 - OpenAI realtime usage — reports `audioCachedTokens` from `cached_tokens_details`, so cached audio is priced once.
 - LiveKit agents peer range is now `^1.9.0`. GPT Live requires LiveKit Agents and its OpenAI plugin 1.9 or later.
+- LiveKit agents — supports matching agent and provider-plugin versions from `1.4.4`; `openai.live` requires LiveKit Agents and its OpenAI plugin 1.9 or later.
 - Voice evidence directories start with an execution index to prevent collisions between case names. Follow `index.md` or returned recording paths instead of constructing paths from case names.
 - Concurrent suites retain results from already-running cases after stopping scheduling on failure.
 - Voice metric data must be JSON-compatible before worker IPC; unsupported values fail rather than disappearing from evidence.
@@ -115,7 +116,7 @@ A hook that relied on seeing direct `session.state` writes made outside any invo
 - EUrouter reasoning — preserves structured `reasoning_details` and empty reasoning fields across model calls and saved sessions.
 
 - `zod` compatibility — accepts Zod 3 Classic `^3.25.76` and Zod 4 Classic `^4.6.5` across state, tools, output schemas, parsing, CLI input, and provider schema conversion. Existing Zod 3 applications can upgrade without changing schemas.
-- LiveKit agents — supports `^1.8.1` and tests against `1.9.0`. Install `@livekit/agents` and its provider plugins at matching versions.
+- LiveKit agents — supports matching agent and provider-plugin versions from `1.4.4`; CI verifies `1.4.4` and development uses `1.9.0`.
 - Provider SDKs — accepts OpenAI `^6.0.0` and Google GenAI `^1.52.0`. `@livekit/rtc-node` is now an explicit optional peer.
 - OpenAI sampling — accepts `reasoning.effort: 'none'` and forwards an explicit temperature when reasoning is disabled. Active reasoning continues to omit temperature, and an omitted temperature preserves the provider default.
 

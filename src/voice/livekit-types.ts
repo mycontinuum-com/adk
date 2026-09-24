@@ -47,6 +47,7 @@ export interface LKAgentInstance {
 
 export interface LKImports {
   defineAgent?(agent: import('./types').VoiceHandlerHandle): unknown
+  initializeLogger(opts: { pretty: boolean; level?: string }): void
   voice: {
     Agent: new (opts: {
       instructions: string
