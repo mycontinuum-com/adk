@@ -214,3 +214,37 @@ Output is available as `result.output.text`, `result.output.value`, `result.outp
 ## Patterns
 
 `gated(runnable, check)` runs a precondition first. `cached(runnable, { key, scope, ttlMs })` skips a runnable when cached state exists.
+
+## Composing independently runnable packages
+
+Use `parent.bind({ app: child, runnable })` to put a separately constructed stage into a parent
+sequence. Declare the child's session fields in the parent schema. The parent schema must extend
+the child's schema; incompatible field types are rejected by TypeScript.
+
+Bound components take their input from session state and must run to completion. Binding creates
+an isolated child invocation: the parent's `input.message` is not automatically forwarded to the
+child's invocation history. Construct model context from the child's declared state inputs.
+Conversational or yielding components need explicit input routing outside this binding contract.
+
+```typescript
+const parent = adk({
+  name: 'document',
+  schema: { session: { ...transcription.app.schema.session, ...extraction.app.schema.session } },
+  adapters,
+})
+const flow = parent.sequence({
+  name: 'document-flow',
+  runnables: [parent.bind(transcription), parent.bind(extraction)],
+})
+```
+
+Binding runs the child through the parent's existing runner, session, model adapters and global
+hooks. The child keeps its configured agent contexts, models, tools and agent hooks. Invocation
+ancestry and usage stay in one event stream. Closing an independently configured child app remains
+the caller's responsibility when it owns resources such as MCP connections.
+
+The binding step validates and applies the child's session values/defaults before running it,
+validates the parent state after completion, and returns the child output. Failed or interrupted
+children, including yielded or partially completed runs, fail the binding without publishing an output. Binding currently supports session-only
+child schemas; shared and temporary scopes are rejected. Each child should reset its own transient
+state in its public runnable when repeated execution requires a fresh result.

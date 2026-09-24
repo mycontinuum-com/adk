@@ -348,6 +348,16 @@ export interface AdkApp<S extends StateSchema> {
   ): Agent<S, TOutput>
   agent<TOutput = unknown>(config: AgentConfig<S, TOutput>): Agent<S, TOutput>
 
+  /**
+   * Bind a component that reads session state and runs to completion using this app's runner.
+   * Parent input messages are not forwarded; yielded or incomplete children fail the binding.
+   */
+  bind<C extends StateSchema>(
+    component: { app: Pick<AdkApp<C>, 'schema'>; runnable: Runnable<C> } & (S extends C
+      ? unknown
+      : never),
+  ): Step<S>
+
   step(config: StepConfig<S>): Step<S>
   sequence(config: SequenceConfig<S>): Sequence<S>
   parallel(config: ParallelConfig<S>): Parallel<S>
@@ -746,6 +756,36 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
         output: normalizedOutput,
         hooks: agentConfig.hooks ?? appHooks,
         errorHandlers: agentConfig.errorHandlers ?? appErrorHandlers,
+      })
+    },
+
+    bind<C extends StateSchema>(
+      component: { app: Pick<AdkApp<C>, 'schema'>; runnable: Runnable<C> } & (S extends C
+        ? unknown
+        : never),
+    ): Step<S> {
+      const childSchema = component.app.schema
+      if (Object.keys(childSchema).some((scope) => scope !== 'session'))
+        throw new Error('app.bind currently supports session state only')
+      for (const key of Object.keys(childSchema.session ?? {})) {
+        if (!Object.hasOwn(schema.session ?? {}, key))
+          throw new Error(`app.bind: parent session schema is missing '${key}'`)
+      }
+      return createStep<S>({
+        name: `bind-${component.runnable.name}`,
+        execute: async (ctx) => {
+          const childInput = Object.fromEntries(
+            Object.keys(childSchema.session ?? {}).map((key) => [key, ctx.state[key]]),
+          )
+          const input = applySchemaDefaults(childInput, childSchema.session)
+          ctx.session.boundState<StateSchema>(ctx.invocationId).update(input)
+          const child = component.runnable as Runnable<S>
+          const result = await ctx.run(child)
+          if (result.status !== 'completed')
+            throw new Error(result.error ?? `${component.runnable.name} ${result.status}`)
+          applySchemaDefaults(ctx.state, schema.session)
+          ctx.output(result.output.value)
+        },
       })
     },
 
