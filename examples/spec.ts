@@ -46,4 +46,4 @@ const chat = app.loop({
   while: () => true,
 })
 
-app.cli(chat)
+app.terminal(chat)

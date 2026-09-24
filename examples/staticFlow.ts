@@ -339,7 +339,7 @@ const contentPipeline = app.sequence({
   runnables: [researchPhase, planningPhase, writingPhase, publisher],
 })
 
-app.cli(
+app.terminal(
   contentPipeline,
   'Write a blog post about the benefits of TypeScript for large-scale applications',
 )

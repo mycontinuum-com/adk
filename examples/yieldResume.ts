@@ -65,4 +65,4 @@ const purchaseAgent = app.agent({
   tools: [approvalTool, purchaseTool],
 })
 
-app.cli(purchaseAgent, 'Buy a laptop for $1500')
+app.terminal(purchaseAgent, 'Buy a laptop for $1500')

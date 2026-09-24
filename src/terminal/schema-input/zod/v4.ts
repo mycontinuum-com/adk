@@ -49,7 +49,7 @@ function unwrap(schema: z.ZodType): {
     required = false
     if (current instanceof z.ZodDefault) defaultValue = current.def.defaultValue
     const inner = current.unwrap()
-    if (!(inner instanceof z.ZodType)) throw new Error('CLI schemas must use Zod Classic')
+    if (!(inner instanceof z.ZodType)) throw new Error('Terminal schemas must use Zod Classic')
     current = inner
   }
   return { inner: current, required, defaultValue }

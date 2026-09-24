@@ -94,4 +94,4 @@ const chat = app.loop({
   },
 })
 
-app.cli(chat)
+app.terminal(chat)

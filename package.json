@@ -28,8 +28,8 @@
   "types": "dist/index.d.ts",
   "typesVersions": {
     "*": {
-      "cli": [
-        "dist/cli/index.d.ts"
+      "terminal": [
+        "dist/terminal/index.d.ts"
       ],
       "testing": [
         "dist/testing/index.d.ts"
@@ -93,10 +93,10 @@
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
     },
-    "./cli": {
-      "types": "./dist/cli/index.d.ts",
-      "import": "./dist/cli/index.mjs",
-      "require": "./dist/cli/index.js"
+    "./terminal": {
+      "types": "./dist/terminal/index.d.ts",
+      "import": "./dist/terminal/index.mjs",
+      "require": "./dist/terminal/index.js"
     },
     "./testing": {
       "types": "./dist/testing/index.d.ts",
@@ -194,7 +194,7 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "rm -rf dist && tsup && tsc -p tsconfig.json --emitDeclarationOnly && node scripts/postbuild-dts-aliases.cjs && node scripts/postbuild-cli-cjs-wrapper.cjs && node scripts/verify-package-exports.cjs",
+    "build": "rm -rf dist && tsup && tsc -p tsconfig.json --emitDeclarationOnly && node scripts/postbuild-dts-aliases.cjs && node scripts/postbuild-terminal-cjs-wrapper.cjs && node scripts/verify-package-exports.cjs",
     "dev": "tsup --watch",
     "test": "vp test run",
     "test:postgres": "vp test run src/**/postgres.test.ts",

@@ -1,10 +1,10 @@
 /**
  * Index.hooks-surface — Built-in hooks are usable from the Core barrel
  *
- * The hook implementations (composeHooks, loggingHook, metricsHook, cliHook) live in src/hook/*,
- * but the Core entry previously re-exported only their option _types_ — a consumer importing from
- * `@animahealth/adk` had no way to construct a built-in hook at all. This asserts each
- * implementation is exported from './index' and produces a working Hook.
+ * The hook implementations (composeHooks, loggingHook, metricsHook, consoleHook) live in
+ * src/hook/*, but the Core entry previously re-exported only their option _types_ — a consumer
+ * importing from `@animahealth/adk` had no way to construct a built-in hook at all. This asserts
+ * each implementation is exported from './index' and produces a working Hook.
  *
  * Evidence: import-graph/build
  */
@@ -33,10 +33,10 @@ describe('index hooks surface', () => {
     expect(typeof hook.onEvent).toBe('function')
   })
 
-  it('exports cliHook as a callable that builds a named Hook', () => {
-    expect(typeof core.cliHook).toBe('function')
-    const hook = core.cliHook()
-    expect(hook.name).toBe('cli')
+  it('exports consoleHook as a callable that builds a named Hook', () => {
+    expect(typeof core.consoleHook).toBe('function')
+    const hook = core.consoleHook()
+    expect(hook.name).toBe('console')
     expect(typeof hook.onEvent).toBe('function')
   })
 

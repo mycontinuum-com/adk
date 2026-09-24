@@ -49,6 +49,9 @@ Migration section:
 - Voice evidence directories start with an execution index to prevent collisions between case names. Follow `index.md` or returned recording paths instead of constructing paths from case names.
 - Concurrent suites retain results from already-running cases after stopping scheduling on failure.
 - Voice metric data must be JSON-compatible before worker IPC; unsupported values fail rather than disappearing from evidence.
+- `app.cli(...)` → `app.terminal(...)`; subpath `./cli` → `./terminal`; `src/cli` → `src/terminal`. `CLIOptions`/`CLIConfig`/`CLIHandle`/`CLIStatus` → `TerminalOptions`/`TerminalConfig`/`TerminalHandle`/`TerminalStatus`. Renames the interactive terminal UI to stop colliding in name with `app.evaluate.cli`, which is unrelated and keeps its name.
+- `app.hook.cli()` → `app.hook.console()`; `cliHook` → `consoleHook`; `CliHookOptions` → `ConsoleHookOptions`; `src/hook/cli.ts` → `src/hook/console.ts`. Renames the ANSI console-print hook for the same reason.
+- `app.terminal(...)`'s default session's app name is now `'terminal'` (was `'cli'`) when no `session` is passed.
 
 ### Fixed
 

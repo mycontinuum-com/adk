@@ -1,15 +1,15 @@
 import type { Runnable } from '../types/runnables'
 import type { RunResult, Runner } from '../types/runtime'
 import type { Session } from '../types/session'
-import type { CLIOptions, CLIConfig, CLIHandle } from './types'
+import type { TerminalOptions, TerminalConfig, TerminalHandle } from './types'
 
 import { BaseRunner } from '../core'
 import { BaseSession } from '../session'
 import { initLogCapture, repatchConsole } from './logCapture'
 
-export type { CLIOptions, CLIConfig, CLIHandle, DisplayMode } from './types'
+export type { TerminalOptions, TerminalConfig, TerminalHandle, DisplayMode } from './types'
 
-// CLI utilities (moved here from main index to avoid leaking react/ink into the main CJS bundle)
+// Terminal utilities (moved here from main index to avoid leaking react/ink into the main CJS bundle)
 export { extractCurrentThoughtBlock } from './event-display'
 export { buildInvocationBlocks } from './blocks'
 export type { InvocationBlock } from './blocks'
@@ -20,7 +20,7 @@ const CLEAR_SCREEN = '\x1b[2J\x1b[H'
 const HIDE_CURSOR = '\x1b[?25l'
 const SHOW_CURSOR = '\x1b[?25h'
 
-/** Everything the rendered CLI needs from the optional `ink`/`react` peers. */
+/** Everything the rendered terminal UI needs from the optional `ink`/`react` peers. */
 interface InkRuntime {
   render: typeof import('ink').render
   React: typeof import('react')
@@ -31,7 +31,7 @@ interface InkRuntime {
 
 /**
  * A raw `Cannot find package 'ink'` is the first thing a reader of the README hits when they try
- * `/cli` without the optional UI peers, so the message names what to install instead. Only a
+ * `/terminal` without the optional UI peers, so the message names what to install instead. Only a
  * resolution failure is substituted; anything else the modules throw on load is rethrown
  * untouched.
  */
@@ -67,18 +67,18 @@ async function loadInkRuntime(): Promise<InkRuntime> {
   } catch (error) {
     if (!isModuleNotFoundError(error)) throw error
     throw new Error(
-      'CLI dependencies not found. Install them with: npm install ink ink-text-input react',
+      'Terminal dependencies not found. Install them with: npm install ink ink-text-input react',
       { cause: error },
     )
   }
 }
 
-function createCLIHandle(
+function createTerminalHandle(
   runnable: Runnable<any>,
   runner: Runner,
   session: Session,
   resultPromise: Promise<RunResult>,
-): CLIHandle {
+): TerminalHandle {
   return {
     runner,
     session,
@@ -93,14 +93,17 @@ function createCLIHandle(
   }
 }
 
-export function cli(runnable: Runnable<any>): CLIHandle
-export function cli(runnable: Runnable<any>, input: string): CLIHandle
-export function cli(runnable: Runnable<any>, config: CLIConfig): CLIHandle
-export function cli(runnable: Runnable<any>, inputOrConfig?: string | CLIConfig): CLIHandle {
+export function terminal(runnable: Runnable<any>): TerminalHandle
+export function terminal(runnable: Runnable<any>, input: string): TerminalHandle
+export function terminal(runnable: Runnable<any>, config: TerminalConfig): TerminalHandle
+export function terminal(
+  runnable: Runnable<any>,
+  inputOrConfig?: string | TerminalConfig,
+): TerminalHandle {
   initLogCapture()
 
   let input: string | undefined
-  let config: CLIConfig = {}
+  let config: TerminalConfig = {}
 
   if (typeof inputOrConfig === 'string') {
     input = inputOrConfig
@@ -110,7 +113,7 @@ export function cli(runnable: Runnable<any>, inputOrConfig?: string | CLIConfig)
   }
 
   const options = config.options ?? {}
-  const resolvedOptions: CLIOptions = {
+  const resolvedOptions: TerminalOptions = {
     showDurations: options.showDurations ?? true,
     showIds: options.showIds ?? false,
     exitOnComplete: options.exitOnComplete ?? false,
@@ -136,7 +139,7 @@ export function cli(runnable: Runnable<any>, inputOrConfig?: string | CLIConfig)
 
   // The peers load before the alt screen is entered, so a missing-dependency error is printed onto
   // the user's real terminal rather than into a screen buffer that is torn down with it.
-  renderCLI({
+  renderTerminal({
     runnable,
     runner: runner as BaseRunner,
     session: session as BaseSession,
@@ -145,19 +148,19 @@ export function cli(runnable: Runnable<any>, inputOrConfig?: string | CLIConfig)
     onResult: (result: RunResult) => resolveResult(result),
   }).catch(rejectResult)
 
-  return createCLIHandle(runnable, runner, session, resultPromise)
+  return createTerminalHandle(runnable, runner, session, resultPromise)
 }
 
-interface RenderCLIParams {
+interface RenderTerminalParams {
   runnable: Runnable<any>
   runner: BaseRunner
   session: BaseSession
   input: string | undefined
-  options: CLIOptions
+  options: TerminalOptions
   onResult: (result: RunResult) => void
 }
 
-async function renderCLI(params: RenderCLIParams): Promise<void> {
+async function renderTerminal(params: RenderTerminalParams): Promise<void> {
   const { render, React, App, SpinnerProvider, TerminalProvider } = await loadInkRuntime()
 
   process.stdout.write(ENTER_ALT_SCREEN)

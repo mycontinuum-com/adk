@@ -1,4 +1,4 @@
-import type { CLIConfig } from '../cli/types'
+import type { TerminalConfig } from '../terminal/types'
 
 import { agent } from '../agents'
 import { adk } from '../api'
@@ -10,7 +10,7 @@ import { MockAdapter } from '../testing'
 /**
  * Adapters registered on the app (`adk({ adapters })`) are the documented seam for serving or
  * driving an agent without provider credentials. `app.run` honours them; these tests pin the same
- * guarantee for the handler entrypoints and for the runner `app.cli` builds.
+ * guarantee for the handler entrypoints and for the runner `app.terminal` builds.
  */
 
 /** Remove every credential `getDefaultEndpoints()` would accept, so a real adapter must throw. */
@@ -81,7 +81,7 @@ describe('app adapters reach the handlers', () => {
   })
 })
 
-describe('app adapters reach the CLI runner', () => {
+describe('app adapters reach the terminal runner', () => {
   beforeEach(() => {
     withoutOpenAICredentials()
   })
@@ -90,27 +90,27 @@ describe('app adapters reach the CLI runner', () => {
     vi.unstubAllEnvs()
   })
 
-  it('app.cli builds a runner that resolves the app adapters', async () => {
-    const { adapter, app, myAgent } = scriptedApp('Scripted cli reply')
+  it('app.terminal builds a runner that resolves the app adapters', async () => {
+    const { adapter, app, myAgent } = scriptedApp('Scripted terminal reply')
 
-    // `app.cli` cannot complete under Vitest: it lazily `require()`s `../cli`, and Node's require
-    // cannot resolve the TypeScript sources. The runner is built before that load, so the runner it
-    // hands the CLI is still observable on the config object we passed in.
-    const cliConfig: CLIConfig = { input: 'Hi' }
+    // `app.terminal` cannot complete under Vitest: it lazily `require()`s `../terminal`, and Node's
+    // require cannot resolve the TypeScript sources. The runner is built before that load, so the
+    // runner it hands the terminal UI is still observable on the config object we passed in.
+    const terminalConfig: TerminalConfig = { input: 'Hi' }
     try {
-      app.cli(myAgent, cliConfig)
+      app.terminal(myAgent, terminalConfig)
     } catch {
-      // Expected: the Ink/React CLI module is not loadable from source in this environment.
+      // Expected: the Ink/React terminal module is not loadable from source in this environment.
     }
 
-    expect(cliConfig.runner).toBeDefined()
+    expect(terminalConfig.runner).toBeDefined()
 
     const session = new BaseSession('adapters-test')
     session.input.message('Hi')
-    const result = await cliConfig.runner!.run(myAgent, session)
+    const result = await terminalConfig.runner!.run(myAgent, session)
 
     expect(result.status).toBe('completed')
-    expect(result.output.text).toBe('Scripted cli reply')
+    expect(result.output.text).toBe('Scripted terminal reply')
     expect(adapter.stepCalls.length).toBe(1)
   })
 })

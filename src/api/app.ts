@@ -3,7 +3,6 @@ import type { AGUIEvent } from '@ag-ui/core'
 import { z } from 'zod'
 
 import type { AskOpts } from '../agents/ask'
-import type { CLIConfig, CLIHandle } from '../cli/types'
 import type { IncludeHistoryOptions } from '../context/history'
 import type {
   MessagePrompt,
@@ -44,6 +43,7 @@ import type {
 } from '../mcp/types'
 import type { SessionOptions } from '../session'
 import type { StateChanges } from '../session/seedState'
+import type { TerminalConfig, TerminalHandle } from '../terminal/types'
 import type {
   Agent,
   LiveAgent,
@@ -110,7 +110,7 @@ import { createVoiceEvalCase } from '../eval/voice/control'
 import { aguiHandler } from '../handler/agui'
 import { restHandler, type RestResponse } from '../handler/rest'
 import { turn } from '../handler/turn'
-import { cliHook, type CliHookOptions } from '../hook/cli'
+import { consoleHook, type ConsoleHookOptions } from '../hook/console'
 import { loggingHook, type LoggingHookOptions } from '../hook/logging'
 import { metricsHook, type MetricsHookOptions } from '../hook/metrics'
 import { createMCPManager } from '../mcp/manager'
@@ -309,7 +309,7 @@ interface HookNamespace<S extends StateSchema = StateSchema> {
   voiceLogging(options?: VoiceLoggingOptions<S>): VoiceHook<S>
   voice(hook: Partial<VoiceHook<S>>): VoiceHook<S>
   metrics(options: MetricsHookOptions): Hook<S>
-  cli(options?: CliHookOptions): Hook<S>
+  console(options?: ConsoleHookOptions): Hook<S>
 }
 
 type UserHandlerConfig<S extends StateSchema> = Omit<HandlerConfig<S>, 'appName'>
@@ -440,9 +440,9 @@ export interface AdkApp<S extends StateSchema> {
   }
   initialState(config: StateChanges<S>): StateChanges<S>
 
-  cli(runnable: Runnable<S>): CLIHandle
-  cli(runnable: Runnable<S>, input: string): CLIHandle
-  cli(runnable: Runnable<S>, config: CLIConfig): CLIHandle
+  terminal(runnable: Runnable<S>): TerminalHandle
+  terminal(runnable: Runnable<S>, input: string): TerminalHandle
+  terminal(runnable: Runnable<S>, config: TerminalConfig): TerminalHandle
 
   close(): Promise<void>
 }
@@ -721,7 +721,7 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
       },
       voice: (h: Partial<VoiceHook<S>>): VoiceHook<S> => h as VoiceHook<S>,
       metrics: (opts: MetricsHookOptions) => metricsHook(opts) as Hook<S>,
-      cli: (opts?: CliHookOptions) => cliHook(opts) as Hook<S>,
+      console: (opts?: ConsoleHookOptions) => consoleHook(opts) as Hook<S>,
     }),
     handler: {
       rest: (cfg) =>
@@ -1034,22 +1034,22 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
 
     initialState: (state: StateChanges<S>) => state,
 
-    cli(runnable: Runnable<S>, inputOrConfig?: string | CLIConfig): CLIHandle {
-      const cliConfig: CLIConfig =
+    terminal(runnable: Runnable<S>, inputOrConfig?: string | TerminalConfig): TerminalHandle {
+      const terminalConfig: TerminalConfig =
         typeof inputOrConfig === 'string' ? { input: inputOrConfig } : (inputOrConfig ?? {})
 
-      cliConfig.runner ??= new BaseRunner({
-        sessionService: cliConfig.sessionService ?? appSessionService,
+      terminalConfig.runner ??= new BaseRunner({
+        sessionService: terminalConfig.sessionService ?? appSessionService,
         adapters: appAdapters,
-        hooks: prepend(appHooks, cliConfig.options?.hooks),
+        hooks: prepend(appHooks, terminalConfig.options?.hooks),
         errorHandlers: appErrorHandlers,
       })
-      cliConfig.session ??= new BaseSession(appName)
+      terminalConfig.session ??= new BaseSession(appName)
 
-      // Lazy require to avoid loading React/Ink until cli() is actually called
-      const { cli: runCli } = require('../cli') as typeof import('../cli')
+      // Lazy require to avoid loading React/Ink until terminal() is actually called
+      const { terminal: runTerminal } = require('../terminal') as typeof import('../terminal')
 
-      return runCli(runnable, cliConfig)
+      return runTerminal(runnable, terminalConfig)
     },
 
     async close(): Promise<void> {

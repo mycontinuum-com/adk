@@ -54,7 +54,7 @@ Built-ins:
 
 - `app.hook.logging(options?)`
 - `app.hook.metrics(options)`
-- `app.hook.cli(options?)`
+- `app.hook.console(options?)`
 - `app.hook.voice(partialVoiceHook)`
 - `app.hook.voiceLogging(options?)`
 

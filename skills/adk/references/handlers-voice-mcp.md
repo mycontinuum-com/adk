@@ -1,6 +1,6 @@
-# Handlers, Voice, MCP, CLI, And Web
+# Handlers, Voice, MCP, Terminal, And Web
 
-Use this reference for protocol handlers, voice agents, MCP servers, stream events, the interactive CLI, and built-in web tools.
+Use this reference for protocol handlers, voice agents, MCP servers, stream events, the interactive terminal UI, and built-in web tools.
 
 ## Handler Model
 
@@ -153,11 +153,11 @@ Common stream events:
 
 Use `model_start`/`model_end` for observability, context inspection, usage, cost, duration, and provider finish metadata.
 
-## CLI
+## Terminal
 
-`app.cli(runnable, inputOrConfig?)` starts the interactive terminal UI. It lazy-loads React/Ink. Display modes are debug, content, and logging.
+`app.terminal(runnable, inputOrConfig?)` starts the interactive terminal UI. It lazy-loads React/Ink. Display modes are debug, content, and logging.
 
-Use CLI for local development and yield/resume debugging, not production protocol handling.
+Use the terminal UI for local development and yield/resume debugging, not production protocol handling.
 
 ## Web Tools
 

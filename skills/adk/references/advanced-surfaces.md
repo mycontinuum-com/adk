@@ -14,7 +14,7 @@ Optional peer dependency surfaces should generally be subpath exports so consume
 
 Current subpath exports include:
 
-- `@animahealth/adk/cli`
+- `@animahealth/adk/terminal`
 - `@animahealth/adk/testing`
 - `@animahealth/adk/eval`
 - `@animahealth/adk/web`
@@ -150,7 +150,6 @@ src/
   api/          # adk() app namespace and spec factories
   artifacts/    # artifact services
   channels/     # event channels
-  cli/          # interactive terminal UI
   context/      # render pipeline and prompt helpers
   core/         # runner, tools, orchestration
   errors/       # handlers and pipeline
@@ -167,6 +166,7 @@ src/
   providers/    # model adapters
   run/          # test/simulate named execution patterns
   session/      # event ledger and stores
+  terminal/     # interactive terminal UI
   testing/      # mocks/matchers/test runner
   types/        # public/internal types
   voice/        # LiveKit voice runtime

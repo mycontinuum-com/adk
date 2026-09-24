@@ -3,11 +3,11 @@ import type { Runnable } from '../types/runnables'
 import type { RunResult, Runner } from '../types/runtime'
 import type { SessionService, Session } from '../types/session'
 
-export type CLIStatus = 'idle' | 'running' | 'yielded' | 'completed' | 'error'
+export type TerminalStatus = 'idle' | 'running' | 'yielded' | 'completed' | 'error'
 
 export type DisplayMode = 'content' | 'debug' | 'logging'
 
-export interface CLIOptions {
+export interface TerminalOptions {
   hooks?: Hook<any>[]
   showDurations?: boolean
   showIds?: boolean
@@ -16,15 +16,15 @@ export interface CLIOptions {
   defaultMode?: DisplayMode
 }
 
-export interface CLIConfig {
+export interface TerminalConfig {
   runner?: Runner
   session?: Session
   sessionService?: SessionService
   input?: string
-  options?: CLIOptions
+  options?: TerminalOptions
 }
 
-export interface CLIHandle extends PromiseLike<RunResult> {
+export interface TerminalHandle extends PromiseLike<RunResult> {
   readonly runner: Runner
   readonly session: Session
   readonly runnable: Runnable<any>

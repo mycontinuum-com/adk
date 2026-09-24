@@ -146,7 +146,7 @@ provides the same separate completion barrier, including its persistence work.
 | `/eval` | Evaluation suites, metrics, reports, simulation |
 | `/voice` | The LiveKit voice handler and realtime models |
 | `/web` | Web tools: search, fetch, screenshot |
-| `/agui` · `/cli` | The AG-UI protocol adapter and the interactive terminal UI |
+| `/agui` · `/terminal` | The AG-UI protocol adapter and the interactive terminal UI |
 
 ## Stability
 

@@ -117,8 +117,8 @@ export { inMemoryStore, InMemoryStore } from './session/memory'
 //   import { dynamoStore } from '@animahealth/adk/stores/dynamodb'
 
 // Hooks
-export { composeHooks, loggingHook, metricsHook, cliHook } from './hook'
-export type { LoggingHookOptions, MetricsHookOptions, Logger, CliHookOptions } from './hook'
+export { composeHooks, loggingHook, metricsHook, consoleHook } from './hook'
+export type { LoggingHookOptions, MetricsHookOptions, Logger, ConsoleHookOptions } from './hook'
 
 export type { Transform, SimulateOptions, SimulateYieldContext } from './run'
 

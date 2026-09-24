@@ -59,9 +59,9 @@ const externalizeHeavyModules: EsbuildPlugin = {
     const formatExt = build.initialOptions.format === 'cjs' ? '.js' : '.mjs'
     const ext = (kind: string) => (kind === 'require-call' ? '.js' : formatExt)
 
-    build.onResolve({ filter: /^\.\.\/cli(\/index)?$/ }, (args) => {
+    build.onResolve({ filter: /^\.\.\/terminal(\/index)?$/ }, (args) => {
       if (args.importer.includes('api/app') || args.importer.includes('api\\app')) {
-        return { path: `./cli/index${ext(args.kind)}`, external: true }
+        return { path: `./terminal/index${ext(args.kind)}`, external: true }
       }
     })
     build.onResolve({ filter: /^\.\.\/agui\/adapter$/ }, (args) => {

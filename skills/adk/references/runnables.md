@@ -38,7 +38,7 @@ const agent = app.agent({
 const result = await app.run(agent, 'Hello')
 ```
 
-`adk(config)` accepts `name`, `schema`, `store`, `hooks`, and `errorHandlers`. The app exposes `schema`, `sessions`, `context`, `tools`, `mcp`, `hook`, `handler`, `agent`, `step`, `sequence`, `parallel`, `loop`, `tool`, `run`, `test`, `simulate`, `evaluate`, `cli`, and `close`.
+`adk(config)` accepts `name`, `schema`, `store`, `hooks`, and `errorHandlers`. The app exposes `schema`, `sessions`, `context`, `tools`, `mcp`, `hook`, `handler`, `agent`, `step`, `sequence`, `parallel`, `loop`, `tool`, `run`, `test`, `simulate`, `evaluate`, `terminal`, and `close`.
 
 Advanced helpers include `app.use(spec)`, `app.toolInputsSchema()`, `app.message()`, `app.enrichment()`, and `app.initialState()`. Use `spec.*` only for reusable factories shared across apps. Do not start a package with specs when all code belongs to one app/schema.
 

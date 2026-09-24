@@ -1,10 +1,10 @@
 /**
- * Smoke test: exercises the CJS → ESM CLI bridge.
+ * Smoke test: exercises the CJS → ESM terminal bridge.
  *
  * Simulates what a CJS consumer does: const { adk, openai } = require('@animahealth/adk');
- * app.cli(someAgent);
+ * app.terminal(someAgent);
  *
- * Usage: node scripts/smoke-test-cjs-cli.cjs
+ * Usage: node scripts/smoke-test-cjs-terminal.cjs
  */
 
 'use strict'
@@ -27,4 +27,4 @@ const agent = app.agent({
 })
 
 // Just launch — Ink keeps the process alive. Ctrl+C to exit.
-app.cli(agent)
+app.terminal(agent)

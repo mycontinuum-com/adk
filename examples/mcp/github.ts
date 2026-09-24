@@ -53,7 +53,7 @@ async function main() {
   }
   console.log()
 
-  const result = await app.cli(
+  const result = await app.terminal(
     agent,
     'What is the most used agent development framework on github?',
   )

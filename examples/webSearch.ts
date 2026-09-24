@@ -58,4 +58,4 @@ const chat = app.loop({
 
 const PROMPT = `Tell me about Anima Health`
 
-app.cli(chat, PROMPT)
+app.terminal(chat, PROMPT)

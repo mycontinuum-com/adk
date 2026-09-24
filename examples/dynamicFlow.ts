@@ -150,4 +150,4 @@ For this demo:
 const query =
   'Research special relativity, and write a Python function to simulate it. When complete, transfer to a specialist to explain it.'
 
-app.cli(coordinator, query)
+app.terminal(coordinator, query)

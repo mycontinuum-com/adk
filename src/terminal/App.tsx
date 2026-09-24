@@ -12,7 +12,7 @@ import type {
   ModelStartEvent,
   ContextMessageSummary,
 } from '../types'
-import type { CLIOptions, DisplayMode } from './types'
+import type { TerminalOptions, DisplayMode } from './types'
 
 import { buildContext, buildContextAsync, eventToMessageSummary } from '../context/build'
 import {
@@ -50,7 +50,7 @@ interface AppProps {
   runner: BaseRunner
   session: BaseSession
   initialInput?: string
-  options: CLIOptions
+  options: TerminalOptions
   onResult?: (result: RunResult) => void
 }
 

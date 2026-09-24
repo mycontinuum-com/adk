@@ -81,4 +81,4 @@ const myAgent = app.agent({
   tools: [divide, hoursToMinutes],
 })
 
-app.cli(myAgent, 'I drove 134 miles at 40 mph, how many minutes did it take?')
+app.terminal(myAgent, 'I drove 134 miles at 40 mph, how many minutes did it take?')

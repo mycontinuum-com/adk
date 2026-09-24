@@ -198,7 +198,7 @@ const dataPipeline = app.sequence({
   const session = await app.sessions.create()
   session.state.update({ authenticated: true, role: 'user', mode: 'analyze' })
 
-  app.cli(dataPipeline, {
+  app.terminal(dataPipeline, {
     session,
     input: 'Give me an overview of the inventory',
   })

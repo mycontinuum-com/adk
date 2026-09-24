@@ -30,7 +30,7 @@ async function main() {
   }
   console.log()
 
-  const result = await app.cli(agent, 'Explore the ADK and outline how it works.')
+  const result = await app.terminal(agent, 'Explore the ADK and outline how it works.')
   console.log(result.output.text)
 }
 

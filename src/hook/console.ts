@@ -1,7 +1,7 @@
 import type { StateSchema } from '../types/schema'
 import type { Hook } from './types'
 
-export interface CliHookOptions {
+export interface ConsoleHookOptions {
   showThoughts?: boolean
   showToolCalls?: boolean
   dimThoughts?: boolean
@@ -127,8 +127,8 @@ function formatLabel(label: string, width: number, colorName: ColorName): string
   return color(bracketed, colorName) + padding
 }
 
-export function cliHook<S extends StateSchema = StateSchema>(
-  options: CliHookOptions = {},
+export function consoleHook<S extends StateSchema = StateSchema>(
+  options: ConsoleHookOptions = {},
 ): Hook<S> {
   const {
     showThoughts = true,
@@ -171,7 +171,7 @@ export function cliHook<S extends StateSchema = StateSchema>(
   }
 
   return {
-    name: 'cli',
+    name: 'console',
 
     onEvent: (event) => {
       switch (event.type) {

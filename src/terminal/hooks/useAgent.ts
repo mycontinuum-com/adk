@@ -3,7 +3,7 @@ import { useState, useCallback, useRef } from 'react'
 import type { Event, StreamEvent, ToolYieldEvent } from '../../types/events'
 import type { Runnable } from '../../types/runnables'
 import type { RunResult } from '../../types/runtime'
-import type { CLIOptions, CLIStatus } from '../types'
+import type { TerminalOptions, TerminalStatus } from '../types'
 
 import { BaseRunner } from '../../core'
 import { BaseSession } from '../../session'
@@ -12,7 +12,7 @@ import { useOnTick } from '../components/SpinnerContext'
 export type CLIEvent = Event | StreamEvent
 
 interface UseAgentState {
-  status: CLIStatus
+  status: TerminalStatus
   events: CLIEvent[]
   error: string | null
   yieldedTools: ToolYieldEvent[]
@@ -37,7 +37,7 @@ export interface UseAgentReturn extends UseAgentState {
 export interface UseAgentConfig {
   runner?: BaseRunner
   session?: BaseSession
-  options?: CLIOptions
+  options?: TerminalOptions
 }
 
 const DELTA_TYPES = new Set(['thought_delta', 'assistant_delta'])
@@ -109,7 +109,7 @@ export function useAgent(runnable: Runnable, config: UseAgentConfig = {}): UseAg
     result: null,
   })
 
-  const sessionRef = useRef<BaseSession>(externalSession ?? new BaseSession('cli'))
+  const sessionRef = useRef<BaseSession>(externalSession ?? new BaseSession('terminal'))
   const runnerRef = useRef<BaseRunner>(externalRunner ?? new BaseRunner({ hooks: options.hooks }))
   const eventBufferRef = useRef<StreamEvent[]>([])
   const lastFlushTimeRef = useRef<number>(0)
@@ -318,7 +318,7 @@ export function useAgent(runnable: Runnable, config: UseAgentConfig = {}): UseAg
 
   const reset = useCallback(() => {
     eventBufferRef.current = []
-    sessionRef.current = externalSession ?? new BaseSession('cli')
+    sessionRef.current = externalSession ?? new BaseSession('terminal')
     runnerRef.current = externalRunner ?? new BaseRunner({ hooks: options.hooks })
     setState({
       status: 'idle',

@@ -7,7 +7,7 @@
 /** Bundled together, sharing the heavy dependency list. */
 const MAIN_ENTRIES = {
   index: 'src/index.ts',
-  'cli/index': 'src/cli/index.ts',
+  'terminal/index': 'src/terminal/index.ts',
   'testing/index': 'src/testing/index.ts',
   'eval/index': 'src/eval/index.ts',
   'web/index': 'src/web/index.ts',

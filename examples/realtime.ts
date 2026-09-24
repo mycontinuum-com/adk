@@ -71,4 +71,4 @@ Start by saying: "Hi, I'm Andy. How can I help you today?"`),
   tools: [calculate],
 })
 
-app.cli(assistant)
+app.terminal(assistant)
