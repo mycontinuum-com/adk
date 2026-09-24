@@ -20,6 +20,10 @@ export interface CaseWriter {
   ): void
 }
 
+function formatBilledTime(seconds: number | undefined): string {
+  return seconds === undefined ? '' : ` ${formatMs(seconds * 1000)}`
+}
+
 function formatMs(ms: number): string {
   return (ms / 1000).toFixed(1) + 's'
 }
@@ -161,10 +165,8 @@ function renderResult(
   const costStr = !live && result.usage?.cost ? ` — ${formatCost(result.usage.cost.totalCost)}` : ''
   lines.push(`**Duration**: ${formatMs(result.durationMs)}${costStr}`)
   if (live) {
-    const seconds =
-      live.voice.seconds === undefined ? '' : ` ${formatMs(live.voice.seconds * 1000)}`
     lines.push(
-      `**Cost**: ${formatCostAccount(live.total)} — backend ${formatCostAccount(live.backend.cost)}, voice${seconds} ${formatCostAccount(live.voice.cost)}, caller ${formatCostAccount(live.caller.cost)}`,
+      `**Cost**: ${formatCostAccount(live.total)} — backend ${formatCostAccount(live.backend.cost)}, voice${formatBilledTime(live.voice.seconds)} ${formatCostAccount(live.voice.cost)}, caller${formatBilledTime('seconds' in live.caller ? live.caller.seconds : undefined)} ${formatCostAccount(live.caller.cost)}`,
     )
   }
   if (result.recording.path) {

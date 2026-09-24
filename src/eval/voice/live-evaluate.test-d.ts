@@ -15,7 +15,11 @@ const backend = app.agent({
   context: [],
   output: { schema: z.object({ message: z.string() }) },
 })
-const userAgent = app.agent({ name: 'caller', model: openai.realtime('gpt-realtime'), context: [] })
+const userAgent = app.agent({
+  name: 'caller',
+  model: openai.realtime('gpt-realtime'),
+  context: [],
+})
 
 expectTypeOf(
   app.evaluate.voice({
@@ -82,5 +86,8 @@ app.evaluate.voice({ name: 'missing-backend', agent, userAgent })
 // @ts-expect-error A Live frontend is not an executable text backend.
 app.evaluate.voice({ name: 'live-backend', agent, backend: agent, userAgent })
 
-// @ts-expect-error A Live frontend cannot currently simulate the caller.
+// A Live eval can simulate the caller on GPT Live, with instructions only.
 app.evaluate.voice({ name: 'live-caller', agent, backend, userAgent: agent })
+
+// @ts-expect-error A GPT Live caller requires a Live agent under test.
+app.evaluate.voice({ name: 'live-caller-realtime-agent', agent: userAgent, userAgent: agent })

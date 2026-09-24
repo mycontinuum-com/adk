@@ -49,6 +49,7 @@ Migration section:
 - `run.settled` fulfills after ADK-owned execution and cleanup finish. Await it before committing or closing a session store.
 - GPT Live cost accounting — `onExit` receives `ctx.usage` with backend and voice cost; Live eval results add `run.liveUsage` with backend, voice and simulated-caller cost. Each cost has a `CostBasis` of `reported`, `estimated` or `unavailable`. See `docs/gpt-live.md`.
 - `gpt-live-1` pricing — $0.05 per minute of session time, billed per second.
+- Live voice eval cases accept a GPT Live simulated caller: `userAgent: app.agent({ model: openai.live('gpt-live-1'), context })`. It speaks from system instructions only, with no backend model or tools, and a caller delegation fails the run. `run.liveUsage.caller` prices it from session time. Realtime callers remain supported. See `docs/gpt-live.md`.
 
 ### Changed
 

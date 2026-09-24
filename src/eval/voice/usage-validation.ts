@@ -82,16 +82,22 @@ function isUsageCost(value: unknown): boolean {
   )
 }
 
+function isSessionUsage(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.modelName === 'string' &&
+    (value.seconds === undefined || isAmount(value.seconds)) &&
+    isCostAccount(value.cost)
+  )
+}
+
 /** Checks the structure of serialized Live eval usage, including every cost account. */
 export function isLiveEvalUsage(value: unknown): value is LiveVoiceEvalUsage {
   return (
     isRecord(value) &&
     isUsageCost(value.backend) &&
-    isUsageCost(value.caller) &&
-    isRecord(value.voice) &&
-    typeof value.voice.modelName === 'string' &&
-    (value.voice.seconds === undefined || isAmount(value.voice.seconds)) &&
-    isCostAccount(value.voice.cost) &&
+    (isUsageCost(value.caller) || isSessionUsage(value.caller)) &&
+    isSessionUsage(value.voice) &&
     isCostAccount(value.total)
   )
 }

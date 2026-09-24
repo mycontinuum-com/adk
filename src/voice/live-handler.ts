@@ -4,11 +4,8 @@ import type { AdkApp } from '../api/app'
 import type { ModelUsage } from '../types/events'
 import type { StateSchema } from '../types/schema'
 import type { Session, SessionService, SessionStore } from '../types/session'
-import type {
-  GPTLiveTranscript,
-  GPTLiveTranscriptSnapshot,
-  GPTLiveTranscriptSource,
-} from './gpt-live-transcript'
+import type { GPTLiveTranscript, GPTLiveTranscriptSnapshot } from './gpt-live-transcript'
+import type { GPTLiveRealtime, GPTLiveSession } from './live-model'
 import type {
   LiveCallUsage,
   LiveVoiceContext,
@@ -21,9 +18,7 @@ import type {
 import type { VoiceDeps } from './livekit-types'
 import type { VoiceHandlerHandle } from './types'
 
-import { buildLiveContextAsync } from '../context/build'
 import { summarizeModelUsage } from '../core/runner'
-import { resolveOpenAIConnection } from '../providers/openai-endpoints'
 import {
   loadPricing,
   RESULT_PRICING_WAIT_MS,
@@ -35,6 +30,7 @@ import { seedState } from '../session/seedState'
 import { applySchemaDefaults } from '../types/schema'
 import { openGPTLiveTranscript } from './gpt-live-transcript'
 import { liveHistory, completedBackendWork } from './live-history'
+import { createGPTLiveModel, renderLiveInstructions, requireGPTLive } from './live-model'
 import { seedLiveState, applyLiveState } from './live-state'
 import { backendModelCalls, LiveVoiceMeter } from './live-usage'
 import { defaultVoiceDeps } from './livekit-types'
@@ -50,22 +46,6 @@ export type LiveVoiceJob = Pick<
   import('@livekit/agents').JobContext,
   'room' | 'connect' | 'waitForParticipant' | 'addShutdownCallback' | 'shutdown'
 >
-
-interface GPTLiveSession extends GPTLiveTranscriptSource {
-  appendThinking(text: string, options: { delegationId?: string }): unknown
-  appendCommentary(text: string, options: { delegationId?: string }): unknown
-  appendInstructions(text: string, options: { delegationId?: string }): unknown
-  on(
-    event: 'openai_server_event_received' | 'openai_client_event_queued',
-    listener: (event: unknown) => void,
-  ): unknown
-  on(event: 'delegation_created', listener: (event: { id: string }) => void): unknown
-}
-
-interface GPTLiveRealtime {
-  GPTLiveModel: new (options: Record<string, unknown>) => InstanceType<LiveKitAgents['llm']['LLM']>
-  GPTLiveSession: new (...args: never[]) => GPTLiveSession
-}
 
 interface LiveDeps {
   agents(): typeof import('@livekit/agents')
@@ -164,26 +144,6 @@ function isLiveVoiceJob(value: unknown): value is LiveVoiceJob {
   )
 }
 
-function liveInstructions<S extends StateSchema>(
-  rendered: Awaited<ReturnType<typeof buildLiveContextAsync<S>>>,
-): string {
-  if (
-    rendered.events.some((event) => event.type !== 'system') ||
-    rendered.functionTools.length ||
-    rendered.providerTools.length ||
-    rendered.outputSchema ||
-    rendered.outputMode ||
-    rendered.toolChoice ||
-    rendered.allowedTools
-  )
-    throw new Error(
-      'Live agent context currently supports system instructions only; conversation history belongs to the backend',
-    )
-  return rendered.events
-    .flatMap((event) => (event.type === 'system' ? [event.text] : []))
-    .join('\n')
-}
-
 /** Hook context whose session and state follow the call's latest session. */
 function liveContext<S extends StateSchema>(
   call: { readonly callId: string; readonly session: Session<S> },
@@ -251,16 +211,10 @@ class LiveCall<S extends StateSchema, T> {
     private readonly runtime: LiveRuntime<S, T>,
     private readonly job: LiveVoiceJob,
   ) {
-    const { name: model, kind: _kind, provider: _provider, ...options } = runtime.config.agent.model
     this.voiceSession = new runtime.agents.voice.AgentSession({
-      llm: new runtime.realtime.GPTLiveModel({
-        ...resolveOpenAIConnection(),
-        ...options,
-        model,
-        delegation: 'client',
-      }),
+      llm: createGPTLiveModel(runtime.realtime, runtime.config.agent.model),
     })
-    this.meter = new LiveVoiceMeter(model, runtime.deps.clock)
+    this.meter = new LiveVoiceMeter(runtime.config.agent.model.name, runtime.deps.clock)
     this.voiceSession.on(runtime.agents.voice.AgentSessionEventTypes.MetricsCollected, (event) =>
       this.meter.observeMetrics(event.metrics),
     )
@@ -355,14 +309,9 @@ class LiveCall<S extends StateSchema, T> {
       await recorder.close()
       return
     }
-    const rendered = await buildLiveContextAsync(callSession, config.agent, callSession.id)
+    const instructions = await renderLiveInstructions(callSession, config.agent, callSession.id)
     if (this.stopped) return
-    const agent = createLiveAgent(
-      this.runtime.agents.voice.Agent,
-      this,
-      recorder,
-      liveInstructions(rendered),
-    )
+    const agent = createLiveAgent(this.runtime.agents.voice.Agent, this, recorder, instructions)
     this.meter.start()
     await this.voiceSession.start({
       agent,
@@ -735,9 +684,7 @@ export function createLiveVoiceHandler<S extends StateSchema, T>(
   deps: LiveDeps = defaultDeps,
 ): VoiceHandlerHandle {
   const agents = deps.agents()
-  const { realtime } = deps.openai()
-  if (!realtime.GPTLiveModel || !realtime.GPTLiveSession)
-    throw new Error('openai.live requires LiveKit agents and OpenAI plugin 1.9 or later')
+  const realtime = requireGPTLive(deps.openai())
   const hooks = config.hooks ?? []
   if (!hooks.some((hook) => hook.onResult))
     throw new Error('Live voice requires an onResult hook to handle backend output')

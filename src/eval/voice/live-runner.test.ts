@@ -33,6 +33,7 @@ class LiveSession extends EventEmitter {
   }
 }
 class SDKAgent {
+  constructor(readonly options?: Record<string, unknown>) {}
   duplexSession = new LiveSession()
   async onEnter() {}
   async onExit() {}
@@ -78,10 +79,12 @@ async function fixture() {
   })
   const rooms: Room[] = []
   let failTransport = false
+  let callerDelegates = false
   let setupDelay: Promise<void> | undefined
   let handlerCloseDelayMs = 0
   class Room extends EventEmitter {
     name = 'test-room'
+    started?: SDKAgent
     remoteParticipants = new Map([['voice-eval-user', { identity: 'voice-eval-user' }]])
     disconnect = vi.fn<() => Promise<void>>(async () => {
       this.emit('disconnected')
@@ -98,11 +101,14 @@ async function fixture() {
   const liveSessions: AgentSession[] = []
   class AgentSession extends EventEmitter {
     agent?: SDKAgent
+    room?: Room
     async start({ agent: started, room }: { agent: SDKAgent; room: Room }) {
       this.agent = started
+      this.room = room
       await started.onEnter()
-      if (started.constructor === SDKAgent) {
-        if (reportUsage)
+      if (room === rooms[1]) {
+        room.started = started
+        if (reportUsage && started.constructor === SDKAgent)
           this.emit('metrics_collected', {
             metrics: {
               type: 'realtime_model_metrics',
@@ -112,6 +118,7 @@ async function fixture() {
               outputTokenDetails: { audioTokens: 10_000, textTokens: 0 },
             },
           })
+        if (callerDelegates) started.duplexSession.emit('delegation_created', { id: 'caller' })
         return
       }
       liveSessions.push(this)
@@ -131,12 +138,13 @@ async function fixture() {
       started.duplexSession.emit('delegation_created', { id: 'delegation' })
     }
     async close() {
-      if (this.agent && this.agent.constructor !== SDKAgent && handlerCloseDelayMs)
+      if (this.agent && this.room !== rooms[1] && handlerCloseDelayMs)
         await new Promise((resolve) => setTimeout(resolve, handlerCloseDelayMs))
       closeCaller()
       if (reportUsage && this.agent && this.agent.constructor !== SDKAgent) {
-        // GPT Live drains its final cumulative usage while closing: 12 s, then 15 s.
-        for (const seconds of [12, 3])
+        // GPT Live drains its final cumulative usage while closing: 12 s, then 15 s for the
+        // handler; a GPT Live caller reports 30 s.
+        for (const seconds of this.room === rooms[1] ? [30] : [12, 3])
           this.emit('metrics_collected', {
             metrics: {
               type: 'realtime_model_metrics',
@@ -149,6 +157,12 @@ async function fixture() {
       await this.agent?.onExit()
     }
   }
+  class CallerModel {
+    constructor(readonly options: Record<string, unknown>) {
+      callerModels.push(this)
+    }
+  }
+  const callerModels: CallerModel[] = []
   const deleteRoom = vi.fn<() => Promise<void>>(async () => {})
   const sdk = {
     lk: {
@@ -192,6 +206,12 @@ async function fixture() {
         openai: () => ({ realtime: { GPTLiveModel: class {}, GPTLiveSession: LiveSession } }),
         livekitServer: () => sdk.serverSdk,
       } as unknown as Parameters<typeof createLiveVoiceHandler>[2]),
+    openai: () => ({
+      realtime: {
+        GPTLiveModel: CallerModel,
+        GPTLiveSession: LiveSession,
+      },
+    }),
   } as unknown as NonNullable<Parameters<typeof runLiveVoiceCase>[5]>
   const result = vi.fn<(ctx: LiveVoiceResultContext<any, string>) => void>((ctx) => {
     ctx.voice.appendCommentary(ctx.output)
@@ -228,6 +248,7 @@ async function fixture() {
     closeLiveSession: (reason: string) => {
       liveSessions.at(-1)!.emit('close', { reason })
     },
+    callerModels,
     delayHandlerClose: (milliseconds: number) => {
       handlerCloseDelayMs = milliseconds
     },
@@ -237,6 +258,9 @@ async function fixture() {
     reportUsage: () => {
       reportUsage = true
       adapter.reportUsage = true
+    },
+    callerDelegates: () => {
+      callerDelegates = true
     },
     delay: (promise: Promise<void>) => {
       setupDelay = promise
@@ -275,6 +299,7 @@ test('runs the production handler and persists call state, native fragments and 
     })
     expect(run.timing.timeToFirstSpeechMs).toBeDefined()
     expect((await f.app.sessions.get(run.session.id))?.state.count).toBe(5)
+    expect(f.callerModels).toEqual([])
     expect(f.deleteRoom).toHaveBeenCalledOnce()
     expect(f.rooms.every((room) => room.disconnect.mock.calls.length)).toBe(true)
   } finally {
@@ -532,6 +557,94 @@ test('an agent-ended call whose backend work never settled is an error, not comp
     expect(run.status).toBe('error')
     expect(run.error?.message).toBe('Live backend work did not settle before close')
     expect(f.deleteRoom).toHaveBeenCalledOnce()
+  } finally {
+    await f.app.close()
+  }
+})
+
+test('simulates the caller on GPT Live from its instructions alone', async () => {
+  const f = await fixture()
+  try {
+    const userAgent = f.app.agent({
+      name: 'live caller',
+      model: openai.live('gpt-live-1', { voice: 'cedar' }),
+      context: [f.app.context.system('Ask for the opening hours.')],
+    })
+    const run = await f.run({ userAgent })
+    expect(run.error).toBeUndefined()
+    expect(run.status).toBe('completed')
+    expect(f.result).toHaveBeenCalledOnce()
+    expect(f.callerModels.map((model) => model.options)).toEqual([
+      expect.objectContaining({ model: 'gpt-live-1', voice: 'cedar', delegation: 'client' }),
+    ])
+    expect(f.rooms[1]!.started!.options).toEqual({
+      instructions: 'Ask for the opening hours.',
+      tools: {},
+      llm: f.callerModels[0],
+    })
+  } finally {
+    await f.app.close()
+  }
+})
+
+test('fails the run when the GPT Live caller delegates', async () => {
+  const f = await fixture()
+  try {
+    f.callerDelegates()
+    const run = await f.run({
+      userAgent: f.app.agent({
+        name: 'live caller',
+        model: openai.live('gpt-live-1'),
+        context: [f.app.context.system('Ask for the opening hours.')],
+      }),
+    })
+    expect(run.status).toBe('error')
+    expect(run.error?.message).toBe(
+      'The GPT Live caller delegated, but a simulated caller has no backend',
+    )
+    expect(f.deleteRoom).toHaveBeenCalledOnce()
+  } finally {
+    await f.app.close()
+  }
+})
+
+test('rejects GPT Live caller context beyond system instructions', async () => {
+  const f = await fixture()
+  try {
+    const run = await f.run({
+      userAgent: f.app.agent({
+        name: 'live caller',
+        model: openai.live('gpt-live-1'),
+        context: [f.app.context.user('Unsupported caller message')],
+      }),
+    })
+    expect(run.status).toBe('error')
+    expect(run.error?.message).toMatch(/system instructions only/)
+    expect(f.callerModels).toEqual([])
+  } finally {
+    await f.app.close()
+  }
+})
+
+test('reports a GPT Live caller cost from its session time', async () => {
+  const f = await fixture()
+  try {
+    f.reportUsage()
+    const run = await f.run({
+      userAgent: f.app.agent({
+        name: 'live caller',
+        model: openai.live('gpt-live-1'),
+        context: [f.app.context.system('Ask for the opening hours.')],
+      }),
+    })
+    expect(run.error).toBeUndefined()
+    expect(run.liveUsage!.caller).toEqual({
+      modelName: 'gpt-live-1',
+      seconds: 30,
+      cost: { basis: 'reported', totalCost: 0.025, currency: 'USD' },
+    })
+    const total = run.liveUsage!.total
+    expect(total.basis !== 'unavailable' && total.totalCost).toBeCloseTo(0.3375, 12)
   } finally {
     await f.app.close()
   }

@@ -233,6 +233,8 @@ Use `evalConversationLogger({ level })` when debugging simulated eval conversati
 
 Voice case fields: `name`, `agent`, `userAgent`, `toolMocks`, `metrics`, `retries`, and `timeout`.
 
+`userAgent` is the simulated caller and uses a Realtime model. When the agent under test is a GPT Live handler, the caller can use `openai.live('gpt-live-1')` instead. See `docs/gpt-live.md`.
+
 Voice suite options: `room`, `output`, `metrics`, `hooks`, `concurrency`, `repeat`, `stopOnFirstFailure`, and `onCase`.
 
 Use `voiceTimingMetric()` for `time_to_first_speech`, response latency p50/p95/max, silence gap max/total, and interruption count.

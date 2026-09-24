@@ -2,16 +2,18 @@ import { randomUUID } from 'node:crypto'
 
 import type { StateChanges } from '../../session/seedState'
 import type { ModelUsage } from '../../types/events'
-import type { Agent, RealtimeModelConfig } from '../../types/runnables'
+import type { Agent } from '../../types/runnables'
 import type { UsageSummary } from '../../types/runtime'
 import type { StateSchema } from '../../types/schema'
 import type { Session } from '../../types/session'
 import type { LiveVoiceAppContext, LiveVoiceJob } from '../../voice/live-handler'
+import type { GPTLiveRealtime } from '../../voice/live-model'
 import type {
   LiveCallUsage,
   LiveVoiceContext,
   LiveVoiceExitContext,
   LiveVoiceHandlerConfig,
+  LiveVoiceSessionUsage,
 } from '../../voice/live-types'
 import type { CaseWriter } from './case-writer'
 import type { RecordingHandle } from './recorder'
@@ -24,7 +26,6 @@ import type {
   VoiceRunStatus,
 } from './types'
 
-import { buildContextAsync } from '../../context/build'
 import { computeUsageSummary, summarizeModelUsage } from '../../core/runner'
 import { getModelName, isRealtimeConfig } from '../../providers/models'
 import {
@@ -35,14 +36,12 @@ import {
   type PricingCatalog,
 } from '../../providers/pricing'
 import { BaseSession } from '../../session'
-import { isSystemEvent } from '../../types/events'
 import { createLiveVoiceHandler } from '../../voice/live-handler'
 import { transcriptMessages } from '../../voice/live-history'
-import { isRealtimeMetrics, realtimeTokenUsage } from '../../voice/live-usage'
-import { createLiveKitAgent } from '../../voice/livekit-agent'
-import { createLiveKitModel } from '../../voice/livekit-model'
+import { isRealtimeMetrics, LiveVoiceMeter, realtimeTokenUsage } from '../../voice/live-usage'
 import { interceptTools } from '../interceptTools'
 import { withTimeout } from '../suite-runner'
+import { createVoiceEvalCaller } from './caller'
 import { bindVoiceEvalControl } from './control'
 import { requireLiveKit } from './livekit-sdk'
 import { recordRooms } from './recorder'
@@ -117,6 +116,8 @@ export function summarizeLiveEvalUsage(input: {
   voiceModel: string
   callerCalls: readonly (ModelUsage | undefined)[]
   pricing: PricingCatalog | undefined
+  /** A GPT Live caller's session usage, which replaces token usage. */
+  callerSession?: LiveVoiceSessionUsage
 }): LiveVoiceEvalUsage {
   const backend = input.call?.backend ?? {
     ...(input.backend && { usage: input.backend }),
@@ -127,9 +128,11 @@ export function summarizeLiveEvalUsage(input: {
     cost: { basis: 'unavailable' as const },
   }
   const callerUsage = summarizeModelUsage(input.callerCalls, input.pricing)
-  const caller = callerUsage
-    ? { usage: callerUsage, cost: usageCost(callerUsage) }
-    : { cost: { basis: 'unavailable' as const } }
+  const caller =
+    input.callerSession ??
+    (callerUsage
+      ? { usage: callerUsage, cost: usageCost(callerUsage) }
+      : { cost: { basis: 'unavailable' as const } })
   return {
     backend,
     voice,
@@ -158,6 +161,8 @@ class LiveVoiceCaseRun<S extends StateSchema> {
   private callUsage: LiveCallUsage | undefined
   /** Usage of each caller response; `undefined` marks a response without reported tokens. */
   private readonly callerCalls: Array<ModelUsage | undefined> = []
+  /** Session-time meter for a GPT Live caller; a Realtime caller reports tokens instead. */
+  private readonly callerMeter: LiveVoiceMeter | undefined
   private session: Session<S>
   private recorder: RecordingHandle | undefined
   private recordingPath = ''
@@ -174,8 +179,8 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     private readonly appContext: LiveVoiceAppContext<S>,
     private readonly sdk: LiveKitSdk,
     private readonly createHandler: typeof createLiveVoiceHandler,
+    private readonly openai: () => { realtime: GPTLiveRealtime },
     private readonly backend: Agent<S, any>,
-    private readonly userModel: RealtimeModelConfig,
     private readonly window: { durationMs: number; timeoutMs: number },
     private readonly writer?: CaseWriter,
     private readonly recordingDir?: string,
@@ -193,6 +198,10 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     this.userRoom = new sdk.rtc.Room()
     this.caller = new sdk.lk.voice.AgentSession({})
     this.session = new BaseSession('eval', { id: this.callId })
+    this.callerMeter =
+      evalCase.userAgent.kind === 'live-agent'
+        ? new LiveVoiceMeter(getModelName(evalCase.userAgent.model))
+        : undefined
   }
 
   async execute(): Promise<VoiceRunResult<S>> {
@@ -233,9 +242,10 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     this.userRoom.on(rtc.RoomEvent.Disconnected, () => {
       if (!this.stopping) this.finish('participant_left')
     })
-    const callerModel = getModelName(this.userModel)
+    const callerModel = getModelName(this.evalCase.userAgent.model)
     this.caller.on(lk.voice.AgentSessionEventTypes.MetricsCollected, (event) => {
-      if (isRealtimeMetrics(event.metrics))
+      if (this.callerMeter) this.callerMeter.observeMetrics(event.metrics)
+      else if (isRealtimeMetrics(event.metrics))
         this.callerCalls.push(realtimeTokenUsage(event.metrics, callerModel))
     })
     this.caller.on(lk.voice.AgentSessionEventTypes.Close, (event) => {
@@ -275,21 +285,21 @@ class LiveVoiceCaseRun<S extends StateSchema> {
         caseName: evalCase.name,
       })
     }
-    const userContext = await buildContextAsync(this.session, evalCase.userAgent, randomUUID())
+    const userAgent = await createVoiceEvalCaller({
+      lk: this.sdk.lk,
+      openai: this.openai,
+      agent: evalCase.userAgent,
+      session: this.session,
+      meter: this.callerMeter,
+      onDelegation: () =>
+        this.finish(
+          'error',
+          new Error('The GPT Live caller delegated, but a simulated caller has no backend'),
+        ),
+    })
     if (this.stopping) return
-    const userAgent = createLiveKitAgent(
-      evalCase.userAgent,
-      userContext.events
-        .filter(isSystemEvent)
-        .map((event) => event.text)
-        .join('\n'),
-      {},
-      this.session,
-      createLiveKitModel(this.userModel),
-    )
-    if (!(userAgent instanceof this.sdk.lk.voice.Agent))
-      throw new Error('Expected LiveKit caller agent')
     writer?.appendLine('Starting caller and Live handler.')
+    this.callerMeter?.start()
     const callerStarting = this.caller
       .start({
         agent: userAgent,
@@ -407,6 +417,7 @@ class LiveVoiceCaseRun<S extends StateSchema> {
   private async release(startup: Promise<void>): Promise<void> {
     await this.shutdownHandler()
     await this.cleanup('caller session', () => this.caller.close())
+    this.callerMeter?.stop()
     const recorder = this.recorder
     if (recorder)
       await this.cleanup('recording', async () => {
@@ -481,6 +492,7 @@ class LiveVoiceCaseRun<S extends StateSchema> {
         voiceModel: getModelName(this.evalCase.agent.model),
         callerCalls: this.callerCalls,
         pricing,
+        callerSession: this.callerMeter?.usage(pricing),
       }),
       error: this.error,
       durationMs: Date.now() - this.startedAtMs,
@@ -499,7 +511,11 @@ export async function runLiveVoiceCase<S extends StateSchema>(
   appContext: LiveVoiceAppContext<S>,
   writer?: CaseWriter,
   recordingDir?: string,
-  deps = { sdk: requireLiveKit, handler: createLiveVoiceHandler },
+  deps = {
+    sdk: requireLiveKit,
+    handler: createLiveVoiceHandler,
+    openai: (): { realtime: GPTLiveRealtime } => require('@livekit/agents-plugin-openai'),
+  },
 ): Promise<VoiceRunResult<S>> {
   const durationMs = evalCase.durationMs ?? 30_000
   const timeoutMs = evalCase.timeout ?? durationMs + 60_000
@@ -514,8 +530,8 @@ export async function runLiveVoiceCase<S extends StateSchema>(
     throw new Error(
       'Live voice evals use case.hooks, the same hooks as app.handler.voice; options.hooks is for Realtime',
     )
-  if (!isRealtimeConfig(evalCase.userAgent.model))
-    throw new Error('Voice eval userAgent requires a Realtime model')
+  if (evalCase.userAgent.kind !== 'live-agent' && !isRealtimeConfig(evalCase.userAgent.model))
+    throw new Error('Voice eval userAgent requires a Realtime or GPT Live model')
   if (!evalCase.hooks?.some((hook) => hook.onResult))
     throw new Error('Live voice eval requires the production onResult hook')
   const backend = evalCase.toolMocks
@@ -529,8 +545,8 @@ export async function runLiveVoiceCase<S extends StateSchema>(
     appContext,
     sdk,
     deps.handler,
+    deps.openai,
     backend,
-    evalCase.userAgent.model,
     { durationMs, timeoutMs },
     writer,
     recordingDir,

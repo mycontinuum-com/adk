@@ -1,5 +1,5 @@
 import type { Event } from '../../types/events'
-import type { Agent } from '../../types/runnables'
+import type { Agent, LiveAgent } from '../../types/runnables'
 import type { CostAccount, UsageSummary } from '../../types/runtime'
 import type { StateSchema } from '../../types/schema'
 import type { Session } from '../../types/session'
@@ -20,7 +20,6 @@ import type { BaseEvalCaseResult, BaseEvalResult, ToolMocks, StateChanges } from
 interface VoiceEvalCaseBase<S extends StateSchema = StateSchema> {
   name: string
   description?: string
-  userAgent: Agent<any, any>
   /** @internal Bound by `app.evaluate.voice.case((control) => ...)`. */
   evalControl?: VoiceEvalControl
   initialState?: StateChanges<S>
@@ -33,6 +32,8 @@ interface VoiceEvalCaseBase<S extends StateSchema = StateSchema> {
 
 export type RealtimeVoiceEvalCase<S extends StateSchema = StateSchema> = VoiceEvalCaseBase<S> & {
   agent: Agent<any, any>
+  /** Simulated caller on a Realtime model. */
+  userAgent: Agent<any, any>
   backend?: never
 }
 
@@ -41,6 +42,11 @@ export type LiveVoiceEvalCase<S extends StateSchema = StateSchema, T = any> = Vo
     LiveVoiceHandlerConfig<S, T>,
     'agent' | 'backend' | 'hooks' | 'setup' | 'backendTimeoutMs'
   > & {
+    /**
+     * Simulated caller: a Realtime agent, or an `openai.live(...)` agent that speaks from its
+     * system instructions alone, with no backend and no tools.
+     */
+    userAgent: Agent<any, any> | LiveAgent<any>
     /** Successful observation window after startup. Default: 30_000. */
     durationMs?: number
   }
@@ -145,7 +151,8 @@ export type VoiceRunStatus =
 export interface LiveVoiceEvalUsage {
   readonly backend: UsageCost
   readonly voice: LiveVoiceSessionUsage
-  readonly caller: UsageCost
+  /** Token usage for a Realtime caller; session time for a GPT Live caller. */
+  readonly caller: UsageCost | LiveVoiceSessionUsage
   /** Backend, voice and caller. Unavailable when any component is unavailable. */
   readonly total: CostAccount
 }
