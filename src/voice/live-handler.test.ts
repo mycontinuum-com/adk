@@ -34,6 +34,9 @@ function gate() {
   })
   return { promise, release }
 }
+function isBackendWork(event: Event): boolean {
+  return event.type === 'annotation' && event.label === 'live-backend-work'
+}
 class LiveSession extends EventEmitter {
   sessionId: string | undefined = 'connection-one'
   sent: Array<{ kind: string; text: string; delegationId?: string }> = []
@@ -272,7 +275,10 @@ async function fixture(
                   (options.failResult === 'once' && result.mock.calls.length === 1)
                 )
                   throw new Error('Result failed')
-                await options.resultGate?.promise
+                if (options.resultGate) {
+                  await options.resultGate.promise
+                  ctx.state.update({ answer: `late-${reply}` })
+                }
                 ctx.voice.appendCommentary(reply)
               },
           onError: options.omitError ? undefined : error,
@@ -1033,16 +1039,110 @@ test('a backend transfer released after its second bound does not write the fina
   await vi.waitFor(() => expect(transferring).toBe(true))
   f.entered[0]!.voice.end()
   await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 500 })
-  const labels = (session: { readonly events: readonly Event[] } | undefined) =>
-    session!.events.flatMap((event) => (event.type === 'annotation' ? [event.label] : []))
   const finalized = await load(callId)
-  expect(labels(finalized).at(-1)).toBe('live-call-ended')
+  expect(finalized!.events.at(-1)).toMatchObject({ type: 'annotation', label: 'live-call-ended' })
+  expect(finalized!.state.answer).toBe('')
   stalled.release()
   await new Promise((resolve) => setTimeout(resolve, 100))
   const latest = await load(callId)
-  expect(labels(latest)).toEqual(labels(finalized))
-  expect(latest!.state.answer).toBe('')
+  expect({ events: latest!.events, state: latest!.state }).toEqual({
+    events: finalized!.events,
+    state: finalized!.state,
+  })
   expect(f.error).not.toHaveBeenCalled()
+})
+
+test('a result hook that resumes while close records the call does not reach the ledger', async () => {
+  const stuck = gate()
+  const f = await fixture({ resultGate: stuck, backendTimeoutMs: 50 })
+  const call = await f.call()
+  const callId = f.entered[0]!.callId
+  const close = call.session.close.bind(call.session)
+  call.session.close = async () => {
+    stuck.release()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await close()
+  }
+  call.live.dispatch('first-id', 'Question')
+  await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+  f.entered[0]!.voice.end()
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 500 })
+  const saved = await f.app.sessions.get(callId)
+  expect(saved!.state.answer).toBe('')
+  expect(f.exited.mock.calls[0]![0].state.answer).toBe('')
+  expect(saved!.events.at(-1)).toMatchObject({ type: 'annotation', label: 'live-call-ended' })
+})
+
+test('close still records the end and runs onExit when it cannot reload the call session', async () => {
+  const stuck = gate()
+  const f = await fixture({ resultGate: stuck, backendTimeoutMs: 50 })
+  const call = await f.call()
+  const callId = f.entered[0]!.callId
+  call.live.dispatch('first-id', 'Question')
+  await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+  const load = f.app.sessions.get.bind(f.app.sessions)
+  const read = vi.spyOn(f.app.sessions, 'get').mockRejectedValue(new Error('store unavailable'))
+  f.entered[0]!.voice.end()
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 500 })
+  expect(read).toHaveBeenCalledWith(callId)
+  expect(f.exited).toHaveBeenCalledTimes(1)
+  read.mockRestore()
+  const saved = await load(callId)
+  expect(saved!.events.at(-1)).toMatchObject({
+    type: 'annotation',
+    label: 'live-call-ended',
+    data: { reason: 'agent-ended', backendSettled: false },
+  })
+  stuck.release()
+})
+
+test('close lets a backend transfer commit already in flight land before it reloads the call', async () => {
+  const hold = gate()
+  const f = await fixture({ backendTimeoutMs: 100 })
+  const call = await f.call()
+  const callId = f.entered[0]!.callId
+  const commit = f.app.sessions.commit.bind(f.app.sessions)
+  let holding = false
+  vi.spyOn(f.app.sessions, 'commit').mockImplementation(async (session) => {
+    if (session.id === callId && !holding && session.events.some(isBackendWork)) {
+      holding = true
+      await hold.promise
+    }
+    return commit(session)
+  })
+  call.live.dispatch('slow-commit-id', 'Question')
+  await vi.waitFor(() => expect(holding).toBe(true))
+  f.entered[0]!.voice.end()
+  // Both close bounds (100 ms each) expire first; the commit lands within the wait that follows.
+  setTimeout(hold.release, 250)
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 1000 })
+  const saved = await f.app.sessions.get(callId)
+  expect(
+    saved!.events.filter((event) => event.type === 'annotation').map((event) => event.label),
+  ).toEqual(['live-backend-work', 'live-call-ended'])
+  expect(f.exited).toHaveBeenCalledTimes(1)
+})
+
+test('a result hook that resumes after close does not write the finalized call', async () => {
+  const stuck = gate()
+  const f = await fixture({ resultGate: stuck, backendTimeoutMs: 50 })
+  const call = await f.call()
+  const callId = f.entered[0]!.callId
+  call.live.dispatch('first-id', 'Question')
+  await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+  f.entered[0]!.voice.end()
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 500 })
+  const finalized = await f.app.sessions.get(callId)
+  expect(finalized!.events.at(-1)).toMatchObject({ type: 'annotation', label: 'live-call-ended' })
+  // The hook's uncommitted change belongs to work that close() stopped waiting for.
+  expect(finalized!.state.answer).toBe('')
+  stuck.release()
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const latest = await f.app.sessions.get(callId)
+  expect({ events: latest!.events, state: latest!.state }).toEqual({
+    events: finalized!.events,
+    state: finalized!.state,
+  })
 })
 
 describe('Live call usage', () => {

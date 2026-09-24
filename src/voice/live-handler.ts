@@ -78,17 +78,16 @@ const defaultDeps: LiveDeps = {
 
 function exitContext<S extends StateSchema>(
   context: LiveVoiceContext<S>,
+  session: Session<S>,
   usage: LiveCallUsage,
 ): LiveVoiceExitContext<S> {
   return {
     callId: context.callId,
     voice: context.voice,
     transcript: context.transcript,
-    get session() {
-      return context.session
-    },
+    session,
     get state() {
-      return context.state
+      return session.state
     },
     usage,
   }
@@ -191,7 +190,7 @@ class LiveCall<S extends StateSchema, T> {
   private abandoned = false
   /** A settled delegation's writes to the call session, which close() lets finish. */
   private transfer: Promise<void> | undefined
-  /** Set when close() stops waiting for backend work; the call ledger then takes no more of it. */
+  /** Set when close() stops waiting for queued work; that work then no longer writes the call. */
   private ledgerClosed = false
   private endRequested = false
   private endReason = 'disconnected'
@@ -206,6 +205,8 @@ class LiveCall<S extends StateSchema, T> {
   private readonly meter: LiveVoiceMeter
   /** Usage of every backend model call; `undefined` marks a call without reported usage. */
   private readonly backendCalls: Array<ModelUsage | undefined> = []
+  /** Session commits in flight; close() lets them land before it reloads the call session. */
+  private readonly commits = new Set<Promise<void>>()
 
   constructor(
     private readonly runtime: LiveRuntime<S, T>,
@@ -266,7 +267,7 @@ class LiveCall<S extends StateSchema, T> {
       this.context = entered
       this.queue = this.queue.then(async () => {
         for (const hook of this.runtime.hooks) await hook.onEnter?.(entered)
-        await this.commit(this.session)
+        await this.commitQueued(this.session)
       })
       live.on('delegation_created', (event) => this.admit(live, recorder, event.id))
       await this.queue
@@ -439,7 +440,7 @@ class LiveCall<S extends StateSchema, T> {
           output: result.output.value,
         })
     } finally {
-      await this.commit(this.session)
+      await this.commitQueued(this.session)
     }
   }
 
@@ -452,13 +453,9 @@ class LiveCall<S extends StateSchema, T> {
     stateStart: ReturnType<typeof seedLiveState>,
     workStart: number,
   ): Promise<void> {
-    const { app, config, sessionService } = this.runtime
+    const { config, sessionService } = this.runtime
     const callId = this.callId
-    const callSession = await persist(async () => {
-      const saved = await app.sessions.get(callId)
-      if (!saved) throw new Error('Live call state is missing')
-      return saved
-    })
+    const callSession = await this.reloadCall()
     applyLiveState(session, callSession, stateStart)
     const work = completedBackendWork(session.events.slice(workStart))
     const batch = {
@@ -493,6 +490,16 @@ class LiveCall<S extends StateSchema, T> {
     }
     this.callSession = callSession
     await this.commit(callSession)
+  }
+
+  /** Loads the call session as last committed. */
+  private reloadCall(): Promise<Session<S>> {
+    const callId = this.callId
+    return persist(async () => {
+      const saved = await this.runtime.app.sessions.get(callId)
+      if (!saved) throw new Error('Live call state is missing')
+      return saved
+    })
   }
 
   private async onDelegationError(
@@ -532,10 +539,21 @@ class LiveCall<S extends StateSchema, T> {
   }
 
   private async commit(session: Session<S>): Promise<void> {
-    await persist(async () => {
+    const write = persist(async () => {
       if (!(await this.runtime.app.sessions.commit(session)).ok)
         throw new Error('Live session commit conflict')
     })
+    this.commits.add(write)
+    try {
+      await write
+    } finally {
+      this.commits.delete(write)
+    }
+  }
+
+  /** Commits the call from queued work, unless close() has stopped waiting for that work. */
+  private async commitQueued(session: Session<S>): Promise<void> {
+    if (!this.ledgerClosed) await this.commit(session)
   }
 
   private requestEnd(reason = 'agent-ended'): void {
@@ -577,11 +595,12 @@ class LiveCall<S extends StateSchema, T> {
         this.log({ callId: this.context?.callId }, 'Live backend work did not settle before close')
     }
     this.ledgerClosed = true
+    const ledger = await this.finalLedger(backendSettled)
     try {
-      await this.closeVoice(backendSettled)
+      await this.closeVoice(backendSettled, ledger)
     } finally {
       try {
-        await this.exitHooks()
+        await this.exitHooks(ledger)
       } finally {
         if (this.endRequested)
           await terminateLiveKitCall({
@@ -596,8 +615,27 @@ class LiveCall<S extends StateSchema, T> {
     }
   }
 
+  /**
+   * The call session that close() finalizes. Queued work that close() stopped waiting for keeps the
+   * session object it holds, so the call is finalized on a fresh copy of what was last committed,
+   * once commits already in flight have landed. If the copy cannot be read, the call is finalized
+   * on the session it has, so the end record and `onExit` still happen.
+   */
+  private async finalLedger(backendSettled: boolean): Promise<Session<S> | undefined> {
+    const context = this.context
+    if (!context) return undefined
+    if (backendSettled) return this.session
+    await settlesWithin(Promise.allSettled(this.commits), this.runtime.timeout)
+    try {
+      return await this.reloadCall()
+    } catch {
+      this.log({ callId: context.callId }, 'Live call session could not be reloaded at close')
+      return this.session
+    }
+  }
+
   /** Closes voice and transcript capture, then records how the call ended. */
-  private async closeVoice(backendSettled: boolean): Promise<void> {
+  private async closeVoice(backendSettled: boolean, ledger: Session<S> | undefined): Promise<void> {
     try {
       await this.voiceSession.close()
     } finally {
@@ -605,37 +643,37 @@ class LiveCall<S extends StateSchema, T> {
       try {
         await this.transcript?.close()
       } finally {
-        const context = this.context
-        if (context) {
-          await this.runtime.sessionService.appendEvent(context.session, {
+        if (ledger) {
+          await this.runtime.sessionService.appendEvent(ledger, {
             id: randomUUID(),
             type: 'annotation',
             kind: 'mark',
             label: 'live-call-ended',
             createdAt: Date.now(),
-            invocationId: context.callId,
+            invocationId: ledger.id,
             agentName: this.runtime.config.agent.name,
             data: backendSettled
               ? { reason: this.endReason }
               : { reason: this.endReason, backendSettled },
           })
-          await this.commit(context.session)
+          await this.commit(ledger)
         }
       }
     }
   }
 
-  private async exitHooks(): Promise<void> {
+  private async exitHooks(ledger: Session<S> | undefined): Promise<void> {
     const context = this.context
-    if (!context) return
+    if (!context || !ledger) return
     try {
       const exit = exitContext(
         context,
+        ledger,
         this.usage(await loadPricing({ maxWaitMs: RESULT_PRICING_WAIT_MS })),
       )
       for (const hook of this.runtime.hooks) await hook.onExit?.(exit)
     } finally {
-      await this.commit(context.session)
+      await this.commit(ledger)
     }
   }
 
@@ -664,7 +702,7 @@ class LiveCall<S extends StateSchema, T> {
         handled ||= decision === 'continue'
         terminate ||= decision === 'end'
       }
-      if (recoverable) await this.commit(errorContext.session)
+      if (recoverable) await this.commitQueued(errorContext.session)
       if (!recoverable || !handled || terminate) this.requestEnd('error')
     } catch {
       this.log({ callId: errorContext.callId }, 'Live error recovery failed')
