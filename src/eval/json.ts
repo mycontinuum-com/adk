@@ -23,6 +23,7 @@ export function voiceEvidence(run: VoiceRunResult) {
     sessionEvents: run.session.events.map(serializeEvent),
     ...(run.liveTranscript === undefined ? {} : { liveTranscript: run.liveTranscript }),
     ...(run.usageScope === undefined ? {} : { usageScope: run.usageScope }),
+    ...(run.liveUsage === undefined ? {} : { liveUsage: run.liveUsage }),
     events: run.events.map(serializeEvent),
     voiceEvents: run.voiceEvents.map(omitUndefinedProperties),
     transcript: run.transcript.map(omitUndefinedProperties),

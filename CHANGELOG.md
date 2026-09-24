@@ -42,6 +42,8 @@ Migration section:
 - `openGPTLiveTranscript` (`@animahealth/adk/voice`) records native GPT Live transcript observations in a dedicated session. See `docs/gpt-live-transcript.md`.
 - `app.evaluate` runs voice cases against Live handlers. `runVoiceProbe` and `disposeVoiceProbeRuntime` (`@animahealth/adk/eval`) drive a single scripted audio probe. See `docs/voice-probes.md`.
 - `run.settled` fulfills after ADK-owned execution and cleanup finish. Await it before committing or closing a session store.
+- GPT Live cost accounting — `onExit` receives `ctx.usage` with backend and voice cost; Live eval results add `run.liveUsage` with backend, voice and simulated-caller cost. Each cost has a `CostBasis` of `reported`, `estimated` or `unavailable`. See `docs/gpt-live.md`.
+- `gpt-live-1` pricing — $0.05 per minute of session time, billed per second.
 
 ### Changed
 
@@ -56,6 +58,7 @@ Migration section:
 ### Fixed
 
 - Claude usage — `inputTokens` now includes cache reads and cache writes, `cachedTokens` reports cache reads and `cacheWriteTokens` reports cache writes, matching the other providers. Before, Anthropic's uncached-only `input_tokens` made `calculateCost` underprice cached calls and never count cache writes.
+- Realtime cost estimates — treat audio and cached-audio tokens as part of the input and output totals, as providers report them. Audio is no longer also charged at the text rate.
 
 ## [0.6.1]
 

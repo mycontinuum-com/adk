@@ -5,10 +5,11 @@ import { z } from 'zod'
 
 import type { Event } from '../types/events'
 import type {
-  LiveVoiceContext,
   LiveVoiceErrorContext,
+  LiveVoiceExitContext,
   LiveVoiceResultContext,
   LiveVoiceControls,
+  LiveVoiceContext,
 } from './live-types'
 
 import { adk } from '../api'
@@ -16,7 +17,7 @@ import { openai } from '../providers/models'
 import { serializeContext } from '../providers/openai'
 import { InMemoryStore } from '../session/memory'
 import { sessionService } from '../session/service'
-import { MockAdapter } from '../testing/mock/adapter'
+import { UsageReportingAdapter } from '../test-support/usage-adapter'
 import { openGPTLiveTranscript } from './gpt-live-transcript'
 import { createLiveVoiceHandler } from './live-handler'
 
@@ -86,15 +87,18 @@ async function fixture(
     enterGate?: ReturnType<typeof gate>
     agentScope?: boolean
     backendTimeoutMs?: number
+    backendUsage?: boolean
+    clock?: () => number
   } = {},
 ) {
   const store = new InMemoryStore()
   const closeStore = vi.spyOn(store, 'close')
-  const adapter = new MockAdapter({
+  const adapter = new UsageReportingAdapter({
     responses: ['first', 'second', 'third'].map((id) => ({
       toolCalls: [{ name: 'lookup', args: { id } }],
     })),
   })
+  adapter.reportUsage = Boolean(options.backendUsage)
   const app = adk({
     name: 'live-test',
     store,
@@ -193,7 +197,7 @@ async function fixture(
     return options.errorAction
   })
   const result = vi.fn<(ctx: LiveVoiceResultContext) => void>()
-  const exited = vi.fn<(ctx: LiveVoiceContext) => void>()
+  const exited = vi.fn<(ctx: LiveVoiceExitContext) => void>()
   const entered: LiveVoiceContext[] = []
   const deleteRoom = vi.fn<(room: string) => Promise<void>>(async () => {})
   const setup = vi.fn<() => Promise<{ sessionId: string; state: { answer: string } }>>(
@@ -206,10 +210,11 @@ async function fixture(
       voice: {
         Agent: VoiceAgent,
         AgentSession: VoiceSession,
-        AgentSessionEventTypes: { Close: 'close' },
+        AgentSessionEventTypes: { Close: 'close', MetricsCollected: 'metrics_collected' },
       },
       log: () => ({ error: vi.fn<(data: unknown, message: string) => void>() }),
     }),
+    clock: options.clock,
     openai: () => ({ realtime: { GPTLiveModel: class {}, GPTLiveSession: LiveSession } }),
     livekitServer: () => ({
       RoomServiceClient: class {
@@ -1004,4 +1009,116 @@ test('a stalled backend transfer cannot hold call termination past its second bo
     }),
   )
   expect(f.error).not.toHaveBeenCalled()
+})
+
+describe('Live call usage', () => {
+  function usageMetric(connection: string, seconds: number) {
+    return {
+      metrics: {
+        type: 'realtime_model_metrics',
+        requestId: connection,
+        sessionDurationMs: seconds * 1000,
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+    }
+  }
+
+  test('onExit reports provider voice seconds and backend cost separately', async () => {
+    const f = await fixture({ backendUsage: true })
+    const call = await f.call()
+    call.live.dispatch('first-id', 'Opening hours?')
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    // The plugin reports each cumulative usage.seconds update as a delta: 12 s, then 15 s.
+    call.session.emit('metrics_collected', usageMetric('connection-one', 12))
+    call.session.emit('metrics_collected', usageMetric('connection-one', 3))
+    call.live.emit('openai_server_event_received', { type: 'session.closed' })
+    await call.shutdown()
+    const usage = f.exited.mock.calls[0]![0].usage
+    expect(usage.voice).toEqual({
+      modelName: 'gpt-live-1',
+      seconds: 15,
+      cost: { basis: 'reported', totalCost: 0.0125, currency: 'USD' },
+    })
+    // One backend model call at 1M gpt-4o-mini input tokens.
+    expect(usage.backend.usage?.modelCalls).toBe(1)
+    expect(usage.backend.cost).toEqual({ basis: 'reported', totalCost: 0.15, currency: 'USD' })
+    expect(usage.total).toEqual({ basis: 'reported', totalCost: 0.1625, currency: 'USD' })
+  })
+
+  test.each([
+    ['both connections closed', true, { basis: 'reported', totalCost: 0.025, currency: 'USD' }],
+    [
+      'the first connection dropped',
+      false,
+      { basis: 'estimated', totalCost: 0.025, currency: 'USD' },
+    ],
+  ] as const)('sums usage across a reconnect when %s', async (_, firstClosed, cost) => {
+    const f = await fixture({ clock: () => 0 })
+    const call = await f.call()
+    call.session.emit('metrics_collected', usageMetric('connection-one', 20))
+    if (firstClosed) call.live.emit('openai_server_event_received', { type: 'session.closed' })
+    call.live.emit('openai_server_event_received', {
+      type: 'session.started',
+      session: { id: 'connection-two' },
+    })
+    call.live.sessionId = 'connection-two'
+    call.session.emit('metrics_collected', usageMetric('connection-two', 10))
+    call.live.emit('openai_server_event_received', { type: 'session.closed' })
+    await call.shutdown()
+    expect(f.exited.mock.calls[0]![0].usage.voice).toEqual({
+      modelName: 'gpt-live-1',
+      seconds: 30,
+      cost,
+    })
+  })
+
+  test('falls back to connection time when the provider reports no usage', async () => {
+    let clock = 1_000
+    const f = await fixture({ clock: () => clock })
+    const call = await f.call()
+    clock += 90_000
+    const close = call.session.close.bind(call.session)
+    call.session.close = async () => {
+      clock += 30_000
+      await close()
+    }
+    await call.shutdown()
+    const usage = f.exited.mock.calls[0]![0].usage
+    expect(usage.voice).toEqual({
+      modelName: 'gpt-live-1',
+      seconds: 120,
+      cost: { basis: 'estimated', totalCost: 0.1, currency: 'USD' },
+    })
+    expect(usage.backend).toEqual({ cost: { basis: 'reported', totalCost: 0, currency: 'USD' } })
+    expect(usage.total).toEqual({ basis: 'estimated', totalCost: 0.1, currency: 'USD' })
+  })
+
+  test('backend work abandoned at close makes backend cost unavailable, not complete', async () => {
+    const stuck = gate()
+    const f = await fixture({ gates: { second: stuck }, backendTimeoutMs: 50, backendUsage: true })
+    const call = await f.call()
+    call.live.dispatch('first-id', 'Question')
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    call.live.dispatch('second-id', 'Follow-up')
+    await vi.waitFor(() => expect(f.started).toEqual(['first', 'second']))
+    f.entered[0]!.voice.end()
+    await vi.waitFor(() => expect(f.exited).toHaveBeenCalledTimes(1), { timeout: 500 })
+    const usage = f.exited.mock.calls[0]![0].usage
+    expect(usage.backend.cost).toEqual({ basis: 'unavailable' })
+    expect(usage.total).toEqual({ basis: 'unavailable' })
+    stuck.release()
+    await vi.waitFor(() => expect(f.finished).toEqual(['first', 'second']))
+  })
+
+  test('backend calls without reported token usage make backend and total cost unavailable', async () => {
+    const f = await fixture()
+    const call = await f.call()
+    call.live.dispatch('first-id', 'Opening hours?')
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    await call.shutdown()
+    const usage = f.exited.mock.calls[0]![0].usage
+    expect(usage.backend.cost).toEqual({ basis: 'unavailable' })
+    expect(usage.total).toEqual({ basis: 'unavailable' })
+  })
 })

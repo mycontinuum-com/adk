@@ -1,6 +1,7 @@
 import type { ModelUsage } from '../types'
 
-import { getPricing, calculateCost, formatCost } from './pricing'
+import { summarizeModelUsage } from '../core/runner'
+import { getPricing, calculateCost, formatCost, usageCost } from './pricing'
 
 describe('pricing', () => {
   describe('getPricing', () => {
@@ -155,6 +156,56 @@ describe('pricing', () => {
       }
       const cost = calculateCost(usage)
       expect(cost).toBeNull()
+    })
+  })
+
+  describe('Realtime audio usage', () => {
+    it('prices audio and cached audio inside the input total once, at audio rates', () => {
+      const cost = calculateCost({
+        modelName: 'gpt-realtime',
+        inputTokens: 1_100_000,
+        cachedTokens: 500_000,
+        audioInputTokens: 1_000_000,
+        audioCachedTokens: 500_000,
+        outputTokens: 1_000_000,
+        audioOutputTokens: 1_000_000,
+      })
+      // Text $4/M on 100k, audio $32/M on 500k, cached audio $0.40/M on 500k, audio out $64/M on 1M.
+      expect(cost!.inputCost).toBeCloseTo(0.4 + 16 + 0.2, 10)
+      expect(cost!.outputCost).toBeCloseTo(64, 10)
+    })
+  })
+
+  describe('usageCost', () => {
+    it('adds table-priced and provider-reported charges from different models', () => {
+      const usage = summarizeModelUsage([
+        { provider: 'openai', modelName: 'gpt-4o-mini', inputTokens: 1_000_000, outputTokens: 0 },
+        {
+          provider: 'chat-completions',
+          modelName: 'self-hosted',
+          inputTokens: 10,
+          outputTokens: 10,
+          reportedCostUSD: 0.02,
+        },
+      ])
+      expect(usage?.cost).toBeUndefined()
+      expect(usage?.reportedCostUSD).toBeUndefined()
+      const cost = usageCost(usage)
+      expect(cost.basis).toBe('reported')
+      expect(cost.basis !== 'unavailable' && cost.totalCost).toBeCloseTo(0.17, 12)
+    })
+
+    it('is unavailable when a call has unknown usage, and zero with no calls', () => {
+      expect(
+        usageCost(
+          summarizeModelUsage([
+            { provider: 'openai', modelName: 'gpt-4o-mini', inputTokens: 1, outputTokens: 0 },
+            undefined,
+          ]),
+        ),
+      ).toEqual({ basis: 'unavailable' })
+      expect(usageCost(summarizeModelUsage([undefined]))).toEqual({ basis: 'unavailable' })
+      expect(usageCost(undefined)).toEqual({ basis: 'reported', totalCost: 0, currency: 'USD' })
     })
   })
 

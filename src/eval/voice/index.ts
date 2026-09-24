@@ -18,6 +18,7 @@ export type {
   TranscriptEntry,
   VoiceRunStatus,
   VoiceRunResult,
+  LiveVoiceEvalUsage,
   VoiceEvalCaseResult,
   VoiceEvalResult,
 } from './types'

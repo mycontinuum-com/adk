@@ -130,6 +130,7 @@ export async function evalCli<S extends StateSchema>(
           metrics: item.metrics,
           durationMs: item.durationMs,
           usage: item.usage,
+          liveUsage: 'events' in item ? undefined : item.run.liveUsage,
           attempts: item.attempts,
           repeatIndex: item.repeatIndex,
           repeatTotal: item.repeatTotal,

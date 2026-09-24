@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { Event } from '../../types/events'
-import type { UsageSummary } from '../../types/runtime'
 import type { StateSchema } from '../../types/schema'
 import type { Session } from '../../types/session'
 import type { LiveVoiceAppContext } from '../../voice/live-handler'
@@ -39,6 +38,7 @@ import {
 import { createCaseWriter } from './case-writer'
 import { isProcessWorker, getWorkerCaseIndex, sendWorkerResult, forkCase } from './process-pool'
 import { runVoiceCase } from './runner'
+import { isLiveEvalUsage, isUsageSummary } from './usage-validation'
 
 type SerializedVoiceRun = Omit<VoiceRunResult, 'session'> & {
   sessionId: string
@@ -170,52 +170,6 @@ function isVoiceTiming(value: unknown): value is VoiceRunResult['timing'] {
   )
 }
 
-function isCostEstimate(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isFiniteNumber(value.inputCost) &&
-    isFiniteNumber(value.outputCost) &&
-    isFiniteNumber(value.totalCost) &&
-    value.currency === 'USD'
-  )
-}
-
-function isModelUsageEntry(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    (value.provider === undefined || typeof value.provider === 'string') &&
-    (value.reportedCostUSD === undefined || isFiniteNumber(value.reportedCostUSD)) &&
-    typeof value.modelName === 'string' &&
-    isFiniteNumber(value.calls) &&
-    isFiniteNumber(value.inputTokens) &&
-    isFiniteNumber(value.outputTokens) &&
-    isFiniteNumber(value.cachedTokens) &&
-    (value.cacheWriteTokens === undefined || isFiniteNumber(value.cacheWriteTokens)) &&
-    isFiniteNumber(value.reasoningTokens) &&
-    isFiniteNumber(value.audioInputTokens) &&
-    isFiniteNumber(value.audioOutputTokens) &&
-    (value.cost === undefined || isCostEstimate(value.cost))
-  )
-}
-
-function isUsageSummary(value: unknown): value is UsageSummary {
-  return (
-    isRecord(value) &&
-    (value.reportedCostUSD === undefined || isFiniteNumber(value.reportedCostUSD)) &&
-    Array.isArray(value.models) &&
-    value.models.every(isModelUsageEntry) &&
-    isFiniteNumber(value.totalInputTokens) &&
-    isFiniteNumber(value.totalOutputTokens) &&
-    isFiniteNumber(value.totalCachedTokens) &&
-    (value.totalCacheWriteTokens === undefined || isFiniteNumber(value.totalCacheWriteTokens)) &&
-    isFiniteNumber(value.totalReasoningTokens) &&
-    isFiniteNumber(value.totalAudioInputTokens) &&
-    isFiniteNumber(value.totalAudioOutputTokens) &&
-    isFiniteNumber(value.modelCalls) &&
-    (value.cost === undefined || isCostEstimate(value.cost))
-  )
-}
-
 function isSerializedVoiceResult(value: unknown): value is SerializedVoiceResult {
   if (!isRecord(value) || !isRecord(value.run)) return false
   const run = value.run
@@ -246,6 +200,7 @@ function isSerializedVoiceResult(value: unknown): value is SerializedVoiceResult
     isRecord(run.recording) &&
     typeof run.recording.path === 'string' &&
     (run.usage === undefined || isUsageSummary(run.usage)) &&
+    (run.liveUsage === undefined || isLiveEvalUsage(run.liveUsage)) &&
     (run.error === undefined || isErrorDetails(run.error)) &&
     isFiniteNumber(run.durationMs)
   )

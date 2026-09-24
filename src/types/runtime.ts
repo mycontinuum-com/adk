@@ -47,6 +47,22 @@ export interface CostEstimate {
   readonly currency: 'USD'
 }
 
+/**
+ * How a cost figure was obtained. `reported` prices provider-reported usage, or is a charge the
+ * provider reported; `estimated` prices locally measured usage; `unavailable` means no figure could
+ * be computed and must not read as 0.
+ */
+export type CostBasis = 'reported' | 'estimated' | 'unavailable'
+
+/** One cost figure with its basis. Unavailable costs carry no amount. */
+export type CostAccount =
+  | {
+      readonly basis: 'reported' | 'estimated'
+      readonly totalCost: number
+      readonly currency: 'USD'
+    }
+  | { readonly basis: 'unavailable' }
+
 export interface ModelUsageEntry {
   readonly provider?: Provider
   readonly reportedCostUSD?: number

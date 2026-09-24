@@ -51,6 +51,10 @@ export type {
   LiveVoiceDelegation,
   LiveVoiceResultContext,
   LiveVoiceErrorContext,
+  LiveVoiceExitContext,
+  LiveCallUsage,
+  UsageCost,
+  LiveVoiceSessionUsage,
   LiveVoiceHook,
   LiveVoiceHandlerConfig,
 } from './live-types'

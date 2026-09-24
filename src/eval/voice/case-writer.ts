@@ -7,7 +7,7 @@ import type { EvalStatus } from '../types'
 import type { VoiceEvalCase, VoiceRunResult, VoiceTiming } from './types'
 
 import { getModelName } from '../../providers/models'
-import { formatCost } from '../../providers/pricing'
+import { formatCost, formatCostAccount } from '../../providers/pricing'
 import { sanitize } from '../../voice/recording'
 
 export interface CaseWriter {
@@ -157,10 +157,16 @@ function renderResult(
   lines.push('')
   lines.push(`## Result: ${status}`)
   lines.push('')
-  if (result.usageScope === 'backend')
-    lines.push('Usage and cost cover backend models only; voice audio usage is unavailable.')
-  const costStr = result.usage?.cost ? ` — ${formatCost(result.usage.cost.totalCost)}` : ''
+  const live = result.liveUsage
+  const costStr = !live && result.usage?.cost ? ` — ${formatCost(result.usage.cost.totalCost)}` : ''
   lines.push(`**Duration**: ${formatMs(result.durationMs)}${costStr}`)
+  if (live) {
+    const seconds =
+      live.voice.seconds === undefined ? '' : ` ${formatMs(live.voice.seconds * 1000)}`
+    lines.push(
+      `**Cost**: ${formatCostAccount(live.total)} — backend ${formatCostAccount(live.backend.cost)}, voice${seconds} ${formatCostAccount(live.voice.cost)}, caller ${formatCostAccount(live.caller.cost)}`,
+    )
+  }
   if (result.recording.path) {
     lines.push(`**Recording**: [recording.wav](./recording.wav)`)
   }

@@ -8,7 +8,7 @@ import { adk } from '../../api'
 import { openai, realtime } from '../../providers/models'
 import { InMemoryStore } from '../../session/memory'
 import { sessionService } from '../../session/service'
-import { MockAdapter } from '../../testing/mock/adapter'
+import { UsageReportingAdapter } from '../../test-support/usage-adapter'
 import { createLiveVoiceHandler } from '../../voice/live-handler'
 import { eventSequenceMetric } from '../metrics/events'
 import { createVoiceEvalCase } from './control'
@@ -37,15 +37,17 @@ class SDKAgent {
 }
 async function fixture() {
   const store = new InMemoryStore()
-  const adapter = new MockAdapter({
+  const adapter = new UsageReportingAdapter({
     responses: [{ toolCalls: [{ name: 'lookup', args: {} }] }, { text: 'Open at nine' }],
   })
+  adapter.reportUsage = false
   const app = adk({
     name: 'live-eval',
     store,
     adapters: { openai: adapter },
     schema: { session: { count: z.number().default(0) } },
   })
+  let reportUsage = false
   const tool = vi.fn<() => { hours: string }>(() => ({ hours: 'nine' }))
   const lookup = app.tool({
     name: 'lookup',
@@ -97,7 +99,19 @@ async function fixture() {
     async start({ agent: started, room }: { agent: SDKAgent; room: Room }) {
       this.agent = started
       await started.onEnter()
-      if (started.constructor === SDKAgent) return
+      if (started.constructor === SDKAgent) {
+        if (reportUsage)
+          this.emit('metrics_collected', {
+            metrics: {
+              type: 'realtime_model_metrics',
+              inputTokens: 0,
+              outputTokens: 10_000,
+              inputTokenDetails: { audioTokens: 0, textTokens: 0, cachedTokens: 0 },
+              outputTokenDetails: { audioTokens: 10_000, textTokens: 0 },
+            },
+          })
+        return
+      }
       liveSessions.push(this)
       if (failTransport) {
         this.emit('close', { error: new Error('socket failed') })
@@ -118,13 +132,29 @@ async function fixture() {
       if (this.agent && this.agent.constructor !== SDKAgent && handlerCloseDelayMs)
         await new Promise((resolve) => setTimeout(resolve, handlerCloseDelayMs))
       closeCaller()
+      if (reportUsage && this.agent && this.agent.constructor !== SDKAgent) {
+        // GPT Live drains its final cumulative usage while closing: 12 s, then 15 s.
+        for (const seconds of [12, 3])
+          this.emit('metrics_collected', {
+            metrics: {
+              type: 'realtime_model_metrics',
+              requestId: 'connection',
+              sessionDurationMs: seconds * 1000,
+            },
+          })
+        this.agent.duplexSession.emit('openai_server_event_received', { type: 'session.closed' })
+      }
       await this.agent?.onExit()
     }
   }
   const deleteRoom = vi.fn<() => Promise<void>>(async () => {})
   const sdk = {
     lk: {
-      voice: { Agent: SDKAgent, AgentSession, AgentSessionEventTypes: { Close: 'close' } },
+      voice: {
+        Agent: SDKAgent,
+        AgentSession,
+        AgentSessionEventTypes: { Close: 'close', MetricsCollected: 'metrics_collected' },
+      },
       defineAgent: () => {},
       log: () => ({ error() {} }),
     },
@@ -202,6 +232,10 @@ async function fixture() {
     failTransport: () => {
       failTransport = true
     },
+    reportUsage: () => {
+      reportUsage = true
+      adapter.reportUsage = true
+    },
     delay: (promise: Promise<void>) => {
       setupDelay = promise
     },
@@ -238,6 +272,32 @@ test('runs the production handler and persists call state, native fragments and 
     expect((await f.app.sessions.get(run.session.id))?.state.count).toBe(5)
     expect(f.deleteRoom).toHaveBeenCalledOnce()
     expect(f.rooms.every((room) => room.disconnect.mock.calls.length)).toBe(true)
+  } finally {
+    await f.app.close()
+  }
+})
+test('reports backend, GPT Live and simulated caller cost separately', async () => {
+  const f = await fixture()
+  try {
+    f.reportUsage()
+    const run = await f.run()
+    expect(run.error).toBeUndefined()
+    expect(run.usageScope).toBe('backend')
+    const usage = run.liveUsage!
+    expect(usage.backend.usage?.modelCalls).toBe(2)
+    expect(usage.backend.cost).toEqual({ basis: 'reported', totalCost: 0.3, currency: 'USD' })
+    expect(usage.voice).toEqual({
+      modelName: 'gpt-live-1',
+      seconds: 15,
+      cost: { basis: 'reported', totalCost: 0.0125, currency: 'USD' },
+    })
+    expect(usage.caller.cost.basis).toBe('reported')
+    expect(usage.caller.cost.basis !== 'unavailable' && usage.caller.cost.totalCost).toBeCloseTo(
+      0.64,
+      12,
+    )
+    expect(usage.total.basis).toBe('reported')
+    expect(usage.total.basis !== 'unavailable' && usage.total.totalCost).toBeCloseTo(0.9525, 12)
   } finally {
     await f.app.close()
   }

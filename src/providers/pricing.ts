@@ -1,4 +1,4 @@
-import type { ModelUsage, CostEstimate } from '../types'
+import type { ModelUsage, CostAccount, CostEstimate, UsageSummary } from '../types'
 
 interface PricingTier {
   inputPerMillion: number
@@ -223,14 +223,19 @@ export function calculateCost(usage: ModelUsage): CostEstimate | null {
       ? pricing.highTier
       : pricing
 
+  // Audio and cached counts are subsets of the reported input and output totals.
+  const audioInputTokens = usage.audioInputTokens ?? 0
+  const audioCachedTokens = Math.min(usage.audioCachedTokens ?? 0, audioInputTokens)
+  const uncachedAudioInput = audioInputTokens - audioCachedTokens
+  const audioOutputTokens = usage.audioOutputTokens ?? 0
+  const cachedInputTokens = Math.max(0, (usage.cachedTokens ?? 0) - audioCachedTokens)
+  const cacheWriteInputTokens = usage.cacheWriteTokens ?? 0
   const uncachedInputTokens = Math.max(
     0,
-    usage.inputTokens - (usage.cachedTokens ?? 0) - (usage.cacheWriteTokens ?? 0),
+    usage.inputTokens - audioInputTokens - cachedInputTokens - cacheWriteInputTokens,
   )
-  const cachedInputTokens = usage.cachedTokens ?? 0
-  const cacheWriteInputTokens = usage.cacheWriteTokens ?? 0
   const reasoningTokens = usage.reasoningTokens ?? 0
-  const outputTokens = usage.outputTokens
+  const outputTokens = Math.max(0, usage.outputTokens - audioOutputTokens)
 
   const uncachedInput = (uncachedInputTokens / 1_000_000) * tier.inputPerMillion
   const cachedInput = (cachedInputTokens / 1_000_000) * tier.cachedInputPerMillion
@@ -238,12 +243,6 @@ export function calculateCost(usage: ModelUsage): CostEstimate | null {
     (cacheWriteInputTokens / 1_000_000) * (tier.cacheWriteInputPerMillion ?? tier.inputPerMillion)
   const reasoning = (reasoningTokens / 1_000_000) * (tier.reasoningPerMillion ?? 0)
   const output = (outputTokens / 1_000_000) * tier.outputPerMillion
-
-  // Audio tokens (realtime/voice agents)
-  const audioInputTokens = usage.audioInputTokens ?? 0
-  const audioCachedTokens = usage.audioCachedTokens ?? 0
-  const uncachedAudioInput = Math.max(0, audioInputTokens - audioCachedTokens)
-  const audioOutputTokens = usage.audioOutputTokens ?? 0
 
   const audioInput = (uncachedAudioInput / 1_000_000) * (tier.audioInputPerMillion ?? 0)
   const audioCached = (audioCachedTokens / 1_000_000) * (tier.audioCachedInputPerMillion ?? 0)
@@ -261,8 +260,62 @@ export function calculateCost(usage: ModelUsage): CostEstimate | null {
   }
 }
 
+/** USD per minute of connected session time, for voice models billed by duration, not tokens. */
+const SESSION_PRICE_PER_MINUTE: Record<string, number> = {
+  // $0.05 per minute, billed per second: https://developers.openai.com/api/docs/models/gpt-live-1
+  'gpt-live-1': 0.05,
+}
+
+/** USD cost of `seconds` of session time, or null when the model has no session price. */
+export function calculateSessionCost(modelName: string, seconds: number): number | null {
+  const key = Object.keys(SESSION_PRICE_PER_MINUTE).find(
+    (candidate) => modelName === candidate || modelName.startsWith(`${candidate}-`),
+  )
+  if (!key || !Number.isFinite(seconds) || seconds < 0) return null
+  const microUsdPerMinute = Math.round(SESSION_PRICE_PER_MINUTE[key] * 1_000_000)
+  return (seconds * microUsdPerMinute) / 60 / 1_000_000
+}
+
+/**
+ * Prices a token usage summary. No model calls cost nothing. Each model is priced from the price
+ * table or, failing that, from the charge its provider reported; a call without known usage or any
+ * model without a charge makes the whole figure unavailable.
+ */
+export function usageCost(usage: UsageSummary | undefined): CostAccount {
+  if (!usage) return { basis: 'reported', totalCost: 0, currency: 'USD' }
+  let totalCost = 0
+  let calls = 0
+  for (const model of usage.models) {
+    const charge = model.cost?.totalCost ?? model.reportedCostUSD
+    if (charge === undefined) return { basis: 'unavailable' }
+    totalCost += charge
+    calls += model.calls
+  }
+  if (calls !== usage.modelCalls) return { basis: 'unavailable' }
+  return { basis: 'reported', totalCost, currency: 'USD' }
+}
+
+/** Adds costs. The result is only as strong as its weakest component. */
+export function sumCosts(accounts: readonly CostAccount[]): CostAccount {
+  let totalCost = 0
+  let estimated = false
+  for (const account of accounts) {
+    if (account.basis === 'unavailable') return { basis: 'unavailable' }
+    totalCost += account.totalCost
+    estimated ||= account.basis === 'estimated'
+  }
+  return { basis: estimated ? 'estimated' : 'reported', totalCost, currency: 'USD' }
+}
+
 export function formatCost(cost: number): string {
   if (cost >= 1) return `$${cost.toFixed(2)}`
   if (cost >= 0.01) return `$${cost.toFixed(4)}`
   return `$${cost.toFixed(6)}`
+}
+
+/** Formats a cost with its basis, for example `$0.0750 (reported)` or `unavailable`. */
+export function formatCostAccount(account: CostAccount): string {
+  return account.basis === 'unavailable'
+    ? 'unavailable'
+    : `${formatCost(account.totalCost)} (${account.basis})`
 }

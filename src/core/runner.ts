@@ -6,7 +6,7 @@ import type {
   StreamEvent,
   HandoffOrigin,
   InvocationStartEvent,
-  ModelEndEvent,
+  ModelUsage,
   Event,
   AssistantEvent,
 } from '../types/events'
@@ -68,9 +68,14 @@ function validatePipelineFingerprint(session: Session, currentFingerprint: strin
  * @returns `undefined` when there are no `model_end` events.
  */
 export function computeUsageSummary(events: readonly Event[]): UsageSummary | undefined {
-  const modelEndEvents = events.filter((e): e is ModelEndEvent => e.type === 'model_end')
+  return summarizeModelUsage(events.flatMap((e) => (e.type === 'model_end' ? [e.usage] : [])))
+}
 
-  if (modelEndEvents.length === 0) return undefined
+/** Summarizes one entry per model call; `undefined` marks a call whose usage is unknown. */
+export function summarizeModelUsage(
+  calls: readonly (ModelUsage | undefined)[],
+): UsageSummary | undefined {
+  if (calls.length === 0) return undefined
 
   const byModel = new Map<
     string,
@@ -106,8 +111,7 @@ export function computeUsageSummary(events: readonly Event[]): UsageSummary | un
   let reportedCostCalls = 0
   let reportedCostUSD = 0
 
-  for (const event of modelEndEvents) {
-    const u = event.usage
+  for (const u of calls) {
     if (!u) continue
     const input = u.inputTokens
     const output = u.outputTokens
@@ -176,7 +180,7 @@ export function computeUsageSummary(events: readonly Event[]): UsageSummary | un
     }
   }
 
-  const completeUsage = modelEndEvents.every((event) => event.usage !== undefined)
+  const completeUsage = calls.every((usage) => usage !== undefined)
   const models: ModelUsageEntry[] = []
   for (const e of byModel.values()) {
     models.push({
@@ -215,9 +219,9 @@ export function computeUsageSummary(events: readonly Event[]): UsageSummary | un
     totalReasoningTokens,
     totalAudioInputTokens,
     totalAudioOutputTokens,
-    modelCalls: modelEndEvents.length,
-    ...(reportedCostCalls === modelEndEvents.length && { reportedCostUSD }),
-    ...(knownCostCalls === modelEndEvents.length && {
+    modelCalls: calls.length,
+    ...(reportedCostCalls === calls.length && { reportedCostUSD }),
+    ...(knownCostCalls === calls.length && {
       cost: {
         inputCost: totalInputCost,
         outputCost: totalOutputCost,

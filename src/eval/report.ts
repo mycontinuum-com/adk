@@ -1,5 +1,11 @@
+import type { CostAccount } from '../types/runtime'
 import type { StateSchema } from '../types/schema'
 import type { BaseEvalCaseResult, BaseEvalResult, EvalResult } from './types'
+import type { EvalStatus } from './types'
+import type { LiveVoiceEvalUsage } from './voice/types'
+
+import { formatCost, formatCostAccount, sumCosts, usageCost } from '../providers/pricing'
+import { isLiveEvalUsage } from './voice/usage-validation'
 
 export interface ReportOptions<
   S extends StateSchema = StateSchema,
@@ -101,10 +107,53 @@ function formatSummary(result: BaseEvalResult, lines: string[]): void {
     lines.push(
       `**Tokens:** ${totalInput.toLocaleString()} in / ${totalOutput.toLocaleString()} out`,
     )
-    if (totalCost > 0) {
-      lines.push(`**Cost:** $${totalCost.toFixed(2)}`)
-    }
   }
+
+  const live = result.results.flatMap((r) => {
+    const usage = liveUsageOf(r)
+    return usage ? [usage] : []
+  })
+  if (live.length) {
+    const others = result.results.filter((r) => !liveUsageOf(r))
+    const components: Array<[string, CostAccount]> = [
+      ['backend', sumCosts(live.map((usage) => usage.backend.cost))],
+      ['voice', sumCosts(live.map((usage) => usage.voice.cost))],
+      ['caller', sumCosts(live.map((usage) => usage.caller.cost))],
+    ]
+    if (others.length) components.push(['other cases', sumCosts(others.map(caseCost))])
+    const total = sumCosts(components.map(([, cost]) => cost))
+    let partial = ''
+    if (total.basis === 'unavailable') {
+      const caseTotals = [...live.map((usage) => usage.total), ...others.map(caseCost)]
+      let known = 0
+      let knownCases = 0
+      for (const cost of caseTotals) {
+        if (cost.basis === 'unavailable') continue
+        known += cost.totalCost
+        knownCases++
+      }
+      partial = ` (${formatCost(known)} known across ${knownCases} of ${caseTotals.length} cases)`
+    }
+    lines.push(
+      `**Cost:** ${formatCostAccount(total)}${partial} — ${components.map(([name, cost]) => `${name} ${formatCostAccount(cost)}`).join(', ')}`,
+    )
+  } else if (hasUsage && totalCost > 0) {
+    lines.push(`**Cost:** $${totalCost.toFixed(2)}`)
+  }
+}
+
+function liveUsageOf(result: BaseEvalCaseResult): LiveVoiceEvalUsage | undefined {
+  if (!('run' in result) || typeof result.run !== 'object' || result.run === null) return undefined
+  if (!('liveUsage' in result.run)) return undefined
+  return isLiveEvalUsage(result.run.liveUsage) ? result.run.liveUsage : undefined
+}
+
+/** Statuses whose run can stop with a model call in flight, so recorded usage may be partial. */
+const INTERRUPTED: ReadonlySet<EvalStatus> = new Set(['error', 'timeout', 'aborted'])
+
+/** Cost of a non-Live case. An interrupted run's usage may omit a billed call. */
+function caseCost(result: BaseEvalCaseResult): CostAccount {
+  return INTERRUPTED.has(result.status) ? { basis: 'unavailable' } : usageCost(result.usage)
 }
 
 function formatMetrics(result: BaseEvalResult, lines: string[]): void {

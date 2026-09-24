@@ -1,15 +1,23 @@
 import { randomUUID } from 'node:crypto'
 
 import type { StateChanges } from '../../session/seedState'
+import type { ModelUsage } from '../../types/events'
 import type { Agent, RealtimeModelConfig } from '../../types/runnables'
+import type { UsageSummary } from '../../types/runtime'
 import type { StateSchema } from '../../types/schema'
 import type { Session } from '../../types/session'
 import type { LiveVoiceAppContext, LiveVoiceJob } from '../../voice/live-handler'
-import type { LiveVoiceContext, LiveVoiceHandlerConfig } from '../../voice/live-types'
+import type {
+  LiveCallUsage,
+  LiveVoiceContext,
+  LiveVoiceExitContext,
+  LiveVoiceHandlerConfig,
+} from '../../voice/live-types'
 import type { CaseWriter } from './case-writer'
 import type { RecordingHandle } from './recorder'
 import type {
   LiveVoiceEvalCase,
+  LiveVoiceEvalUsage,
   VoiceEvalOptions,
   VoiceRoomConfig,
   VoiceRunResult,
@@ -17,12 +25,14 @@ import type {
 } from './types'
 
 import { buildContextAsync } from '../../context/build'
-import { computeUsageSummary } from '../../core/runner'
-import { isRealtimeConfig } from '../../providers/models'
+import { computeUsageSummary, summarizeModelUsage } from '../../core/runner'
+import { getModelName, isRealtimeConfig } from '../../providers/models'
+import { sumCosts, usageCost } from '../../providers/pricing'
 import { BaseSession } from '../../session'
 import { isSystemEvent } from '../../types/events'
 import { createLiveVoiceHandler } from '../../voice/live-handler'
 import { transcriptMessages } from '../../voice/live-history'
+import { isRealtimeMetrics, realtimeTokenUsage } from '../../voice/live-usage'
 import { createLiveKitAgent } from '../../voice/livekit-agent'
 import { createLiveKitModel } from '../../voice/livekit-model'
 import { interceptTools } from '../interceptTools'
@@ -91,6 +101,36 @@ function waitForCaller(room: Room, events: LiveKitSdk['rtc']['RoomEvent']): Prom
   })
 }
 
+/**
+ * Combines the handler's call usage with the simulated caller's usage. Backend events copied into
+ * the eval session are the fallback when the handler did not finalize.
+ */
+export function summarizeLiveEvalUsage(input: {
+  backend: UsageSummary | undefined
+  call: LiveCallUsage | undefined
+  voiceModel: string
+  callerCalls: readonly (ModelUsage | undefined)[]
+}): LiveVoiceEvalUsage {
+  const backend = input.call?.backend ?? {
+    ...(input.backend && { usage: input.backend }),
+    cost: usageCost(input.backend),
+  }
+  const voice = input.call?.voice ?? {
+    modelName: input.voiceModel,
+    cost: { basis: 'unavailable' as const },
+  }
+  const callerUsage = summarizeModelUsage(input.callerCalls)
+  const caller = callerUsage
+    ? { usage: callerUsage, cost: usageCost(callerUsage) }
+    : { cost: { basis: 'unavailable' as const } }
+  return {
+    backend,
+    voice,
+    caller,
+    total: sumCosts([backend.cost, voice.cost, caller.cost]),
+  }
+}
+
 /** Final status of the run, the evidence it gathered and the resources it must release. */
 class LiveVoiceCaseRun<S extends StateSchema> {
   readonly startedAtMs = Date.now()
@@ -108,6 +148,9 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     this.complete = resolve
   })
   private context: LiveVoiceContext<S> | undefined
+  private callUsage: LiveCallUsage | undefined
+  /** Usage of each caller response; `undefined` marks a response without reported tokens. */
+  private readonly callerCalls: Array<ModelUsage | undefined> = []
   private session: Session<S>
   private recorder: RecordingHandle | undefined
   private recordingPath = ''
@@ -182,6 +225,11 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     })
     this.userRoom.on(rtc.RoomEvent.Disconnected, () => {
       if (!this.stopping) this.finish('participant_left')
+    })
+    const callerModel = getModelName(this.userModel)
+    this.caller.on(lk.voice.AgentSessionEventTypes.MetricsCollected, (event) => {
+      if (isRealtimeMetrics(event.metrics))
+        this.callerCalls.push(realtimeTokenUsage(event.metrics, callerModel))
     })
     this.caller.on(lk.voice.AgentSessionEventTypes.Close, (event) => {
       if (!this.stopping) this.finish('disconnected', event.error)
@@ -296,9 +344,10 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     }
   }
 
-  private onHandlerExit(ctx: LiveVoiceContext<S>): void {
+  private onHandlerExit(ctx: LiveVoiceExitContext<S>): void {
     this.context = ctx
     this.session = ctx.session
+    this.callUsage = ctx.usage
     const ending = ctx.session.events.findLast(
       (event) => event.type === 'annotation' && event.label === 'live-call-ended',
     )
@@ -400,6 +449,7 @@ class LiveVoiceCaseRun<S extends StateSchema> {
       endMs: fragment.endMs ?? undefined,
       turnIndex,
     }))
+    const usage = computeUsageSummary(this.session.events)
     for (const message of transcript)
       this.writer?.appendLine(
         `${((message.startMs ?? 0) / 1000).toFixed(2)}s **${message.role}**: ${message.text}`,
@@ -414,8 +464,14 @@ class LiveVoiceCaseRun<S extends StateSchema> {
       liveTranscript,
       timing: (this.recorder?.tracker ?? this.tracker).finalize(),
       recording: { path: this.recordingPath },
-      usage: computeUsageSummary(this.session.events),
+      usage,
       usageScope: 'backend',
+      liveUsage: summarizeLiveEvalUsage({
+        backend: usage,
+        call: this.callUsage,
+        voiceModel: getModelName(this.evalCase.agent.model),
+        callerCalls: this.callerCalls,
+      }),
       error: this.error,
       durationMs: Date.now() - this.startedAtMs,
     }

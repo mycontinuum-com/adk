@@ -1,10 +1,14 @@
 import type { Event } from '../../types/events'
 import type { Agent } from '../../types/runnables'
-import type { UsageSummary } from '../../types/runtime'
+import type { CostAccount, UsageSummary } from '../../types/runtime'
 import type { StateSchema } from '../../types/schema'
 import type { Session } from '../../types/session'
 import type { GPTLiveTranscriptSnapshot } from '../../voice/gpt-live-transcript'
-import type { LiveVoiceHandlerConfig } from '../../voice/live-types'
+import type {
+  LiveVoiceHandlerConfig,
+  LiveVoiceSessionUsage,
+  UsageCost,
+} from '../../voice/live-types'
 import type { VoiceEvent, VoiceHook } from '../../voice/types'
 import type { Metric } from '../metrics/types'
 import type { BaseEvalCaseResult, BaseEvalResult, ToolMocks, StateChanges } from '../types'
@@ -137,6 +141,15 @@ export type VoiceRunStatus =
   | 'disconnected'
   | 'participant_left'
 
+/** Live eval usage: the handler's backend and voice usage plus the simulated caller's tokens. */
+export interface LiveVoiceEvalUsage {
+  readonly backend: UsageCost
+  readonly voice: LiveVoiceSessionUsage
+  readonly caller: UsageCost
+  /** Backend, voice and caller. Unavailable when any component is unavailable. */
+  readonly total: CostAccount
+}
+
 export interface VoiceRunResult<S extends StateSchema = StateSchema> {
   status: VoiceRunStatus
   startedAtMs: number
@@ -148,8 +161,10 @@ export interface VoiceRunResult<S extends StateSchema = StateSchema> {
   timing: VoiceTiming
   recording: { path: string }
   usage?: UsageSummary
-  /** Live currently reports backend model usage only, excluding voice audio usage. */
+  /** Live `usage` covers backend models only; `liveUsage` adds voice and caller cost. */
   usageScope?: 'backend'
+  /** Live only: backend, GPT Live voice and simulated caller cost, each with its basis. */
+  liveUsage?: LiveVoiceEvalUsage
   error?: { message: string; stack?: string }
   durationMs: number
 }

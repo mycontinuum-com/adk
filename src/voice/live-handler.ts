@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto'
 
 import type { AdkApp } from '../api/app'
+import type { ModelUsage } from '../types/events'
 import type { StateSchema } from '../types/schema'
 import type { Session, SessionService, SessionStore } from '../types/session'
 import type { GPTLiveTranscript, GPTLiveTranscriptSnapshot } from './gpt-live-transcript'
 import type {
+  LiveCallUsage,
   LiveVoiceContext,
   LiveVoiceControls,
   LiveVoiceDelegation,
+  LiveVoiceExitContext,
   LiveVoiceHandlerConfig,
   LiveVoiceHook,
 } from './live-types'
@@ -15,12 +18,15 @@ import type { VoiceDeps } from './livekit-types'
 import type { VoiceHandlerHandle } from './types'
 
 import { buildLiveContextAsync } from '../context/build'
+import { summarizeModelUsage } from '../core/runner'
 import { resolveOpenAIConnection } from '../providers/openai-endpoints'
+import { sumCosts, usageCost } from '../providers/pricing'
 import { seedState } from '../session/seedState'
 import { applySchemaDefaults } from '../types/schema'
 import { openGPTLiveTranscript } from './gpt-live-transcript'
 import { liveHistory, completedBackendWork } from './live-history'
 import { seedLiveState, applyLiveState } from './live-state'
+import { backendModelCalls, LiveVoiceMeter } from './live-usage'
 import { defaultVoiceDeps } from './livekit-types'
 import { terminateLiveKitCall } from './termination'
 
@@ -39,6 +45,7 @@ interface LiveDeps {
   agents(): typeof import('@livekit/agents')
   openai(): typeof import('@livekit/agents-plugin-openai')
   livekitServer: VoiceDeps['livekitServer']
+  clock?: () => number
 }
 
 type LiveKitAgents = ReturnType<LiveDeps['agents']>
@@ -63,6 +70,24 @@ const defaultDeps: LiveDeps = {
   agents: () => require('@livekit/agents'),
   openai: () => require('@livekit/agents-plugin-openai'),
   livekitServer: defaultVoiceDeps.livekitServer,
+}
+
+function exitContext<S extends StateSchema>(
+  context: LiveVoiceContext<S>,
+  usage: LiveCallUsage,
+): LiveVoiceExitContext<S> {
+  return {
+    callId: context.callId,
+    voice: context.voice,
+    transcript: context.transcript,
+    get session() {
+      return context.session
+    },
+    get state() {
+      return context.state
+    },
+    usage,
+  }
 }
 
 class LivePersistenceError extends Error {
@@ -192,6 +217,9 @@ class LiveCall<S extends StateSchema, T> {
   private closing: Promise<void> | undefined
   private readonly seen = new Set<string>()
   private callSession: Session<S> | undefined
+  private readonly meter: LiveVoiceMeter
+  /** Usage of every backend model call; `undefined` marks a call without reported usage. */
+  private readonly backendCalls: Array<ModelUsage | undefined> = []
 
   constructor(
     private readonly runtime: LiveRuntime<S, T>,
@@ -206,6 +234,10 @@ class LiveCall<S extends StateSchema, T> {
         delegation: 'client',
       }),
     })
+    this.meter = new LiveVoiceMeter(model, runtime.deps.clock)
+    this.voiceSession.on(runtime.agents.voice.AgentSessionEventTypes.MetricsCollected, (event) =>
+      this.meter.observeMetrics(event.metrics),
+    )
   }
 
   get session(): Session<S> {
@@ -246,6 +278,10 @@ class LiveCall<S extends StateSchema, T> {
         throw new Error('Expected GPT Live session')
       const live = duplexSession
       recorder.attach(live)
+      if (live.sessionId) this.meter.observeConnection(live.sessionId)
+      live.on('openai_server_event_received', (event) =>
+        this.meter.observeServerEvent(event, live.sessionId),
+      )
       const entered = liveContext(this, recorder, this.controls(live))
       this.context = entered
       this.queue = this.queue.then(async () => {
@@ -301,6 +337,7 @@ class LiveCall<S extends StateSchema, T> {
       recorder,
       liveInstructions(rendered),
     )
+    this.meter.start()
     await this.voiceSession.start({
       agent,
       room: this.job.room,
@@ -393,6 +430,9 @@ class LiveCall<S extends StateSchema, T> {
       run.abort()
       await run.settled
       this.activeRun = undefined
+      // Usage is final once close() abandons this work; it was recorded as unknown then.
+      if (!this.abandoned)
+        this.backendCalls.push(...backendModelCalls(session.events.slice(workStart)))
       await this.commit(session)
       // A call finalized without this work keeps its ledger closed.
       if (!this.abandoned) {
@@ -542,6 +582,8 @@ class LiveCall<S extends StateSchema, T> {
     let backendSettled = await settlesWithin(this.queue, this.runtime.timeout)
     if (!backendSettled) {
       this.abandoned = true
+      // The unsettled run's model calls are unknown, so backend cost cannot be complete.
+      this.backendCalls.push(undefined)
       // Settled work already being recorded may finish first, within a second bound.
       const transfer = this.transfer
       if (transfer)
@@ -578,6 +620,7 @@ class LiveCall<S extends StateSchema, T> {
     try {
       await this.voiceSession.close()
     } finally {
+      this.meter.stop()
       try {
         await this.transcript?.close()
       } finally {
@@ -605,10 +648,18 @@ class LiveCall<S extends StateSchema, T> {
     const context = this.context
     if (!context) return
     try {
-      for (const hook of this.runtime.hooks) await hook.onExit?.(context)
+      const exit = exitContext(context, this.usage())
+      for (const hook of this.runtime.hooks) await hook.onExit?.(exit)
     } finally {
       await this.commit(context.session)
     }
+  }
+
+  private usage(): LiveCallUsage {
+    const usage = summarizeModelUsage(this.backendCalls)
+    const backend = { ...(usage && { usage }), cost: usageCost(usage) }
+    const voice = this.meter.usage()
+    return { backend, voice, total: sumCosts([backend.cost, voice.cost]) }
   }
 
   private async reportError(

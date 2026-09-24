@@ -143,6 +143,8 @@ export type {
   StreamResult,
   RunConfig,
   CostEstimate,
+  CostBasis,
+  CostAccount,
   UsageSummary,
   RunResultBase,
   Output,
