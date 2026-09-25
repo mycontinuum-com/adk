@@ -217,7 +217,9 @@ Metric factories from `@animahealth/adk/eval`:
 
 Timing measures include total duration, time to first assistant, time to first tool call, model latency total/average, and tool execution total/average.
 
-Custom metrics implement `{ name, evaluate(run) }` and return `{ passed, score?, evidence? }`.
+`app.evaluate.judge({ name, criteria })` is an LLM-judge metric for speech that has no structural signal. See `docs/judge-metric.md` in the ADK package for when to use it instead of a state or event metric.
+
+Custom metrics implement `{ name, evaluate(run) }` and return `{ passed, score?, evidence? }`. A metric that throws makes its case `error`, not `failed`. So return `passed: false` for a product failure, including a missing state value, and throw only when no verdict is possible.
 
 ## Reports
 

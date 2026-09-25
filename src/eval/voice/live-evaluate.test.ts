@@ -5,7 +5,6 @@ import { vi } from 'vitest'
 import { z } from 'zod'
 
 import type { LiveVoiceAppContext } from '../../voice/live-handler'
-import type { BaseEvalCaseResult } from '../types'
 import type { LiveVoiceEvalCase, VoiceRunResult, VoiceRunStatus } from './types'
 
 import { adk } from '../../api'
@@ -64,7 +63,7 @@ function fixture() {
     store,
     sessionService: sessionService(store),
   }
-  return { app, live, context, userAgent }
+  return { app, live, context }
 }
 
 const options = { concurrency: 1, room: { url: 'ws://synthetic.invalid' }, schema }
@@ -122,7 +121,6 @@ function costedRun(run: VoiceRunResult<typeof schema>): VoiceRunResult<typeof sc
   return {
     ...run,
     usage: backend,
-    usageScope: 'backend',
     liveUsage: summarizeLiveEvalUsage({
       pricing: TEST_PRICING,
       backend: undefined,
@@ -207,25 +205,16 @@ describe('native Live voice eval suite', () => {
     const { app, live, context } = fixture()
     boundary.run.mockImplementation(async () => costedRun(await completedCall(app, 'mixed-cost')))
     const voice = await evaluateVoice(live, options, context)
-    const text: BaseEvalCaseResult = { name: 'text', status: 'timeout', metrics: {}, durationMs: 1 }
-    const report = generateReport({ ...voice, results: [...voice.results, text] })
+    const [liveCase] = voice.results
+    const realtime = {
+      ...liveCase,
+      name: 'realtime',
+      status: 'timeout' as const,
+      run: { ...liveCase.run, liveUsage: undefined },
+    }
+    const report = generateReport({ ...voice, results: [liveCase, realtime] })
     expect(report).toContain(
       '**Cost:** unavailable ($0.8650 known across 1 of 2 cases) — backend $0.1500 (reported), voice $0.0750 (estimated), caller $0.6400 (reported), other cases unavailable',
-    )
-  })
-
-  it('rejects malformed Live usage from a voice worker', async () => {
-    const { app, live, context } = fixture()
-    const run = costedRun(await completedCall(app, 'malformed'))
-    const serialized = JSON.parse(
-      serializeWorkerResult({ name: live.name, status: 'passed', metrics: {}, durationMs: 1, run }),
-    )
-    serialized.run.liveUsage.total = { basis: 'unavailable', totalCost: 42 }
-    boundary.fork.mockResolvedValue(JSON.stringify(serialized))
-    const result = await evaluateVoice(live, { ...options, concurrency: 2 }, context)
-    expect(result.results[0].status).toBe('error')
-    expect(result.results[0].error?.message).toBe(
-      'Voice worker returned an invalid evaluation result',
     )
   })
 
@@ -252,6 +241,29 @@ describe('native Live voice eval suite', () => {
     expect(app.evaluate.voice.report()(result)).toContain(
       '**Cost:** unavailable ($0.000000 known across 0 of 1 cases) — backend $0.000000 (reported), voice unavailable, caller unavailable',
     )
+  })
+
+  it('gives the runner LiveKit credentials from options, else from the environment', async () => {
+    const { app, live, context } = fixture()
+    vi.stubEnv('LIVEKIT_URL', 'wss://env.invalid')
+    vi.stubEnv('LIVEKIT_API_KEY', 'env-key')
+    vi.stubEnv('LIVEKIT_API_SECRET', 'env-secret')
+    try {
+      let count = 0
+      boundary.run.mockImplementation(async () => completedCall(app, `credentials-${++count}`))
+      await evaluateVoice(live, { concurrency: 1, schema }, context)
+      await evaluateVoice(
+        live,
+        { concurrency: 1, schema, room: { url: 'wss://option.invalid', apiKey: 'option-key' } },
+        context,
+      )
+      expect(boundary.run.mock.calls.map(([, runOptions]) => runOptions.room)).toEqual([
+        { url: 'wss://env.invalid', apiKey: 'env-key', apiSecret: 'env-secret' },
+        { url: 'wss://option.invalid', apiKey: 'option-key', apiSecret: 'env-secret' },
+      ])
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('binds the owning app through app.evaluate.voice', async () => {
@@ -394,21 +406,6 @@ describe('native Live voice eval suite', () => {
     expect(result.results[0].run.session.id).toBe('session_retry-second')
   })
 
-  it('keeps the existing Realtime case form working in the same suite', async () => {
-    const { app, live, userAgent, context } = fixture()
-    let count = 0
-    boundary.run.mockImplementation(() => completedCall(app, `mixed-${++count}`))
-    const result = await evaluateVoice(
-      [live, { name: 'realtime', agent: userAgent, userAgent }],
-      options,
-      context,
-    )
-    expect(result.results.map(({ name, status }) => ({ name, status }))).toEqual([
-      { name: 'practice-information', status: 'passed' },
-      { name: 'realtime', status: 'passed' },
-    ])
-  })
-
   it('preserves call identity, state, ledger order and observed-event order across the process boundary', async () => {
     const { app, live, context } = fixture()
     const run = costedRun(await completedCall(app, 'durable-call-42'))
@@ -417,16 +414,11 @@ describe('native Live voice eval suite', () => {
       receivedThrough: 0,
       observations: [],
       fragments: [],
-      status: 'usable',
-      duplicates: 0,
-      conflicts: [],
-      diagnostics: [],
     }
     const evidence = JSON.parse(stringifyEvidence(voiceEvidence(run)))
     expect(evidence.sessionId).toBe(run.session.id)
     expect(evidence.sessionEvents).toEqual(run.session.events)
     expect(evidence.liveTranscript).toEqual(run.liveTranscript)
-    expect(evidence.usageScope).toBe('backend')
     expect(evidence.liveUsage).toEqual(run.liveUsage)
     const originalIds = run.events.map((event) => event.id)
     const observedEvents = run.events.toReversed()
@@ -447,7 +439,6 @@ describe('native Live voice eval suite', () => {
     expect(result.results[0].run.events.map((event) => event.id)).toEqual(originalIds.toReversed())
     expect(result.results[0].run.recording.path).toBe('/synthetic/recording.wav')
     expect(result.results[0].run.liveTranscript).toEqual(run.liveTranscript)
-    expect(result.results[0].run.usageScope).toBe('backend')
     expect(result.results[0].run.liveUsage).toEqual(run.liveUsage)
   })
 })

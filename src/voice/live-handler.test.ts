@@ -10,6 +10,7 @@ import type {
   LiveVoiceResultContext,
   LiveVoiceControls,
   LiveVoiceContext,
+  LiveVoiceHook,
 } from './live-types'
 
 import { adk } from '../api'
@@ -20,7 +21,6 @@ import { InMemoryStore } from '../session/memory'
 import { sessionService } from '../session/service'
 import { useTestPricing } from '../test-support/pricing-registry'
 import { UsageReportingAdapter } from '../test-support/usage-adapter'
-import { openGPTLiveTranscript } from './gpt-live-transcript'
 import { createLiveVoiceHandler } from './live-handler'
 
 const cleanup: Array<() => Promise<unknown> | void> = []
@@ -40,11 +40,30 @@ function isBackendWork(event: Event): boolean {
 class LiveSession extends EventEmitter {
   sessionId: string | undefined = 'connection-one'
   sent: Array<{ kind: string; text: string; delegationId?: string }> = []
+  input: string[] = []
+  /** The agent session that plays what GPT Live says; unset leaves every line unsaid. */
+  voice?: EventEmitter
+  muteInput() {
+    this.input.push('mute')
+  }
+  unmuteInput() {
+    this.input.push('unmute')
+  }
   appendThinking(text: string, options: { delegationId?: string }) {
     this.sent.push({ kind: 'thinking', text, ...options })
   }
   appendCommentary(text: string, options: { delegationId?: string }) {
     this.sent.push({ kind: 'commentary', text, ...options })
+    const voice = this.voice
+    if (voice) setTimeout(() => this.speak(voice), 1)
+  }
+  /** GPT Live taking one speaking turn. */
+  speak(voice: EventEmitter) {
+    voice.emit('agent_state_changed', { oldState: 'listening', newState: 'speaking' })
+    setTimeout(
+      () => voice.emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' }),
+      5,
+    )
   }
   appendInstructions(text: string, options: { delegationId?: string }) {
     this.sent.push({ kind: 'instructions', text, ...options })
@@ -95,6 +114,11 @@ async function fixture(
     backendUsage?: boolean
     resultGate?: ReturnType<typeof gate>
     clock?: () => number
+    playoutTimeoutMs?: number
+    /** GPT Live says the commentary lines it is given; otherwise a test says them. */
+    speakingAgent?: boolean
+    timeouts?: { inactivity?: number; expiry?: number }
+    lifecycle?: Pick<LiveVoiceHook, 'onInactivity' | 'onExpiry'>
   } = {},
 ) {
   const store = new InMemoryStore()
@@ -186,6 +210,7 @@ async function fixture(
     async start({ agent }: { agent: VoiceAgent }) {
       startCalls()
       this.agent = agent
+      if (options.speakingAgent) agent.duplexSession.voice = this
       const entered = agent.onEnter()
       if (options.detachedEnter) void entered.catch((error) => entryErrors.push(error))
       else await entered
@@ -206,6 +231,7 @@ async function fixture(
   const exited = vi.fn<(ctx: LiveVoiceExitContext) => void>()
   const entered: LiveVoiceContext[] = []
   const deleteRoom = vi.fn<(room: string) => Promise<void>>(async () => {})
+  const logError = vi.fn<(data: unknown, message: string) => void>()
   const setup = vi.fn<() => Promise<{ sessionId: string; state: { answer: string } }>>(
     async () => ({ sessionId: options.setupId!, state: { answer: 'seeded' } }),
   )
@@ -216,11 +242,19 @@ async function fixture(
       voice: {
         Agent: VoiceAgent,
         AgentSession: VoiceSession,
-        AgentSessionEventTypes: { Close: 'close', MetricsCollected: 'metrics_collected' },
+        AgentSessionEventTypes: {
+          Close: 'close',
+          MetricsCollected: 'metrics_collected',
+          UserStateChanged: 'user_state_changed',
+          AgentStateChanged: 'agent_state_changed',
+          SpeechCreated: 'speech_created',
+        },
       },
-      log: () => ({ error: vi.fn<(data: unknown, message: string) => void>() }),
+      log: () => ({ error: logError }),
     }),
     clock: options.clock,
+    lineSettleMs: 10,
+    commentaryStartMs: 100,
     openai: () => ({ realtime: { GPTLiveModel: class {}, GPTLiveSession: LiveSession } }),
     livekitServer: () => ({
       RoomServiceClient: class {
@@ -246,6 +280,8 @@ async function fixture(
       }),
       backend,
       backendTimeoutMs: options.backendTimeoutMs,
+      playoutTimeoutMs: options.playoutTimeoutMs ?? 50,
+      timeouts: options.timeouts,
       setup: options.setupId ? setup : undefined,
       callTermination: {
         strategy: 'deleteRoom',
@@ -284,6 +320,7 @@ async function fixture(
           onError: options.omitError ? undefined : error,
           onExit: exited,
         },
+        ...(options.lifecycle ? [options.lifecycle] : []),
       ],
     },
     { app, store, sessionService: sessionService(store) },
@@ -322,6 +359,7 @@ async function fixture(
   }
   return {
     handler,
+    logError,
     app,
     store,
     closeStore,
@@ -440,16 +478,6 @@ describe('Live voice handler', () => {
         .map((event) => event.type),
     ).toEqual(['user', 'assistant', 'user'])
     expect(conversationEvents(f.renderedHistory[0]!)).toEqual(expectedHistory)
-    const metadata = saved!.events.find(
-      (event) => event.type === 'annotation' && event.label === 'live-delegation',
-    )
-    expect(metadata).toMatchObject({
-      data: {
-        callId: f.entered[0]!.callId,
-        delegation: { id: 'first-id', connectionId: 'connection-one' },
-        transcriptThrough: expect.any(Number),
-      },
-    })
     const serialized = JSON.stringify(serializeContext(f.adapter.stepCalls[0]!.ctx))
     expect(serialized).toContain('Receipt order is not turn order')
     expect(serialized).toContain('0–1000 ms] Original question')
@@ -513,12 +541,6 @@ describe('Live voice handler', () => {
     expect(serialized).toContain('Work may postdate the frozen voice snapshot')
     expect(serialized).toContain('function_call_output')
     expect(serialized).not.toContain('After second snapshot')
-    const work = f.entered[0]!.session.events.find(
-      (event) => event.type === 'annotation' && event.label === 'live-backend-work',
-    )
-    expect(work?.type === 'annotation' && work.data?.receiptThroughAtCompletion).toBeGreaterThan(
-      f.result.mock.calls[1]![0].delegation.nativeThrough,
-    )
     call.live.dispatch('third-id', 'Third question')
     await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(3))
     const thirdInput = serializeContext(f.adapter.stepCalls[2]!.ctx)
@@ -608,7 +630,6 @@ describe('Live voice handler', () => {
       2000,
       5000,
     )
-    call.live.fragment('user', 'Yes', 'yes', 2500, 2800)
     call.live.fragment('user', 'Yes', 'yes', 2500, 2800)
     call.live.emit('openai_server_event_received', {
       type: 'session.started',
@@ -837,6 +858,292 @@ test('explicit end is idempotent while natural session close drains without dele
   expect(natural.deleteRoom).not.toHaveBeenCalled()
 })
 
+/** The commentary lines GPT Live has been given with `text`. */
+function given(live: LiveSession, text: string) {
+  return live.sent.filter((entry) => entry.kind === 'commentary' && entry.text === text)
+}
+
+const speaking = (session: EventEmitter) =>
+  session.emit('agent_state_changed', { oldState: 'listening', newState: 'speaking' })
+const listening = (session: EventEmitter) =>
+  session.emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+test('an uninterrupted line mutes the caller at once and is given once GPT Live is quiet', async () => {
+  const f = await fixture({ playoutTimeoutMs: 1_000 })
+  const call = await f.call()
+  speaking(call.session)
+  f.entered[0]!.voice.appendCommentary('Explain the time limit.', { allowInterruptions: false })
+  expect(call.live.input).toEqual(['mute'])
+  await sleep(50)
+  expect(given(call.live, 'Explain the time limit.')).toEqual([])
+  listening(call.session)
+  await vi.waitFor(() => expect(given(call.live, 'Explain the time limit.')).toHaveLength(1))
+  await sleep(50)
+  expect(call.live.input).toEqual(['mute'])
+  call.live.speak(call.session)
+  await vi.waitFor(() => expect(call.live.input).toEqual(['mute', 'unmute']))
+  await call.shutdown()
+})
+
+test('an uninterrupted line waits for a delegation in flight', async () => {
+  const stuck = gate()
+  const f = await fixture({ gates: { first: stuck }, playoutTimeoutMs: 1_000 })
+  const call = await f.call()
+  call.live.speak(call.session) // the greeting
+  call.live.dispatch('first-id', 'Question')
+  await vi.waitFor(() => expect(f.started).toEqual(['first']))
+  f.entered[0]!.voice.appendCommentary('Explain the time limit.', { allowInterruptions: false })
+  await sleep(50)
+  expect(given(call.live, 'Explain the time limit.')).toEqual([])
+  stuck.release()
+  await vi.waitFor(() => expect(given(call.live, 'Explain the time limit.')).toHaveLength(1))
+  await call.shutdown()
+})
+
+test('an uninterrupted line waits for an earlier ordinary line to start its turn', async () => {
+  const f = await fixture({ playoutTimeoutMs: 1_000 })
+  const call = await f.call()
+  const voice = f.entered[0]!.voice
+  voice.appendCommentary('Your request has been sent.')
+  voice.appendCommentary('Say goodbye.', { allowInterruptions: false })
+  await sleep(50)
+  expect(given(call.live, 'Say goodbye.')).toEqual([])
+  call.live.speak(call.session)
+  await vi.waitFor(() => expect(given(call.live, 'Say goodbye.')).toHaveLength(1))
+  await sleep(50)
+  expect(call.live.input).toEqual(['mute'])
+  call.live.speak(call.session)
+  await vi.waitFor(() => expect(call.live.input).toEqual(['mute', 'unmute']))
+  await call.shutdown()
+})
+
+test('an earlier ordinary line GPT Live never speaks holds an uninterrupted line only briefly', async () => {
+  const f = await fixture({ playoutTimeoutMs: 5_000 })
+  const call = await f.call()
+  call.live.speak(call.session) // the greeting
+  const voice = f.entered[0]!.voice
+  voice.appendCommentary('Your request has been sent.')
+  const givenAt = Date.now()
+  voice.appendCommentary('Say goodbye.', { allowInterruptions: false })
+  await vi.waitFor(() => expect(given(call.live, 'Say goodbye.')).toHaveLength(1), {
+    timeout: 1_000,
+  })
+  expect(Date.now() - givenAt).toBeGreaterThanOrEqual(90)
+  expect(f.logError).not.toHaveBeenCalledWith(expect.anything(), 'Live line_given_while_busy')
+  await call.shutdown()
+})
+
+test('gives the line at the bound when GPT Live stays busy, and logs it', async () => {
+  const f = await fixture({ playoutTimeoutMs: 60 })
+  const call = await f.call()
+  speaking(call.session)
+  f.entered[0]!.voice.appendCommentary('Explain the time limit.', { allowInterruptions: false })
+  await vi.waitFor(() => expect(given(call.live, 'Explain the time limit.')).toHaveLength(1))
+  expect(f.logError).toHaveBeenCalledWith(
+    { callId: f.entered[0]!.callId },
+    'Live line_given_while_busy',
+  )
+  await call.shutdown()
+})
+
+test('uninterrupted lines are given one at a time, each after the one before is said', async () => {
+  const f = await fixture({ playoutTimeoutMs: 1_000 })
+  const call = await f.call()
+  call.live.speak(call.session) // the greeting
+  const voice = f.entered[0]!.voice
+  voice.appendCommentary('Explain the time limit.', { allowInterruptions: false })
+  voice.appendCommentary('Say goodbye.', { allowInterruptions: false })
+  expect(call.live.input).toEqual(['mute'])
+  await vi.waitFor(() => expect(given(call.live, 'Explain the time limit.')).toHaveLength(1))
+  await sleep(50)
+  expect(given(call.live, 'Say goodbye.')).toEqual([])
+  call.live.speak(call.session)
+  await vi.waitFor(() => expect(given(call.live, 'Say goodbye.')).toHaveLength(1))
+  await sleep(50)
+  expect(call.live.input).toEqual(['mute'])
+  call.live.speak(call.session)
+  await vi.waitFor(() => expect(call.live.input).toEqual(['mute', 'unmute']))
+  await call.shutdown()
+})
+
+test('end lets an uninterrupted goodbye be said before closing the call', async () => {
+  const f = await fixture({ playoutTimeoutMs: 1_000 })
+  const call = await f.call()
+  call.live.speak(call.session) // the greeting
+  const voice = f.entered[0]!.voice
+  voice.appendCommentary('Say goodbye.', { allowInterruptions: false })
+  voice.end()
+  await vi.waitFor(() => expect(given(call.live, 'Say goodbye.')).toHaveLength(1))
+  await sleep(50)
+  expect(f.deleteRoom).not.toHaveBeenCalled()
+  call.live.speak(call.session)
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1))
+  expect(f.logError).not.toHaveBeenCalledWith(expect.anything(), 'Live line_unconfirmed')
+})
+
+test('end closes at the playout bound when GPT Live never says the line, and logs it', async () => {
+  const f = await fixture({ playoutTimeoutMs: 100 })
+  await f.call()
+  const voice = f.entered[0]!.voice
+  voice.appendCommentary('Say goodbye.', { allowInterruptions: false })
+  const endedAt = Date.now()
+  voice.end()
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1))
+  expect(Date.now() - endedAt).toBeGreaterThanOrEqual(90)
+  expect(f.logError).toHaveBeenCalledWith({ callId: f.entered[0]!.callId }, 'Live line_unconfirmed')
+})
+
+test('an error ends the call without waiting for an uninterrupted line', async () => {
+  const f = await fixture({ playoutTimeoutMs: 1_000 })
+  const call = await f.call()
+  f.entered[0]!.voice.appendCommentary('Say goodbye.', { allowInterruptions: false })
+  call.session.emit('close', { reason: 'error', error: new Error('Transport failed') })
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 500 })
+})
+
+test('an ordinary line is given at once and leaves the caller heard', async () => {
+  const f = await fixture()
+  const call = await f.call()
+  speaking(call.session)
+  f.entered[0]!.voice.appendCommentary('How can I help?')
+  expect(given(call.live, 'How can I help?')).toHaveLength(1)
+  await sleep(50)
+  expect(call.live.input).toEqual([])
+  await call.shutdown()
+})
+
+test('counts caller speech turns', async () => {
+  const f = await fixture()
+  const call = await f.call()
+  const talk = () => {
+    call.session.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
+    call.session.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
+  }
+  talk()
+  talk()
+  expect(f.entered[0]!.voice.turnCount).toBe(2)
+  await call.shutdown()
+})
+
+async function endReason(f: Awaited<ReturnType<typeof fixture>>) {
+  const saved = await f.app.sessions.get(f.entered[0]!.callId)
+  return saved!.events.find(
+    (event) => event.type === 'annotation' && event.label === 'live-call-ended',
+  )
+}
+
+test('asks on each silence with a count caller speech resets, and ends when no hook keeps the call', async () => {
+  const counts: number[] = []
+  const f = await fixture({
+    timeouts: { inactivity: 40 },
+    lifecycle: {
+      onInactivity(ctx) {
+        counts.push(ctx.inactivityCount)
+        return ctx.inactivityCount < 2 ? false : undefined
+      },
+    },
+  })
+  const call = await f.call()
+  await vi.waitFor(() => expect(counts).toEqual([0]))
+  call.session.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
+  call.session.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1))
+  expect(counts).toEqual([0, 0, 1, 2])
+  expect(await endReason(f)).toMatchObject({ data: { reason: 'inactivity' } })
+  expect(f.exited).toHaveBeenCalledTimes(1)
+})
+
+test('skips a silence hook when the caller spoke while it waited to run', async () => {
+  const enterGate = gate()
+  const counts: number[] = []
+  const f = await fixture({
+    enterGate,
+    timeouts: { inactivity: 30 },
+    lifecycle: {
+      onInactivity(ctx) {
+        counts.push(ctx.inactivityCount)
+        return false
+      },
+    },
+  })
+  const pending = f.call()
+  await vi.waitFor(() => expect(f.entered).toHaveLength(1))
+  await new Promise((resolve) => setTimeout(resolve, 45))
+  f.sessions[0]!.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
+  enterGate.release()
+  const call = await pending
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(counts).toEqual([])
+  call.session.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
+  await vi.waitFor(() => expect(counts).toEqual([0]))
+  await call.shutdown()
+})
+
+test('does not count silence while the agent speaks or backend work runs', async () => {
+  const work = gate()
+  const counts: number[] = []
+  const f = await fixture({
+    gates: { first: work },
+    timeouts: { inactivity: 80 },
+    lifecycle: {
+      onInactivity(ctx) {
+        counts.push(ctx.inactivityCount)
+        return false
+      },
+    },
+  })
+  const call = await f.call()
+  call.live.dispatch('slow', 'Question')
+  await vi.waitFor(() => expect(f.started).toEqual(['first']))
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  expect(counts).toEqual([])
+  call.session.emit('agent_state_changed', { oldState: 'listening', newState: 'speaking' })
+  work.release()
+  await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  expect(counts).toEqual([])
+  call.session.emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+  await vi.waitFor(() => expect(counts).toEqual([0]))
+  await call.shutdown()
+})
+
+test('lets a muted expiry notice be said before ending the call', async () => {
+  const f = await fixture({
+    speakingAgent: true,
+    playoutTimeoutMs: 1_000,
+    timeouts: { expiry: 60 },
+    lifecycle: {
+      onExpiry(ctx) {
+        ctx.voice.appendCommentary('Explain the time limit.', { allowInterruptions: false })
+      },
+    },
+  })
+  const call = await f.call()
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1))
+  expect(call.live.sent.at(-1)).toEqual({ kind: 'commentary', text: 'Explain the time limit.' })
+  expect(call.live.input).toEqual(['mute', 'unmute'])
+  expect(await endReason(f)).toMatchObject({ data: { reason: 'expiry' } })
+})
+
+test('an expiry hook returning false keeps the call', async () => {
+  const expired = vi.fn<() => boolean>(() => false)
+  const f = await fixture({ timeouts: { expiry: 30 }, lifecycle: { onExpiry: expired } })
+  const call = await f.call()
+  await vi.waitFor(() => expect(expired).toHaveBeenCalledTimes(1))
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  expect(f.deleteRoom).not.toHaveBeenCalled()
+  expect(expired).toHaveBeenCalledTimes(1)
+  await call.shutdown()
+})
+
+test('ends the call at expiry when no hook handles it', async () => {
+  const f = await fixture({ timeouts: { expiry: 30 } })
+  await f.call()
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1))
+  expect(await endReason(f)).toMatchObject({ data: { reason: 'expiry' } })
+})
+
 test('ends and cleans up a detached onEnter failure without waiting for another delegation', async () => {
   const f = await fixture({ failEnter: true, detachedEnter: true })
   const call = await f.call()
@@ -941,9 +1248,18 @@ test('keeps speech after the last delegation in the transcript session, not the 
   call.live.fragment('assistant', 'Goodbye', 'final-goodbye', 5000, 5600)
   await call.shutdown()
   const callId = f.entered[0]!.callId
-  const transcript = await openGPTLiveTranscript({ store: f.store, callId })
-  expect(transcript.snapshot().fragments.map((fragment) => fragment.text)).toContain('Goodbye')
-  await transcript.close()
+  const transcript = await sessionService(f.store).getSession('adk-gpt-live-transcript', callId)
+  expect(transcript!.events).toContainEqual(
+    expect.objectContaining({
+      data: {
+        observation: expect.objectContaining({
+          payload: expect.objectContaining({
+            event: expect.objectContaining({ delta: 'Goodbye' }),
+          }),
+        }),
+      },
+    }),
+  )
   const saved = await f.app.sessions.get(callId)
   expect(
     saved!.events.filter((event) => event.type === 'user' || event.type === 'assistant'),
@@ -959,7 +1275,7 @@ test('rejects an entry context that is not a LiveKit job before opening a call',
   expect(await f.store.list('live-test')).toEqual([])
 })
 
-test('close waits for a backend transfer already in progress before finalizing the ledger', async () => {
+test('close waits up to the backend timeout for work being recorded and finalizes the ledger with it', async () => {
   const hold = gate()
   const f = await fixture({ backendTimeoutMs: 400 })
   const call = await f.call()
@@ -976,8 +1292,7 @@ test('close waits for a backend transfer already in progress before finalizing t
   call.live.dispatch('transfer-id', 'Question')
   await vi.waitFor(() => expect(transferring).toBe(true))
   f.entered[0]!.voice.end()
-  // Past the first bound (400 ms) and inside the transfer's second bound (800 ms).
-  await new Promise((resolve) => setTimeout(resolve, 600))
+  await new Promise((resolve) => setTimeout(resolve, 200))
   expect(f.deleteRoom).not.toHaveBeenCalled()
   hold.release()
   await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1))
@@ -991,7 +1306,7 @@ test('close waits for a backend transfer already in progress before finalizing t
   expect(f.exited).toHaveBeenCalledTimes(1)
 })
 
-test('a stalled backend transfer cannot hold call termination past its second bound', async () => {
+test('a stalled backend transfer cannot hold call termination past the backend timeout', async () => {
   const stalled = gate()
   const f = await fixture({ backendTimeoutMs: 50 })
   const call = await f.call()
@@ -1021,7 +1336,7 @@ test('a stalled backend transfer cannot hold call termination past its second bo
   expect(f.error).not.toHaveBeenCalled()
 })
 
-test('a backend transfer released after its second bound does not write the finalized call', async () => {
+test('a backend transfer released after the backend timeout does not write the finalized call', async () => {
   const stalled = gate()
   const f = await fixture({ backendTimeoutMs: 50, toolState: true })
   const call = await f.call()
@@ -1070,6 +1385,36 @@ test('a result hook that resumes while close records the call does not reach the
   const saved = await f.app.sessions.get(callId)
   expect(saved!.state.answer).toBe('')
   expect(f.exited.mock.calls[0]![0].state.answer).toBe('')
+  expect(saved!.events.filter(isBackendWork)).toHaveLength(1)
+  expect(saved!.events.at(-1)).toMatchObject({ type: 'annotation', label: 'live-call-ended' })
+})
+
+test('an expiry hook that resumes while close records the call does not reach the ledger', async () => {
+  const stuck = gate()
+  const f = await fixture({
+    backendTimeoutMs: 50,
+    timeouts: { expiry: 20 },
+    lifecycle: {
+      async onExpiry(ctx) {
+        await stuck.promise
+        ctx.state.answer = 'late'
+      },
+    },
+  })
+  const call = await f.call()
+  const callId = f.entered[0]!.callId
+  const close = call.session.close.bind(call.session)
+  call.session.close = async () => {
+    stuck.release()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await close()
+  }
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  f.entered[0]!.voice.end()
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 500 })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  const saved = await f.app.sessions.get(callId)
+  expect(saved!.state.answer).toBe('')
   expect(saved!.events.at(-1)).toMatchObject({ type: 'annotation', label: 'live-call-ended' })
 })
 
@@ -1096,31 +1441,95 @@ test('close still records the end and runs onExit when it cannot reload the call
   stuck.release()
 })
 
-test('close lets a backend transfer commit already in flight land before it reloads the call', async () => {
-  const hold = gate()
-  const f = await fixture({ backendTimeoutMs: 100 })
-  const call = await f.call()
-  const callId = f.entered[0]!.callId
+/**
+ * Commits a competing write to the call just before close commits its records: before each first
+ * attempt, or before every attempt including the retry.
+ */
+function raceCloseCommits(
+  f: Awaited<ReturnType<typeof fixture>>,
+  callId: string,
+  attempts: 'first' | 'every',
+  answer?: string,
+) {
   const commit = f.app.sessions.commit.bind(f.app.sessions)
-  let holding = false
-  vi.spyOn(f.app.sessions, 'commit').mockImplementation(async (session) => {
-    if (session.id === callId && !holding && session.events.some(isBackendWork)) {
-      holding = true
-      await hold.promise
+  const load = f.app.sessions.get.bind(f.app.sessions)
+  let raced = 0
+  vi.spyOn(f.app.sessions, 'commit').mockImplementation(async (session, expectedVersion) => {
+    const closing = session.events.some(
+      (event) => event.type === 'annotation' && event.label === 'live-call-ended',
+    )
+    if (
+      session.id === callId &&
+      closing &&
+      (attempts === 'every' || expectedVersion === undefined)
+    ) {
+      raced++
+      const other = (await load(callId))!
+      await sessionService(f.store).appendEvent(other, {
+        id: `late-write-${raced}`,
+        type: 'annotation',
+        kind: 'mark',
+        label: 'late-write',
+        createdAt: Date.now(),
+        invocationId: '',
+        agentName: 'backend',
+      })
+      if (answer !== undefined) other.state.update({ answer: `${answer}-${raced}` })
+      expect((await commit(other)).ok).toBe(true)
     }
-    return commit(session)
+    return commit(session, expectedVersion)
   })
-  call.live.dispatch('slow-commit-id', 'Question')
-  await vi.waitFor(() => expect(holding).toBe(true))
+}
+
+test('close commits its end mark and onExit state again after a write lands during close', async () => {
+  const f = await fixture()
+  f.exited.mockImplementation((ctx) => ctx.state.update({ answer: 'exit' }))
+  await f.call()
+  const callId = f.entered[0]!.callId
+  raceCloseCommits(f, callId, 'first', 'backend')
   f.entered[0]!.voice.end()
-  // Both close bounds (100 ms each) expire first; the commit lands within the wait that follows.
-  setTimeout(hold.release, 250)
-  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 1000 })
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 500 })
   const saved = await f.app.sessions.get(callId)
-  expect(
-    saved!.events.filter((event) => event.type === 'annotation').map((event) => event.label),
-  ).toEqual(['live-backend-work', 'live-call-ended'])
+  const labels = saved!.events.flatMap((event) =>
+    event.type === 'annotation' ? [event.label] : [],
+  )
+  expect(labels.filter((label) => label === 'late-write' || label === 'live-call-ended')).toEqual([
+    'late-write',
+    'live-call-ended',
+    'late-write',
+  ])
+  expect(saved!.state.answer).toBe('exit')
   expect(f.exited).toHaveBeenCalledTimes(1)
+  const logged = f.logError.mock.calls.map(([, message]) => message)
+  expect(logged).not.toContain('Live call close records conflicted twice')
+  expect(logged).not.toContain('Live call cleanup failed')
+})
+
+test('a close retry keeps a late write to state that close did not change', async () => {
+  const f = await fixture()
+  await f.call()
+  const callId = f.entered[0]!.callId
+  const created = await f.app.sessions.get(callId)
+  raceCloseCommits(f, callId, 'first', 'backend')
+  f.entered[0]!.voice.end()
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 500 })
+  const saved = await f.app.sessions.get(callId)
+  expect(saved!.state.answer).toBe('backend-2')
+  expect(saved!.scopes).toEqual(created!.scopes)
+  expect(saved!.events).toContainEqual(
+    expect.objectContaining({ type: 'annotation', label: 'live-call-ended' }),
+  )
+})
+
+test('close logs a second conflict and still ends the call', async () => {
+  const f = await fixture()
+  await f.call()
+  const callId = f.entered[0]!.callId
+  raceCloseCommits(f, callId, 'every')
+  f.entered[0]!.voice.end()
+  await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1), { timeout: 500 })
+  expect(f.exited).toHaveBeenCalledTimes(1)
+  expect(f.logError).toHaveBeenCalledWith({ callId }, 'Live call close records conflicted twice')
 })
 
 test('a result hook that resumes after close does not write the finalized call', async () => {

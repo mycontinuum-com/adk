@@ -68,6 +68,8 @@ test('records existing and newly subscribed remote tracks once without owning th
     identity: 'user',
     trackPublications: new Map([['user-track', userPub]]),
   })
+  let clock = 0
+  const now = vi.spyOn(Date, 'now').mockImplementation(() => clock)
   try {
     const recorder = recordRooms(
       {
@@ -80,6 +82,7 @@ test('records existing and newly subscribed remote tracks once without owning th
       { AudioStream } as unknown as NonNullable<Parameters<typeof recordRooms>[1]>,
     )
     agentRoom.emit('trackSubscribed', userTrack, userPub, { identity: 'user' })
+    clock = 1_000
     callerRoom.emit(
       'trackSubscribed',
       { sid: 'agent-track' },
@@ -92,9 +95,9 @@ test('records existing and newly subscribed remote tracks once without owning th
       { sid: 'irrelevant', kind: 1 },
       { identity: 'unrelated' },
     )
+    clock = 1_500
     agentRoom.emit('activeSpeakersChanged', [{ identity: 'agent' }])
     callerRoom.emit('activeSpeakersChanged', [{ identity: 'user' }])
-    await recorder.mediaReady
     await Promise.resolve()
     const path = await recorder.stop()
     expect(await recorder.stop()).toBe(path)
@@ -104,11 +107,15 @@ test('records existing and newly subscribed remote tracks once without owning th
     expect(agentRoom.listenerCount('trackSubscribed')).toBe(0)
     expect(callerRoom.listenerCount('trackSubscribed')).toBe(0)
     expect(agentRoom.listenerCount('activeSpeakersChanged')).toBe(0)
-    expect(recorder.tracker.finalize().interruptions.count).toBe(0)
+    expect(recorder.tracker.finalize()).toMatchObject({
+      timeToFirstSpeechMs: 500,
+      interruptions: { count: 0 },
+    })
     const wav = readFileSync(path)
     expect(wav.toString('ascii', 0, 4)).toBe('RIFF')
     expect(wav.readInt16LE(44)).toBe(1000)
   } finally {
+    now.mockRestore()
     rmSync(directory, { recursive: true, force: true })
   }
 })

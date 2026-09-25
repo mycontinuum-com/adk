@@ -13,8 +13,6 @@ import { createSpeakerTracker, type SpeakerTracker } from './speaker-tracker'
 
 export interface RecordingHandle {
   tracker: SpeakerTracker
-  /** Resolves when both agent and user audio tracks are subscribed. */
-  mediaReady: Promise<void>
   /** Stop recording and write WAV file. Returns the file path. */
   stop(): Promise<string>
 }
@@ -42,28 +40,14 @@ type RecorderSDK = Pick<
   'Room' | 'AudioStream'
 >
 
-function loadSDK(): RecorderSDK {
-  try {
-    return require('@livekit/rtc-node')
-  } catch {
-    throw new Error(
-      '[adk/voice-eval] @livekit/rtc-node is required for voice evaluation. Install it with: npm install @livekit/rtc-node',
-    )
-  }
-}
-
 /** Record remote audio already subscribed by these rooms; their owner controls connection lifetime. */
 export function recordRooms(
   config: RecordingConfig & { rooms: readonly RecordingRoom[] },
-  sdk: Pick<RecorderSDK, 'AudioStream'> = loadSDK(),
+  sdk: Pick<RecorderSDK, 'AudioStream'>,
 ): RecordingHandle {
   mkdirSync(config.recordingDir, { recursive: true })
   const tracker = createSpeakerTracker(config.agentIdentity, config.userIdentity)
   const ready = new Set<string>()
-  let resolveMediaReady!: () => void
-  const mediaReady = new Promise<void>((resolve) => {
-    resolveMediaReady = resolve
-  })
   let active = true
   let stopping: Promise<string> | undefined
   const trackPaths: string[] = []
@@ -83,10 +67,7 @@ export function recordRooms(
     if (captured.has(sid)) return
     captured.add(sid)
     ready.add(identity)
-    if (ready.size === 2) {
-      tracker.setMediaReady()
-      resolveMediaReady()
-    }
+    if (ready.size === 2) tracker.setMediaReady()
     const path = join(
       config.recordingDir,
       `.${sanitize(config.caseName)}_track${trackPaths.length}.raw`,
@@ -131,7 +112,6 @@ export function recordRooms(
 
   return {
     tracker,
-    mediaReady,
     stop() {
       return (stopping ??= (async () => {
         active = false
@@ -160,7 +140,7 @@ export function recordRooms(
  */
 export async function connectRecorder(
   config: RecorderConfig,
-  sdk = loadSDK(),
+  sdk: RecorderSDK,
 ): Promise<RecorderHandle> {
   const room = new sdk.Room()
   await room.connect(config.roomUrl, config.token, { autoSubscribe: true, dynacast: false })

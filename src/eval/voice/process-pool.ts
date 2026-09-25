@@ -26,7 +26,7 @@ export function getWorkerCaseIndex(): number {
   return parseInt(process.env[WORKER_CASE_INDEX_ENV]!, 10)
 }
 
-export function sendWorkerResult(caseIndex: number, result: unknown): Promise<void> {
+export function sendWorkerResult(caseIndex: number, result: string): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     if (!process.send || !process.connected) {
       resolve()
@@ -42,7 +42,7 @@ export function sendWorkerResult(caseIndex: number, result: unknown): Promise<vo
 // Parent-side: fork a single case in a child process
 // ---------------------------------------------------------------------------
 
-export function forkCase(caseIndex: number): Promise<unknown> {
+export function forkCase(caseIndex: number): Promise<string> {
   return new Promise((resolve, reject) => {
     let spawnError: Error | undefined
 
@@ -57,7 +57,7 @@ export function forkCase(caseIndex: number): Promise<unknown> {
 
     child.stdout?.pipe(process.stderr, { end: false })
 
-    let result: unknown
+    let result = ''
     let received = false
 
     child.on('message', (msg: any) => {

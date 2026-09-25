@@ -19,13 +19,11 @@ function writeState(
 /**
  * Copies the call's current call-owned state into a fresh backend session. Scopes bound on either
  * session keep their own persistence and are not copied.
- *
- * @returns The backend event index to pass to `applyLiveState` after the run.
  */
 export function seedLiveState<S extends StateSchema>(
   callSession: Session<S>,
   backendSession: Session<S>,
-): number {
+): void {
   const scopes = new Map<Exclude<StateScope, 'temp'>, Map<string, unknown>>()
   for (const event of callSession.events) {
     if (
@@ -40,7 +38,6 @@ export function seedLiveState<S extends StateSchema>(
   }
   for (const [scope, changes] of scopes)
     writeState(backendSession, scope, Object.fromEntries(changes))
-  return backendSession.events.length
 }
 
 /**

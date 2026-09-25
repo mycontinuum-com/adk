@@ -30,6 +30,16 @@ interface SpeakerState {
   lastSoleSpeakerEndMs: number
 }
 
+/** Timing for a run that measured no speech. */
+export function emptyTiming(): VoiceTiming {
+  return {
+    responseTimes: [],
+    silenceGaps: [],
+    interruptions: { count: 0, byAgent: 0, byUser: 0 },
+    vadResolutionMs: 0,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public interface
 // ---------------------------------------------------------------------------

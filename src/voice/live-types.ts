@@ -1,16 +1,32 @@
-import type { Agent, LiveAgent } from '../types/runnables'
+import type { Agent, AgentTimeouts, LiveAgent } from '../types/runnables'
 import type { CostAccount, UsageSummary } from '../types/runtime'
 import type { StateSchema, TypedState } from '../types/schema'
 import type { Session } from '../types/session'
 import type { GPTLiveTranscript } from './gpt-live-transcript'
 import type { VoiceHandlerConfig } from './types'
 
+interface LiveCommentaryOptions {
+  /**
+   * `false` makes a line the caller cannot talk over, such as a notice or a goodbye. Caller audio
+   * is replaced with silence at once. The line is given only once GPT Live is quiet and no
+   * delegation is in flight, and counts as said when GPT Live's next speaking turn has started and
+   * ended. The caller is heard again after that, or after `playoutTimeoutMs` if GPT Live never
+   * speaks. Default: `true`, which gives the line at once.
+   */
+  allowInterruptions?: boolean
+}
+
 export interface LiveVoiceControls {
-  /** Request call termination. Does not wait for speech playback. */
+  /**
+   * Request call termination. The call closes once every line given with `allowInterruptions:
+   * false` has been said, within `playoutTimeoutMs`, so a goodbye is not cut off.
+   */
   end(): void
   appendThinking(text: string): void
-  appendCommentary(text: string): void
+  appendCommentary(text: string, options?: LiveCommentaryOptions): void
   appendInstructions(text: string): void
+  /** Caller speech turns so far in the call. */
+  readonly turnCount: number
 }
 
 export interface LiveVoiceContext<S extends StateSchema = StateSchema> {
@@ -73,8 +89,22 @@ export interface LiveVoiceExitContext<
   readonly usage: LiveCallUsage
 }
 
+interface LiveVoiceInactivityContext<
+  S extends StateSchema = StateSchema,
+> extends LiveVoiceContext<S> {
+  /** Silences in a row before this one. Resets to 0 when the caller speaks. */
+  readonly inactivityCount: number
+}
+
+/** `false` keeps the call. Anything else, including a throw, lets it end. */
+type LiveLifecycleHookResult = void | boolean | Promise<void | boolean>
+
 export interface LiveVoiceHook<S extends StateSchema = StateSchema, T = unknown> {
   onEnter?(ctx: LiveVoiceContext<S>): void | Promise<void>
+  /** Each time neither the caller nor the agent has spoken for `timeouts.inactivity`. */
+  onInactivity?(ctx: LiveVoiceInactivityContext<S>): LiveLifecycleHookResult
+  /** Once, when the call reaches `timeouts.expiry`. */
+  onExpiry?(ctx: LiveVoiceContext<S>): LiveLifecycleHookResult
   onResult?(ctx: LiveVoiceResultContext<S, T>): void | Promise<void>
   onExit?(ctx: LiveVoiceExitContext<S>): void | Promise<void>
   onError?(
@@ -90,4 +120,11 @@ export interface LiveVoiceHandlerConfig<
   backend: Agent<S, T>
   hooks?: LiveVoiceHook<S, T>[]
   backendTimeoutMs?: number
+  /** Silence and call length limits in milliseconds. An unset limit never fires. */
+  timeouts?: Pick<AgentTimeouts, 'inactivity' | 'expiry'>
+  /**
+   * Longest wait for each step of a line given with `allowInterruptions: false`: for GPT Live to be
+   * quiet, then for it to say the line. Default: 30_000.
+   */
+  playoutTimeoutMs?: number
 }

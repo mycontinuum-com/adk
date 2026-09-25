@@ -178,3 +178,26 @@ it('keeps mutually exclusive discriminated unions in the existing anyOf wire rep
     },
   })
 })
+
+it('keeps Zod 3 descriptions written on optional, nullable and default wrappers', () => {
+  const schema = z3.object({
+    detail: z3.enum(['done', 'not_understood']).optional().describe('What the caller showed'),
+    note: z3.string().nullable().describe('Free text'),
+    inner: z3.string().describe('Inner wins').optional().describe('Outer loses'),
+    nested: z3
+      .object({ reason: z3.string().optional().describe('Why') })
+      .optional()
+      .describe('Nested block'),
+    items: z3.array(z3.object({ id: z3.string().optional().describe('Option id') })),
+  })
+  expect(zodToToolSchema('end', 'End', schema).parameters.properties).toMatchObject({
+    detail: { description: 'What the caller showed' },
+    note: { description: 'Free text' },
+    inner: { description: 'Inner wins' },
+    nested: {
+      description: 'Nested block',
+      anyOf: [{ properties: { reason: { description: 'Why' } } }, { type: 'null' }],
+    },
+    items: { items: { properties: { id: { description: 'Option id' } } } },
+  })
+})

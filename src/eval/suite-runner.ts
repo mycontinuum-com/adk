@@ -61,16 +61,25 @@ export async function runMetrics<TRun>(
     try {
       results[metric.name] = await metric.evaluate(run)
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
       results[metric.name] = {
         passed: false,
-        evidence: [
-          `Metric evaluation failed: ${error instanceof Error ? error.message : String(error)}`,
-        ],
+        evidence: [`Metric evaluation failed: ${message}`],
+        error: message,
       }
     }
   }
 
   return results
+}
+
+/** A metric that could not produce a verdict makes the case `error`, never a product failure. */
+export function metricsStatus(
+  results: Record<string, MetricResult>,
+): 'passed' | 'failed' | 'error' {
+  const values = Object.values(results)
+  if (values.some((result) => result.error !== undefined)) return 'error'
+  return values.every((result) => result.passed) ? 'passed' : 'failed'
 }
 
 export function mergeMetrics<TRun>(

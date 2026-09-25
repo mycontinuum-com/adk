@@ -82,6 +82,7 @@ async function fixture() {
   let callerDelegates = false
   let setupDelay: Promise<void> | undefined
   let handlerCloseDelayMs = 0
+  let callerCloseDelayMs = 0
   class Room extends EventEmitter {
     name = 'test-room'
     started?: SDKAgent
@@ -99,15 +100,23 @@ async function fixture() {
   }
   const closeCaller = vi.fn<() => void>()
   const liveSessions: AgentSession[] = []
+  const callerSessions: AgentSession[] = []
+  const callerAudio: boolean[] = []
   class AgentSession extends EventEmitter {
     agent?: SDKAgent
     room?: Room
+    output = {
+      setAudioEnabled: (enabled: boolean) => {
+        if (this.agent?.constructor === SDKAgent) callerAudio.push(enabled)
+      },
+    }
     async start({ agent: started, room }: { agent: SDKAgent; room: Room }) {
       this.agent = started
       this.room = room
       await started.onEnter()
       if (room === rooms[1]) {
         room.started = started
+        callerSessions.push(this)
         if (reportUsage && started.constructor === SDKAgent)
           this.emit('metrics_collected', {
             metrics: {
@@ -119,6 +128,12 @@ async function fixture() {
             },
           })
         if (callerDelegates) started.duplexSession.emit('delegation_created', { id: 'caller' })
+        for (const [transcript, isFinal] of [
+          ['Hi, this is', false],
+          ['Hi, this is Andi.', true],
+          ['   ', true],
+        ] as const)
+          this.emit('user_input_transcribed', { transcript, isFinal, createdAt: Date.now() })
         return
       }
       liveSessions.push(this)
@@ -140,6 +155,8 @@ async function fixture() {
     async close() {
       if (this.agent && this.room !== rooms[1] && handlerCloseDelayMs)
         await new Promise((resolve) => setTimeout(resolve, handlerCloseDelayMs))
+      if (this.room === rooms[1] && callerCloseDelayMs)
+        await new Promise((resolve) => setTimeout(resolve, callerCloseDelayMs))
       closeCaller()
       if (reportUsage && this.agent && this.agent.constructor !== SDKAgent) {
         // GPT Live drains its final cumulative usage while closing: 12 s, then 15 s for the
@@ -169,7 +186,11 @@ async function fixture() {
       voice: {
         Agent: SDKAgent,
         AgentSession,
-        AgentSessionEventTypes: { Close: 'close', MetricsCollected: 'metrics_collected' },
+        AgentSessionEventTypes: {
+          Close: 'close',
+          MetricsCollected: 'metrics_collected',
+          UserInputTranscribed: 'user_input_transcribed',
+        },
       },
       defineAgent: () => {},
       log: () => ({ error() {} }),
@@ -245,10 +266,17 @@ async function fixture() {
     rooms,
     deleteRoom,
     closeCaller,
+    callerAudio,
     closeLiveSession: (reason: string) => {
       liveSessions.at(-1)!.emit('close', { reason })
     },
+    failCaller: (message: string) => {
+      callerSessions.at(-1)!.emit('close', { error: new Error(message) })
+    },
     callerModels,
+    delayCallerClose: (milliseconds: number) => {
+      callerCloseDelayMs = milliseconds
+    },
     delayHandlerClose: (milliseconds: number) => {
       handlerCloseDelayMs = milliseconds
     },
@@ -312,7 +340,7 @@ test('reports backend, GPT Live and simulated caller cost separately', async () 
     f.reportUsage()
     const run = await f.run()
     expect(run.error).toBeUndefined()
-    expect(run.usageScope).toBe('backend')
+    expect(run.usage?.modelCalls).toBe(2)
     const usage = run.liveUsage!
     expect(usage.backend.usage?.modelCalls).toBe(2)
     expect(usage.backend.cost).toEqual({ basis: 'reported', totalCost: 0.3, currency: 'USD' })
@@ -385,6 +413,22 @@ test('wall timeout is distinct from a successful duration', async () => {
   }
 })
 
+test('lets a GPT Live caller wait out its session close without failing the run', async () => {
+  vi.useFakeTimers()
+  const f = await fixture()
+  try {
+    f.delayCallerClose(6_000)
+    const pending = f.run({ timeout: 20_000 })
+    await vi.advanceTimersByTimeAsync(7_000)
+    const run = await pending
+    expect(run.error).toBeUndefined()
+    expect(run.status).toBe('completed')
+  } finally {
+    vi.useRealTimers()
+    await f.app.close()
+  }
+})
+
 test('bounds cleanup when a network connection never settles', async () => {
   vi.useFakeTimers()
   const f = await fixture()
@@ -443,7 +487,101 @@ test('finalizes a call ended by its production hook and preserves final state', 
   }
 })
 
+test('a caller error during the hangup grace fails the run', async () => {
+  const f = await fixture()
+  try {
+    const controlled = createVoiceEvalCase((control) => ({
+      name: 'disconnect then fail',
+      agent: f.agent,
+      backend: f.backend,
+      userAgent: f.userAgent,
+      hooks: [
+        {
+          async onResult() {
+            await control.disconnectUser()
+            f.failCaller('caller transport failed')
+          },
+        },
+      ],
+    }))
+    const run = await f.run({ ...controlled, durationMs: 1_500, timeout: 2_000 })
+    expect(run.status).toBe('error')
+    expect(run.error?.message).toBe('caller transport failed')
+  } finally {
+    await f.app.close()
+  }
+})
+
 test('binds native eval caller disconnect control', async () => {
+  const f = await fixture()
+  try {
+    const controlled = createVoiceEvalCase((control) => ({
+      name: 'disconnect',
+      agent: f.agent,
+      backend: f.backend,
+      userAgent: f.userAgent,
+      hooks: [
+        {
+          async onResult() {
+            await control.disconnectUser()
+            setTimeout(() => f.closeLiveSession('participant_disconnected'), 20)
+          },
+        },
+      ],
+    }))
+    const run = await f.run({ ...controlled, durationMs: 1_500, timeout: 2_000 })
+    expect(run.status).toBe('participant_left')
+    expect(
+      run.events.filter(
+        (event) => event.type === 'annotation' && event.label === 'live-call-ended',
+      ),
+    ).toEqual([
+      {
+        id: expect.any(String),
+        type: 'annotation',
+        kind: 'mark',
+        label: 'live-call-ended',
+        createdAt: expect.any(Number),
+        invocationId: run.session.id,
+        agentName: f.agent.name,
+        data: { reason: 'participant_disconnected' },
+      },
+    ])
+    expect(run.durationMs).toBeLessThan(1_000)
+    expect(f.deleteRoom).toHaveBeenCalledOnce()
+    expect(() => controlled.evalControl!.disconnectUser()).toThrow('not bound')
+  } finally {
+    await f.app.close()
+  }
+})
+
+test('mutes and restores the simulated caller through the eval control', async () => {
+  const f = await fixture()
+  try {
+    const controlled = createVoiceEvalCase((control) => ({
+      name: 'mute',
+      agent: f.agent,
+      backend: f.backend,
+      userAgent: f.userAgent,
+      hooks: [
+        {
+          onResult() {
+            control.muteUser(true)
+            control.muteUser(false)
+          },
+        },
+      ],
+    }))
+    const run = await f.run(controlled)
+    expect(run.error).toBeUndefined()
+    expect(f.callerAudio).toEqual([false, true])
+  } finally {
+    await f.app.close()
+  }
+})
+
+test('ends a run the caller left within the grace period when the handler never closes', async () => {
+  vi.useFakeTimers()
   const f = await fixture()
   try {
     const controlled = createVoiceEvalCase((control) => ({
@@ -459,11 +597,15 @@ test('binds native eval caller disconnect control', async () => {
         },
       ],
     }))
-    const run = await f.run(controlled)
+    const pending = f.run({ ...controlled, durationMs: 15_000, timeout: 20_000 })
+    await vi.advanceTimersByTimeAsync(4_900)
+    expect(f.deleteRoom).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(300)
+    const run = await pending
     expect(run.status).toBe('participant_left')
     expect(f.deleteRoom).toHaveBeenCalledOnce()
-    expect(() => controlled.evalControl!.disconnectUser()).toThrow('not bound')
   } finally {
+    vi.useRealTimers()
     await f.app.close()
   }
 })
@@ -539,6 +681,32 @@ test.each([
   },
 )
 
+test.each([
+  [{ inactivity: 30 }, 'inactivity_timeout'],
+  [{ expiry: 30 }, 'max_duration'],
+] as const)('a Live call its handler ends at %j reports %s', async (timeouts, expected) => {
+  const f = await fixture()
+  try {
+    const run = await f.run({ durationMs: 10_000, timeouts, playoutTimeoutMs: 20 })
+    expect(run.error).toBeUndefined()
+    expect(run.status).toBe(expected)
+    expect(run.durationMs).toBeLessThan(10_000)
+  } finally {
+    await f.app.close()
+  }
+})
+
+test('reports final caller transcriptions of the agent as what the caller heard', async () => {
+  const f = await fixture()
+  try {
+    const run = await f.run()
+    expect(run.callerHeard?.map(({ text }) => text)).toEqual(['Hi, this is Andi.'])
+    expect(run.callerHeard?.[0]!.atMs).toBeGreaterThanOrEqual(0)
+  } finally {
+    await f.app.close()
+  }
+})
+
 test('an agent-ended call whose backend work never settled is an error, not completed', async () => {
   const f = await fixture()
   try {
@@ -603,24 +771,6 @@ test('fails the run when the GPT Live caller delegates', async () => {
       'The GPT Live caller delegated, but a simulated caller has no backend',
     )
     expect(f.deleteRoom).toHaveBeenCalledOnce()
-  } finally {
-    await f.app.close()
-  }
-})
-
-test('rejects GPT Live caller context beyond system instructions', async () => {
-  const f = await fixture()
-  try {
-    const run = await f.run({
-      userAgent: f.app.agent({
-        name: 'live caller',
-        model: openai.live('gpt-live-1'),
-        context: [f.app.context.user('Unsupported caller message')],
-      }),
-    })
-    expect(run.status).toBe('error')
-    expect(run.error?.message).toMatch(/system instructions only/)
-    expect(f.callerModels).toEqual([])
   } finally {
     await f.app.close()
   }

@@ -213,23 +213,24 @@ it('rejects lossy voice metric data before worker serialization', async () => {
   )
 })
 
-it.each(['not json', '{}', '{"run":null}'])(
-  'records invalid worker result %s as a case error and retains text results',
-  async (raw) => {
-    const { app, text, voice } = fixture()
-    vi.mocked(forkCase).mockResolvedValue(raw)
-    const result = await app.evaluate([voice, text], {
-      concurrency: 2,
-      voice: { room: { url: 'ws://unused' } },
-    })
-    expect(result.results.map((item) => [item.name, item.status])).toEqual([
-      ['voice', 'error'],
-      ['text', 'passed'],
-    ])
-    expect(result.results[0].error?.message).toContain('invalid evaluation result')
-    expect(result.summary.errors).toBe(1)
-  },
-)
+it('records a voice worker that exits without a result as a case error and retains text results', async () => {
+  const { app, text, voice } = fixture()
+  vi.mocked(forkCase).mockRejectedValue(
+    new Error('[adk/voice-eval] case-0: Worker exited with code 1 without producing a result'),
+  )
+  const result = await app.evaluate([voice, text], {
+    concurrency: 2,
+    voice: { room: { url: 'ws://unused' } },
+  })
+  expect(result.results.map((item) => [item.name, item.status])).toEqual([
+    ['voice', 'error'],
+    ['text', 'passed'],
+  ])
+  expect(result.results[0].error?.message).toBe(
+    '[adk/voice-eval] case-0: Worker exited with code 1 without producing a result',
+  )
+  expect(result.summary.errors).toBe(1)
+})
 
 it('rejects a non-JSON event before voice worker IPC', () => {
   expect(() =>

@@ -60,3 +60,8 @@ const live = app.evaluate.voice.case({
 const allCases = app.evaluate.cases([text, voice, live])
 expectTypeOf(app.evaluate(allCases)).toEqualTypeOf<Promise<MixedEvalResult<typeof schema>>>()
 expectTypeOf(app.evaluate.cli(allCases)).toEqualTypeOf<Promise<0 | 1 | 2>>()
+
+const judge = app.evaluate.judge({ name: 'consent', criteria: { asks: 'Asks to send it.' } })
+void app.evaluate.case({ name: 'judged-text', runnable: text.runnable, metrics: [judge] })
+void app.evaluate.voice.case({ name: 'judged-voice', agent, userAgent: agent, metrics: [judge] })
+void app.evaluate(allCases, { metrics: [judge], voice: { metrics: [judge] } })

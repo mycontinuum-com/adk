@@ -1,4 +1,5 @@
 import type { Event, EventType, EventMap } from '../../types/events'
+import type { UsageSummary } from '../../types/runtime'
 import type { StateSchema } from '../../types/schema'
 import type { Session } from '../../types/session'
 
@@ -19,6 +20,10 @@ export interface MetricResult {
   score?: number
   evidence?: string[]
   data?: Record<string, unknown>
+  /** Model usage the metric itself spent, such as a judge call. The report shows it as `judge`. */
+  usage?: UsageSummary
+  /** Set when the metric could not produce a verdict. The case's status becomes `error`. */
+  error?: string
 }
 
 export type EventFilter<T extends EventType = EventType> = (event: EventMap[T]) => boolean

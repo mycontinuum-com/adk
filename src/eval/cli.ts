@@ -7,7 +7,7 @@ import type { StateSchema } from '../types/schema'
 import type { AnyEvalCase, AnyEvalCaseResult, MixedEvalOptions } from './types'
 
 import { omitUndefinedProperties, serializeEvent, stringifyEvidence, voiceEvidence } from './json'
-import { generateReport } from './report'
+import { caseJudgeCost, generateReport, suiteCost } from './report'
 import { isProcessWorker } from './voice/process-pool'
 
 const RUN_DIRECTORY = '__ADK_EVAL_RUN_DIRECTORY'
@@ -131,6 +131,7 @@ export async function evalCli<S extends StateSchema>(
           durationMs: item.durationMs,
           usage: item.usage,
           liveUsage: 'events' in item ? undefined : item.run.liveUsage,
+          judgeCost: caseJudgeCost(item),
           attempts: item.attempts,
           repeatIndex: item.repeatIndex,
           repeatTotal: item.repeatTotal,
@@ -152,6 +153,7 @@ export async function evalCli<S extends StateSchema>(
       expected,
       completed: result.results.length,
       summary: result.summary,
+      cost: suiteCost(result.results),
       durationMs: result.durationMs,
       results,
     }

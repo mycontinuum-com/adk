@@ -15,7 +15,6 @@ import type {
   VoiceRoomConfig,
   VoiceRunResult,
   VoiceRunStatus,
-  VoiceTiming,
   TimingEntry,
   TranscriptEntry,
 } from './types'
@@ -53,9 +52,9 @@ import { LiveKitVoiceSession } from '../../voice/session'
 import { interceptTools } from '../interceptTools'
 import { createEvalSession } from '../session'
 import { withTimeout } from '../suite-runner'
-import { bindVoiceEvalControl } from './control'
 import { requireLiveKit } from './livekit-sdk'
 import { connectRecorder } from './recorder'
+import { emptyTiming } from './speaker-tracker'
 
 interface TranscriptSource {
   text: string
@@ -174,61 +173,6 @@ function createEvalSessionService(
 }
 
 // ---------------------------------------------------------------------------
-// Empty VoiceTiming for error paths
-// ---------------------------------------------------------------------------
-
-function emptyTiming(): VoiceTiming {
-  return {
-    responseTimes: [],
-    silenceGaps: [],
-    interruptions: { count: 0, byAgent: 0, byUser: 0 },
-    vadResolutionMs: 0,
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Profiling — enabled via ADK_VOICE_EVAL_TRACE=1
-// ---------------------------------------------------------------------------
-
-const TRACE = !!process.env.ADK_VOICE_EVAL_TRACE
-
-function wireTraceListeners(label: string, lkSession: any, room: any, startMs: number) {
-  if (!TRACE) return
-  const t = () => `+${((Date.now() - startMs) / 1000).toFixed(2)}s`
-
-  lkSession.on('agent_state_changed', (ev: any) => {
-    console.log(`${t()} [${label}] agent_state: ${ev.oldState} → ${ev.newState}`)
-  })
-
-  lkSession.on('user_state_changed', (ev: any) => {
-    console.log(`${t()} [${label}] user_state: ${ev.oldState} → ${ev.newState}`)
-  })
-
-  lkSession.on('speech_created', (ev: any) => {
-    console.log(`${t()} [${label}] speech_created source=${ev.source ?? 'unknown'}`)
-  })
-
-  lkSession.on('conversation_item_added', (ev: any) => {
-    const item = ev.item
-    if (!item) return
-    const text = item.textContent ?? ''
-    const preview = text.length > 60 ? text.slice(0, 60) + '…' : text
-    console.log(`${t()} [${label}] transcript: role=${item.role} "${preview}"`)
-  })
-
-  room.on('activeSpeakersChanged', (speakers: any[]) => {
-    const ids = speakers.map((s: any) => s.identity as string)
-    console.log(`${t()} [${label}:room] active_speakers: [${ids.join(', ')}]`)
-  })
-
-  room.on('trackSubscribed', (_track: any, pub: any, participant: any) => {
-    console.log(
-      `${t()} [${label}:room] track_subscribed: ${participant.identity} kind=${pub.kind} source=${pub.source}`,
-    )
-  })
-}
-
-// ---------------------------------------------------------------------------
 // Session-level response time tracker
 // ---------------------------------------------------------------------------
 // Room-level activeSpeakersChanged events include the VAD commit delay,
@@ -318,9 +262,7 @@ export async function runVoiceCase<S extends StateSchema>(
   const { serverSdk, lk, rtc } = requireLiveKit()
 
   // --- Room config ---
-  const url = options.room.url
-  const apiKey = options.room.apiKey ?? process.env.LIVEKIT_API_KEY
-  const apiSecret = options.room.apiSecret ?? process.env.LIVEKIT_API_SECRET
+  const { url, apiKey, apiSecret } = options.room
   const roomName = `voice-eval-${sanitize(evalCase.name)}-${randomUUID().slice(0, 8)}`
 
   const agentIdentity = `__voice-eval-agent-${sanitize(evalCase.name)}`
@@ -611,9 +553,6 @@ export async function runVoiceCase<S extends StateSchema>(
     agentRoom = new rtc.Room()
     userRoom = new rtc.Room()
 
-    if (TRACE)
-      console.log(`+${((Date.now() - startMs) / 1000).toFixed(2)}s [eval] connecting rooms…`)
-
     {
       const connects: Promise<any>[] = [
         agentRoom.connect(url, agentToken, { autoSubscribe: true }),
@@ -621,22 +560,23 @@ export async function runVoiceCase<S extends StateSchema>(
       ]
       if (options.output && recordingDir) {
         connects.push(
-          connectRecorder({
-            roomUrl: url,
-            token: recorderToken,
-            agentIdentity,
-            userIdentity,
-            recordingDir,
-            caseName: evalCase.name,
-          }).then((r) => {
+          connectRecorder(
+            {
+              roomUrl: url,
+              token: recorderToken,
+              agentIdentity,
+              userIdentity,
+              recordingDir,
+              caseName: evalCase.name,
+            },
+            rtc,
+          ).then((r) => {
             recorder = r
           }),
         )
       }
       await Promise.all(connects)
     }
-
-    if (TRACE) console.log(`+${((Date.now() - startMs) / 1000).toFixed(2)}s [eval] rooms connected`)
 
     agentRoom.on('activeSpeakersChanged', (speakers: any[]) => {
       agentAudioActive = speakers.some(
@@ -738,12 +678,8 @@ export async function runVoiceCase<S extends StateSchema>(
     // --- Session-level response tracking on main agent ---
     const sessionTracker = wireSessionResponseTracker(lkSession)
 
-    // --- Profiling: trace events on both sessions ---
-    wireTraceListeners('agent', lkSession, agentRoom, startMs)
-
     // --- Start both agent sessions in parallel ---
     const userLkSession = new lk.voice.AgentSession({})
-    wireTraceListeners('user', userLkSession, userRoom, startMs)
 
     // Agent-level timeouts and lifecycle helpers mirror the production voice handler.
     let inactivity: InactivityTimer | undefined
@@ -795,7 +731,7 @@ export async function runVoiceCase<S extends StateSchema>(
     }
 
     if (evalCase.evalControl) {
-      unbindEvalControl = bindVoiceEvalControl(evalCase.evalControl, {
+      unbindEvalControl = evalCase.evalControl.bind({
         disconnectUser: async (controlOptions) => {
           if (lifecycle.state !== 'active') return
           if (controlOptions?.mode === 'lifecycle') {
@@ -804,6 +740,7 @@ export async function runVoiceCase<S extends StateSchema>(
             await userRoom.disconnect()
           }
         },
+        muteUser: (muted) => userLkSession.output.setAudioEnabled(!muted),
       })
     }
 
@@ -836,14 +773,10 @@ export async function runVoiceCase<S extends StateSchema>(
 
     lifecycle.activate()
 
-    if (TRACE)
-      console.log(`+${((Date.now() - startMs) / 1000).toFixed(2)}s [eval] starting sessions…`)
     await Promise.all([
       lkSession.start({ agent: lkAgent, room: agentRoom }),
       userLkSession.start({ agent: userLkAgent, room: userRoom }),
     ])
-    if (TRACE)
-      console.log(`+${((Date.now() - startMs) / 1000).toFixed(2)}s [eval] sessions started`)
 
     // --- Set up timeouts ---
     const caseTimeout = evalCase.timeout ?? 300_000

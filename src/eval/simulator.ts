@@ -23,6 +23,7 @@ import {
   buildSummary,
   withTimeout,
   expandCaseRuns,
+  metricsStatus,
   type CaseRun,
 } from './suite-runner'
 
@@ -63,7 +64,7 @@ function mapRunStatus(runStatus: string, metricResults: Record<string, MetricRes
     case 'aborted':
       return 'aborted'
     default:
-      return Object.values(metricResults).every((r) => r.passed) ? 'passed' : 'failed'
+      return metricsStatus(metricResults)
   }
 }
 

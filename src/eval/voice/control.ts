@@ -3,34 +3,25 @@ import type {
   VoiceEvalCase,
   VoiceEvalCaseFactory,
   VoiceEvalControl,
-  VoiceEvalControlBinding,
   VoiceEvalControlDisconnectOptions,
 } from './types'
 
-interface InternalVoiceEvalControl extends VoiceEvalControl {
-  bind(binding: VoiceEvalControlBinding): () => void
-}
+type BindableVoiceEvalControl = NonNullable<VoiceEvalCase['evalControl']>
 
-function assertInternal(control: VoiceEvalControl): InternalVoiceEvalControl {
-  if (typeof (control as Partial<InternalVoiceEvalControl>).bind !== 'function') {
-    throw new Error('[adk/voice-eval] Voice eval control was not created by ADK')
-  }
-  return control as InternalVoiceEvalControl
-}
-
-function requireBinding(binding: VoiceEvalControlBinding | undefined): VoiceEvalControlBinding {
+function requireBinding(binding: VoiceEvalControl | undefined): VoiceEvalControl {
   if (!binding) {
     throw new Error('[adk/voice-eval] Voice eval control is not bound to an active case run')
   }
   return binding
 }
 
-function createVoiceEvalControl(): VoiceEvalControl {
-  let activeBinding: VoiceEvalControlBinding | undefined
-  const control: InternalVoiceEvalControl = {
+function createVoiceEvalControl(): BindableVoiceEvalControl {
+  let activeBinding: VoiceEvalControl | undefined
+  const control: BindableVoiceEvalControl = {
     disconnectUser: (options?: VoiceEvalControlDisconnectOptions) =>
       requireBinding(activeBinding).disconnectUser(options),
-    bind: (binding: VoiceEvalControlBinding) => {
+    muteUser: (muted: boolean) => requireBinding(activeBinding).muteUser(muted),
+    bind: (binding: VoiceEvalControl) => {
       activeBinding = binding
       return () => {
         if (activeBinding === binding) {
@@ -40,13 +31,6 @@ function createVoiceEvalControl(): VoiceEvalControl {
     },
   }
   return control
-}
-
-export function bindVoiceEvalControl(
-  control: VoiceEvalControl,
-  binding: VoiceEvalControlBinding,
-): () => void {
-  return assertInternal(control).bind(binding)
 }
 
 /**

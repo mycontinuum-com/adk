@@ -18,7 +18,8 @@ test('carries workflow state and deletions through committed isolated runs and r
     expect((await service.commitSession(owner)).ok).toBe(true)
 
     const first = await service.createSession('test')
-    const cursor = seedLiveState(owner, first)
+    seedLiveState(owner, first)
+    const cursor = first.events.length
     expect(first.state.stage).toBe('matching')
     first.state.update({
       stage: 'questionnaire',
@@ -60,7 +61,8 @@ test('projects latest recorded values and isolates nested state in both directio
   owner.state.update({ request: { answers: ['old'] } })
   owner.state.update({ request: { answers: ['latest'] } })
   const backend = new BaseSession('test')
-  const cursor = seedLiveState(owner, backend)
+  seedLiveState(owner, backend)
+  const cursor = backend.events.length
   expect(backend.events.filter((event) => event.type === 'state_change')).toHaveLength(1)
   const backendRequest = backend.state.request as { answers: string[] }
   backendRequest.answers.push('backend-only')
@@ -82,7 +84,8 @@ test('carries unbound scope changes but never temp state or bound scope snapshot
   setupState.patient.update({ matched: 'synthetic-patient' })
   setupState.temp.secret = 'temporary'
   void setupState.user.locale
-  const cursor = seedLiveState(owner, backend)
+  seedLiveState(owner, backend)
+  const cursor = backend.events.length
   expect(backend.state.patient.matched).toBe('synthetic-patient')
   expect(backend.state.user.locale).toBe('fresh')
   expect(backend.boundState('setup').temp.secret).toBeUndefined()

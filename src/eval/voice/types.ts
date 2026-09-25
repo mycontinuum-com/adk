@@ -20,8 +20,8 @@ import type { BaseEvalCaseResult, BaseEvalResult, ToolMocks, StateChanges } from
 interface VoiceEvalCaseBase<S extends StateSchema = StateSchema> {
   name: string
   description?: string
-  /** @internal Bound by `app.evaluate.voice.case((control) => ...)`. */
-  evalControl?: VoiceEvalControl
+  /** @internal Created by `app.evaluate.voice.case((control) => ...)`; the runner binds it to its room. */
+  evalControl?: VoiceEvalControl & { bind(binding: VoiceEvalControl): () => void }
   initialState?: StateChanges<S>
   toolMocks?: ToolMocks<S>
   metrics?: Metric<VoiceRunResult<S>>[]
@@ -40,7 +40,7 @@ export type RealtimeVoiceEvalCase<S extends StateSchema = StateSchema> = VoiceEv
 export type LiveVoiceEvalCase<S extends StateSchema = StateSchema, T = any> = VoiceEvalCaseBase<S> &
   Pick<
     LiveVoiceHandlerConfig<S, T>,
-    'agent' | 'backend' | 'hooks' | 'setup' | 'backendTimeoutMs'
+    'agent' | 'backend' | 'hooks' | 'setup' | 'backendTimeoutMs' | 'playoutTimeoutMs' | 'timeouts'
   > & {
     /**
      * Simulated caller: a Realtime agent, or an `openai.live(...)` agent that speaks from its
@@ -67,10 +67,12 @@ export interface VoiceEvalControlDisconnectOptions {
 
 export interface VoiceEvalControl {
   disconnectUser(options?: VoiceEvalControlDisconnectOptions): Promise<void>
-}
-
-export interface VoiceEvalControlBinding {
-  disconnectUser(options?: VoiceEvalControlDisconnectOptions): Promise<void>
+  /**
+   * Stops (`true`) or restores (`false`) the simulated caller's audio. The caller still replies
+   * while muted, but the agent hears nothing, so a case can hold a silence a model caller would
+   * not.
+   */
+  muteUser(muted: boolean): void
 }
 
 export type VoiceEvalCaseFactory<S extends StateSchema = StateSchema, T = any> = (
@@ -165,11 +167,16 @@ export interface VoiceRunResult<S extends StateSchema = StateSchema> {
   voiceEvents: readonly VoiceDiagnosticEvent[]
   transcript: TranscriptEntry[]
   liveTranscript?: GPTLiveTranscriptSnapshot
+  /**
+   * Final transcriptions of the agent's audio by the simulated caller, when its model sets
+   * `inputTranscription`: what reached the caller rather than what the agent generated. `atMs` is
+   * relative to `startedAtMs`. Live runs only.
+   */
+  callerHeard?: Array<{ text: string; atMs: number }>
   timing: VoiceTiming
   recording: { path: string }
+  /** Live runs: backend models only; `liveUsage` adds voice and caller cost. */
   usage?: UsageSummary
-  /** Live `usage` covers backend models only; `liveUsage` adds voice and caller cost. */
-  usageScope?: 'backend'
   /** Live only: backend, GPT Live voice and simulated caller cost, each with its basis. */
   liveUsage?: LiveVoiceEvalUsage
   error?: { message: string; stack?: string }

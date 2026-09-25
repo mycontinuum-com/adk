@@ -42,7 +42,6 @@ import { isRealtimeMetrics, LiveVoiceMeter, realtimeTokenUsage } from '../../voi
 import { interceptTools } from '../interceptTools'
 import { withTimeout } from '../suite-runner'
 import { createVoiceEvalCaller } from './caller'
-import { bindVoiceEvalControl } from './control'
 import { requireLiveKit } from './livekit-sdk'
 import { recordRooms } from './recorder'
 import { createSpeakerTracker } from './speaker-tracker'
@@ -56,6 +55,18 @@ type Room = InstanceType<LiveKitSdk['rtc']['Room']>
 type CallerSession = InstanceType<LiveKitSdk['lk']['voice']['AgentSession']>
 type Participant = Awaited<ReturnType<LiveVoiceJob['waitForParticipant']>>
 
+/**
+ * How long a call may take to close through the handler's own path after the caller leaves, so it
+ * records the hangup as production does rather than as a worker shutdown.
+ */
+const CALLER_LEFT_GRACE_MS = 5_000
+
+/**
+ * A GPT Live caller's close waits up to 5 s for the server to confirm `session.closed` (LiveKit
+ * OpenAI plugin 1.9, `SESSION_CLOSE_TIMEOUT`), so its bound must leave room above that.
+ */
+const CALLER_CLOSE_MS = 10_000
+
 const agentIdentity = 'voice-eval-agent'
 const userIdentity = 'voice-eval-user'
 
@@ -65,17 +76,19 @@ const userIdentity = 'voice-eval-user'
  */
 function liveExitStatus(reason: unknown): VoiceRunStatus {
   if (reason === 'agent-ended') return 'completed'
+  if (reason === 'inactivity') return 'inactivity_timeout'
+  if (reason === 'expiry') return 'max_duration'
   if (reason === 'participant_disconnected') return 'participant_left'
   return 'disconnected'
 }
 
 function roomToken(
   serverSdk: LiveKitSdk['serverSdk'],
-  credentials: { apiKey?: string; apiSecret?: string },
+  room: VoiceRoomConfig,
   roomName: string,
   identity: string,
 ): Promise<string> {
-  const token = new serverSdk.AccessToken(credentials.apiKey, credentials.apiSecret, {
+  const token = new serverSdk.AccessToken(room.apiKey, room.apiSecret, {
     identity,
     ttl: '5m',
   })
@@ -146,7 +159,6 @@ class LiveVoiceCaseRun<S extends StateSchema> {
   readonly startedAtMs = Date.now()
   private readonly callId = randomUUID()
   private readonly roomName = `voice-eval-${randomUUID()}`
-  private readonly credentials: { apiKey?: string; apiSecret?: string }
   private readonly service: InstanceType<LiveKitSdk['serverSdk']['RoomServiceClient']>
   private readonly agentRoom: Room
   private readonly userRoom: Room
@@ -172,6 +184,8 @@ class LiveVoiceCaseRun<S extends StateSchema> {
   private stopping = false
   private unbind: (() => void) | undefined
   private durationTimer: ReturnType<typeof setTimeout> | undefined
+  private callerLeaving: ReturnType<typeof setTimeout> | undefined
+  private readonly callerHeard: Array<{ text: string; atMs: number }> = []
 
   constructor(
     private readonly evalCase: LiveVoiceEvalCase<S>,
@@ -185,14 +199,10 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     private readonly writer?: CaseWriter,
     private readonly recordingDir?: string,
   ) {
-    this.credentials = {
-      apiKey: options.room.apiKey ?? process.env.LIVEKIT_API_KEY,
-      apiSecret: options.room.apiSecret ?? process.env.LIVEKIT_API_SECRET,
-    }
     this.service = new sdk.serverSdk.RoomServiceClient(
       options.room.url,
-      this.credentials.apiKey,
-      this.credentials.apiSecret,
+      options.room.apiKey,
+      options.room.apiSecret,
     )
     this.agentRoom = new sdk.rtc.Room()
     this.userRoom = new sdk.rtc.Room()
@@ -213,6 +223,7 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     } finally {
       clearTimeout(deadline)
       clearTimeout(this.durationTimer)
+      clearTimeout(this.callerLeaving)
       this.unbind?.()
       await this.release(startup)
     }
@@ -231,6 +242,12 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     this.complete()
   }
 
+  /** Lets the handler see the hangup and close itself, within a bound. */
+  private callerLeft(): void {
+    if (this.stopping || this.callerLeaving) return
+    this.callerLeaving = setTimeout(() => this.finish('participant_left'), CALLER_LEFT_GRACE_MS)
+  }
+
   private listen(): void {
     const { rtc, lk } = this.sdk
     this.agentRoom.on(rtc.RoomEvent.ActiveSpeakersChanged, (participants) => {
@@ -239,17 +256,22 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     this.agentRoom.on(rtc.RoomEvent.Disconnected, () => {
       if (!this.stopping) this.finish('disconnected')
     })
-    this.userRoom.on(rtc.RoomEvent.Disconnected, () => {
-      if (!this.stopping) this.finish('participant_left')
-    })
+    this.userRoom.on(rtc.RoomEvent.Disconnected, () => this.callerLeft())
     const callerModel = getModelName(this.evalCase.userAgent.model)
     this.caller.on(lk.voice.AgentSessionEventTypes.MetricsCollected, (event) => {
       if (this.callerMeter) this.callerMeter.observeMetrics(event.metrics)
       else if (isRealtimeMetrics(event.metrics))
         this.callerCalls.push(realtimeTokenUsage(event.metrics, callerModel))
     })
+    this.caller.on(lk.voice.AgentSessionEventTypes.UserInputTranscribed, (event) => {
+      const text = event.transcript.trim()
+      if (event.isFinal && text)
+        this.callerHeard.push({ text, atMs: event.createdAt - this.startedAtMs })
+    })
+    // A clean close during the hangup grace is the hangup; an error is still a failed run.
     this.caller.on(lk.voice.AgentSessionEventTypes.Close, (event) => {
-      if (!this.stopping) this.finish('disconnected', event.error)
+      if (!this.stopping && (event.error || !this.callerLeaving))
+        this.finish('disconnected', event.error)
     })
   }
 
@@ -263,8 +285,8 @@ class LiveVoiceCaseRun<S extends StateSchema> {
       return
     }
     const [agentToken, userToken] = await Promise.all([
-      roomToken(this.sdk.serverSdk, this.credentials, this.roomName, agentIdentity),
-      roomToken(this.sdk.serverSdk, this.credentials, this.roomName, userIdentity),
+      roomToken(this.sdk.serverSdk, this.options.room, this.roomName, agentIdentity),
+      roomToken(this.sdk.serverSdk, this.options.room, this.roomName, userIdentity),
     ])
     if (this.stopping) return
     writer?.appendLine('Connecting voice participants.')
@@ -277,13 +299,16 @@ class LiveVoiceCaseRun<S extends StateSchema> {
       return
     }
     if (this.recordingDir) {
-      this.recorder = recordRooms({
-        rooms: [agentRoom, userRoom],
-        agentIdentity,
-        userIdentity,
-        recordingDir: this.recordingDir,
-        caseName: evalCase.name,
-      })
+      this.recorder = recordRooms(
+        {
+          rooms: [agentRoom, userRoom],
+          agentIdentity,
+          userIdentity,
+          recordingDir: this.recordingDir,
+          caseName: evalCase.name,
+        },
+        this.sdk.rtc,
+      )
     }
     const userAgent = await createVoiceEvalCaller({
       lk: this.sdk.lk,
@@ -310,13 +335,13 @@ class LiveVoiceCaseRun<S extends StateSchema> {
         this.finish('error', cause)
       })
     if (evalCase.evalControl)
-      this.unbind = bindVoiceEvalControl(evalCase.evalControl, {
+      this.unbind = evalCase.evalControl.bind({
         disconnectUser: async (controlOptions) => {
           if (controlOptions?.mode === 'lifecycle')
             throw new Error('Live voice eval supports physical disconnect only')
           await userRoom.disconnect()
-          this.finish('participant_left')
         },
+        muteUser: (muted) => this.caller.output.setAudioEnabled(!muted),
       })
     const handler = this.createHandler<S, any>(this.handlerConfig(), this.appContext)
     await Promise.all([handler.entry(this.job()), callerStarting])
@@ -416,7 +441,7 @@ class LiveVoiceCaseRun<S extends StateSchema> {
 
   private async release(startup: Promise<void>): Promise<void> {
     await this.shutdownHandler()
-    await this.cleanup('caller session', () => this.caller.close())
+    await this.cleanup('caller session', () => this.caller.close(), CALLER_CLOSE_MS)
     this.callerMeter?.stop()
     const recorder = this.recorder
     if (recorder)
@@ -440,16 +465,15 @@ class LiveVoiceCaseRun<S extends StateSchema> {
       if (liveTranscript) {
         for (const event of transcriptMessages(liveTranscript, this.evalCase.backend.name))
           await sessionService.appendEvent(this.session, event)
-        for (const event of this.session.events.filter(
-          (candidate) => candidate.type === 'annotation' && candidate.label === 'live-backend-work',
-        )) {
-          if (
-            event.type !== 'annotation' ||
-            event.label !== 'live-backend-work' ||
-            typeof event.data?.backendSessionId !== 'string'
-          )
-            continue
-          const backendSession = await app.sessions.get(event.data.backendSessionId)
+        const backendSessionIds = this.session.events.flatMap((event) =>
+          event.type === 'annotation' &&
+          event.label === 'live-backend-work' &&
+          typeof event.data?.backendSessionId === 'string'
+            ? [event.data.backendSessionId]
+            : [],
+        )
+        for (const backendSessionId of backendSessionIds) {
+          const backendSession = await app.sessions.get(backendSessionId)
           for (const usage of backendSession?.events ?? []) {
             if (usage.type === 'model_end') await sessionService.appendEvent(this.session, usage)
           }
@@ -482,10 +506,10 @@ class LiveVoiceCaseRun<S extends StateSchema> {
       voiceEvents: [],
       transcript,
       liveTranscript,
+      callerHeard: this.callerHeard,
       timing: (this.recorder?.tracker ?? this.tracker).finalize(),
       recording: { path: this.recordingPath },
       usage,
-      usageScope: 'backend',
       liveUsage: summarizeLiveEvalUsage({
         backend: usage,
         call: this.callUsage,

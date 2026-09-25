@@ -13,10 +13,10 @@ export interface GPTLiveSession extends GPTLiveTranscriptSource {
   appendThinking(text: string, options: { delegationId?: string }): unknown
   appendCommentary(text: string, options: { delegationId?: string }): unknown
   appendInstructions(text: string, options: { delegationId?: string }): unknown
-  on(
-    event: 'openai_server_event_received' | 'openai_client_event_queued',
-    listener: (event: unknown) => void,
-  ): unknown
+  /** Replace caller audio with silence until `unmuteInput`. */
+  muteInput(): void
+  unmuteInput(): void
+  on(event: 'openai_server_event_received', listener: (event: unknown) => void): unknown
   on(event: 'delegation_created', listener: (event: { id: string }) => void): unknown
 }
 

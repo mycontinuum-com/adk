@@ -22,7 +22,7 @@ export function voiceEvidence(run: VoiceRunResult) {
     sessionId: run.session.id,
     sessionEvents: run.session.events.map(serializeEvent),
     ...(run.liveTranscript === undefined ? {} : { liveTranscript: run.liveTranscript }),
-    ...(run.usageScope === undefined ? {} : { usageScope: run.usageScope }),
+    ...(run.callerHeard === undefined ? {} : { callerHeard: run.callerHeard }),
     ...(run.liveUsage === undefined ? {} : { liveUsage: run.liveUsage }),
     events: run.events.map(serializeEvent),
     voiceEvents: run.voiceEvents.map(omitUndefinedProperties),

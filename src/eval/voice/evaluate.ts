@@ -5,7 +5,6 @@ import type { Event } from '../../types/events'
 import type { StateSchema } from '../../types/schema'
 import type { Session } from '../../types/session'
 import type { LiveVoiceAppContext } from '../../voice/live-handler'
-import type { VoiceEvent } from '../../voice/types'
 import type { Metric, MetricResult } from '../metrics/types'
 import type { EvalStatus } from '../types'
 import type {
@@ -33,178 +32,21 @@ import {
   mergeMetrics,
   buildSummary,
   expandCaseRuns,
+  metricsStatus,
   type CaseRun,
 } from '../suite-runner'
 import { createCaseWriter } from './case-writer'
 import { isProcessWorker, getWorkerCaseIndex, sendWorkerResult, forkCase } from './process-pool'
 import { runVoiceCase } from './runner'
-import { isLiveEvalUsage, isUsageSummary } from './usage-validation'
+import { emptyTiming } from './speaker-tracker'
 
 type SerializedVoiceRun = Omit<VoiceRunResult, 'session'> & {
   sessionId: string
   sessionEvents: readonly Event[]
 }
 type SerializedVoiceResult = Omit<VoiceEvalCaseResult, 'run'> & { run: SerializedVoiceRun }
-const EVAL_STATUSES = new Set<EvalStatus>([
-  'passed',
-  'failed',
-  'error',
-  'terminated',
-  'aborted',
-  'timeout',
-])
-
-const VOICE_RUN_STATUSES = new Set<VoiceRunStatus>([
-  'completed',
-  'error',
-  'timeout',
-  'inactivity_timeout',
-  'max_duration',
-  'disconnected',
-  'participant_left',
-])
-
-const EVENT_TYPES = new Set<Event['type']>([
-  'system',
-  'user',
-  'assistant',
-  'thought',
-  'tool_call',
-  'tool_yield',
-  'tool_input',
-  'tool_result',
-  'state_change',
-  'invocation_start',
-  'invocation_end',
-  'invocation_yield',
-  'invocation_resume',
-  'model_start',
-  'model_end',
-  'artifact_update',
-  'annotation',
-])
 
 const WORKER_STAGGER_MS = 2_000
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value)
-}
-
-function isErrorDetails(value: unknown): value is { message: string; stack?: string } {
-  return (
-    isRecord(value) &&
-    typeof value.message === 'string' &&
-    (value.stack === undefined || typeof value.stack === 'string')
-  )
-}
-
-function isMetricResult(value: unknown): value is MetricResult {
-  return (
-    isRecord(value) &&
-    typeof value.passed === 'boolean' &&
-    (value.score === undefined || isFiniteNumber(value.score)) &&
-    (value.evidence === undefined ||
-      (Array.isArray(value.evidence) &&
-        value.evidence.every((entry) => typeof entry === 'string'))) &&
-    (value.data === undefined || isRecord(value.data))
-  )
-}
-
-function isMetricResults(value: unknown): value is Record<string, MetricResult> {
-  return isRecord(value) && Object.values(value).every(isMetricResult)
-}
-
-function isEvent(value: unknown): value is Event {
-  return (
-    isRecord(value) &&
-    typeof value.id === 'string' &&
-    typeof value.type === 'string' &&
-    EVENT_TYPES.has(value.type as Event['type']) &&
-    isFiniteNumber(value.createdAt)
-  )
-}
-
-function isVoiceEvent(value: unknown): value is VoiceEvent & { createdAt: number } {
-  return isRecord(value) && typeof value.type === 'string' && isFiniteNumber(value.createdAt)
-}
-
-function isTranscriptEntry(
-  value: unknown,
-): value is { role: 'assistant' | 'user'; text: string; turnIndex: number } {
-  return (
-    isRecord(value) &&
-    (value.role === 'assistant' || value.role === 'user') &&
-    typeof value.text === 'string' &&
-    isFiniteNumber(value.turnIndex) &&
-    (value.startMs === undefined || isFiniteNumber(value.startMs)) &&
-    (value.endMs === undefined || isFiniteNumber(value.endMs))
-  )
-}
-
-function isTimingEntry(value: unknown): value is { ms: number; afterTurnIndex: number } {
-  return (
-    isRecord(value) &&
-    isFiniteNumber(value.ms) &&
-    isFiniteNumber(value.afterTurnIndex) &&
-    (value.speaker === undefined || value.speaker === 'agent' || value.speaker === 'user')
-  )
-}
-
-function isVoiceTiming(value: unknown): value is VoiceRunResult['timing'] {
-  return (
-    isRecord(value) &&
-    (value.timeToFirstSpeechMs === undefined || isFiniteNumber(value.timeToFirstSpeechMs)) &&
-    Array.isArray(value.responseTimes) &&
-    value.responseTimes.every(isTimingEntry) &&
-    Array.isArray(value.silenceGaps) &&
-    value.silenceGaps.every(isTimingEntry) &&
-    isRecord(value.interruptions) &&
-    isFiniteNumber(value.interruptions.count) &&
-    isFiniteNumber(value.interruptions.byAgent) &&
-    isFiniteNumber(value.interruptions.byUser) &&
-    isFiniteNumber(value.vadResolutionMs)
-  )
-}
-
-function isSerializedVoiceResult(value: unknown): value is SerializedVoiceResult {
-  if (!isRecord(value) || !isRecord(value.run)) return false
-  const run = value.run
-  return (
-    typeof value.name === 'string' &&
-    typeof value.status === 'string' &&
-    EVAL_STATUSES.has(value.status as EvalStatus) &&
-    isMetricResults(value.metrics) &&
-    isFiniteNumber(value.durationMs) &&
-    (value.usage === undefined || isUsageSummary(value.usage)) &&
-    (value.error === undefined || isErrorDetails(value.error)) &&
-    (value.attempts === undefined || isFiniteNumber(value.attempts)) &&
-    (value.repeatIndex === undefined || isFiniteNumber(value.repeatIndex)) &&
-    (value.repeatTotal === undefined || isFiniteNumber(value.repeatTotal)) &&
-    typeof run.status === 'string' &&
-    VOICE_RUN_STATUSES.has(run.status as VoiceRunStatus) &&
-    isFiniteNumber(run.startedAtMs) &&
-    typeof run.sessionId === 'string' &&
-    Array.isArray(run.sessionEvents) &&
-    run.sessionEvents.every(isEvent) &&
-    Array.isArray(run.events) &&
-    run.events.every(isEvent) &&
-    Array.isArray(run.voiceEvents) &&
-    run.voiceEvents.every(isVoiceEvent) &&
-    Array.isArray(run.transcript) &&
-    run.transcript.every(isTranscriptEntry) &&
-    isVoiceTiming(run.timing) &&
-    isRecord(run.recording) &&
-    typeof run.recording.path === 'string' &&
-    (run.usage === undefined || isUsageSummary(run.usage)) &&
-    (run.liveUsage === undefined || isLiveEvalUsage(run.liveUsage)) &&
-    (run.error === undefined || isErrorDetails(run.error)) &&
-    isFiniteNumber(run.durationMs)
-  )
-}
 
 function mapVoiceStatus(
   runStatus: VoiceRunStatus,
@@ -216,13 +58,10 @@ function mapVoiceStatus(
     case 'timeout':
     case 'disconnected':
       return 'terminated'
-    case 'participant_left': {
-      const results = Object.values(metricResults)
-      if (results.length === 0) return 'terminated'
-      return results.every((r) => r.passed) ? 'passed' : 'failed'
-    }
+    case 'participant_left':
+      return Object.keys(metricResults).length === 0 ? 'terminated' : metricsStatus(metricResults)
     default:
-      return Object.values(metricResults).every((r) => r.passed) ? 'passed' : 'failed'
+      return metricsStatus(metricResults)
   }
 }
 
@@ -302,18 +141,36 @@ function caseRunDirName<S extends StateSchema>(
 function resolveRoomConfig<S extends StateSchema>(
   options: VoiceEvalOptions<S>,
 ): VoiceEvalOptions<S> & { room: VoiceRoomConfig } {
-  const url = options.room?.url ?? process.env.LIVEKIT_URL
+  const { room } = options
+  const url = room?.url ?? process.env.LIVEKIT_URL
   if (!url) {
     throw new Error(
       '[adk/voice-eval] LiveKit URL is required. Set LIVEKIT_URL or pass room.url in options.',
     )
   }
-  return { ...options, room: { ...options.room, url } }
+  return {
+    ...options,
+    room: {
+      url,
+      apiKey: room?.apiKey ?? process.env.LIVEKIT_API_KEY,
+      apiSecret: room?.apiSecret ?? process.env.LIVEKIT_API_SECRET,
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Worker mode — runs inside the forked child process
 // ---------------------------------------------------------------------------
+
+/**
+ * LiveKit's Realtime plugin writes the simulated caller's audio deltas without handling the write,
+ * so a caller reply aborted mid-stream (talked over, or closed) rejects with no reason. Any other
+ * unhandled rejection still fails the worker.
+ */
+function rethrowUnlessReasonless(reason: unknown): void {
+  if (reason === undefined) return
+  throw reason
+}
 
 async function runAsWorker<S extends StateSchema>(
   cases: VoiceEvalCase<S>[],
@@ -324,6 +181,8 @@ async function runAsWorker<S extends StateSchema>(
     if (err.code === 'EPIPE' || err.code === 'ERR_STREAM_DESTROYED') return
     throw err
   })
+
+  process.on('unhandledRejection', rethrowUnlessReasonless)
 
   process.on('uncaughtException', (err) => {
     if (err?.message?.includes('currentGeneration')) return
@@ -375,18 +234,9 @@ export function serializeWorkerResult<S extends StateSchema>(
   })
 }
 
-function hydrateWorkerResult<S extends StateSchema>(raw: unknown): VoiceEvalCaseResult<S> {
-  if (typeof raw !== 'string') {
-    throw new Error('Voice worker returned an invalid evaluation result')
-  }
-  let result: unknown
-  try {
-    result = JSON.parse(raw)
-  } catch {
-    throw new Error('Voice worker returned an invalid evaluation result')
-  }
-  if (!isSerializedVoiceResult(result))
-    throw new Error('Voice worker returned an invalid evaluation result')
+/** Rebuilds a worker's result. The worker is a fork of this script, so it is not re-validated. */
+function hydrateWorkerResult<S extends StateSchema>(raw: string): VoiceEvalCaseResult<S> {
+  const result: SerializedVoiceResult = JSON.parse(raw)
   const session = new BaseSession('eval', { id: result.run.sessionId })
   for (const event of result.run.sessionEvents) session.pushEvent(event)
   return {
@@ -412,12 +262,7 @@ function workerError<S extends StateSchema>(
       events: [],
       voiceEvents: [],
       transcript: [],
-      timing: {
-        responseTimes: [],
-        silenceGaps: [],
-        interruptions: { count: 0, byAgent: 0, byUser: 0 },
-        vadResolutionMs: 0,
-      },
+      timing: emptyTiming(),
       recording: { path: '' },
       error: { message },
       durationMs: 0,

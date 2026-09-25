@@ -12,6 +12,7 @@ export {
   eventSequenceMetric,
   timingMetric,
   codingDeltaMetric,
+  liveTranscriptTurns,
 } from './metrics'
 
 export type {
@@ -25,6 +26,12 @@ export type {
   CodingDelta,
   CodingDeltaMetric,
   CodingDeltaMetricConfig,
+  JudgeEvidence,
+  JudgeMetricConfig,
+  JudgeMetricData,
+  JudgeTurn,
+  JudgeVerdict,
+  LiveTranscriptTurn,
 } from './metrics'
 export type { StateMetricConfig } from './metrics/state'
 export type {
@@ -86,5 +93,3 @@ export type {
 } from './voice'
 
 export type { AnyEvalCase, AnyEvalCaseResult, MixedEvalOptions, MixedEvalResult } from './types'
-export { runVoiceProbe, disposeVoiceProbeRuntime } from './voice'
-export type { VoiceProbeOptions, VoiceProbeResult } from './voice'

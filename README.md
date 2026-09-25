@@ -107,6 +107,8 @@ See [the mixed voice example](examples/voice-eval.ts).
 
 For native voice with ADK backend tools, [GPT Live voice handler](docs/gpt-live.md) documents `openai.live(...)` with `app.handler.voice(...)`, typed result hooks, and transcript persistence.
 
+For speech that has no structural signal, [the judge metric](docs/judge-metric.md) documents `app.evaluate.judge(...)`, an LLM-judge metric for text and voice cases, and when to use a state or event metric instead.
+
 ## Execution completion and persistence
 
 `app.run()` starts execution immediately. Awaiting it returns its outcome; a run deadline or

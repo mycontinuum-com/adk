@@ -12,11 +12,13 @@ import type {
   TransformUserMessagesOptions,
 } from '../context/prompt'
 import type { ErrorHandler } from '../errors/types'
+import type { AskOutcome, JudgeMetricConfig } from '../eval/metrics/judge'
 import type { Metric, MetricRun } from '../eval/metrics/types'
 import type { EvalDispatchOptions } from '../eval/mixed'
 import type { ReportOptions } from '../eval/report'
 import type {
   AnyEvalCase,
+  AnyEvalCaseResult,
   BaseEvalResult,
   EvalCase,
   EvalOptions,
@@ -31,6 +33,7 @@ import type {
   VoiceEvalCaseFactory,
   VoiceEvalOptions,
   VoiceEvalResult,
+  VoiceRunResult,
 } from '../eval/voice/types'
 import type { HandlerInput, HandlerConfig } from '../handler/types'
 import type { Hook } from '../hook/types'
@@ -44,6 +47,7 @@ import type {
 import type { SessionOptions } from '../session'
 import type { StateChanges } from '../session/seedState'
 import type { TerminalConfig, TerminalHandle } from '../terminal/types'
+import type { ModelUsage } from '../types/events'
 import type {
   Agent,
   LiveAgent,
@@ -64,7 +68,7 @@ import type {
   ModelConfig,
   AdapterRegistry,
 } from '../types/runnables'
-import type { RunConfig, RunResult, StreamResult, TurnResult } from '../types/runtime'
+import type { RunConfig, RunResult, StreamResult, TurnResult, UsageSummary } from '../types/runtime'
 import type { ErasedStateSchema, StateSchema } from '../types/schema'
 import type { Session, Input, SessionStore, Sessions } from '../types/session'
 import type { AnyZodSchema, ZodSchema } from '../types/zod'
@@ -102,8 +106,9 @@ import {
   message,
   transformUserMessages,
 } from '../context/prompt'
-import { BaseRunner } from '../core/runner'
+import { BaseRunner, summarizeModelUsage } from '../core/runner'
 import { OutputParseError } from '../errors/types'
+import { createJudgeMetric } from '../eval/metrics/judge'
 import { evaluate as runEval } from '../eval/mixed'
 import { generateReport } from '../eval/report'
 import { createVoiceEvalCase } from '../eval/voice/control'
@@ -114,6 +119,7 @@ import { consoleHook, type ConsoleHookOptions } from '../hook/console'
 import { loggingHook, type LoggingHookOptions } from '../hook/logging'
 import { metricsHook, type MetricsHookOptions } from '../hook/metrics'
 import { createMCPManager } from '../mcp/manager'
+import { loadPricing, RESULT_PRICING_WAIT_MS } from '../providers/pricing'
 import { runSimulateLoop, type SimulateOptions } from '../run/simulate'
 import { runTestLoop, type TestOptions } from '../run/test'
 import { session as createSession, BaseSession, seedState } from '../session'
@@ -434,9 +440,16 @@ export interface AdkApp<S extends StateSchema> {
       report(options?: ReportOptions<S, VoiceEvalResult<S>>): (result: VoiceEvalResult<S>) => string
     }
     metric(config: Metric<MetricRun<S>>): Metric<MetricRun<S>>
+    /**
+     * An LLM-judge metric for text and voice cases. One model call per run returns a verdict and a
+     * one-sentence reason for each criterion. A failed or malformed call makes the case `error`.
+     */
+    judge(config: JudgeMetricConfig): Metric<MetricRun<S> | VoiceRunResult<S>>
     case(config: EvalCase<S>): EvalCase<S>
     cases<C extends AnyEvalCase<S>>(config: C[]): C[]
-    report<R extends BaseEvalResult>(options?: ReportOptions<S, R>): (result: R) => string
+    report<R extends BaseEvalResult<AnyEvalCaseResult<S>>>(
+      options?: ReportOptions<S, R>,
+    ): (result: R) => string
   }
   initialState(config: StateChanges<S>): StateChanges<S>
 
@@ -445,6 +458,14 @@ export interface AdkApp<S extends StateSchema> {
   terminal(runnable: Runnable<S>, config: TerminalConfig): TerminalHandle
 
   close(): Promise<void>
+}
+
+function modelCalls(session: Session): (ModelUsage | undefined)[] {
+  return session.events.flatMap((event) => (event.type === 'model_end' ? [event.usage] : []))
+}
+
+async function priced(calls: (ModelUsage | undefined)[]): Promise<UsageSummary | undefined> {
+  return summarizeModelUsage(calls, await loadPricing({ maxWaitMs: RESULT_PRICING_WAIT_MS }))
 }
 
 /**
@@ -681,6 +702,79 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
       hooks: agentConfig.hooks ?? appHooks,
       errorHandlers: agentConfig.errorHandlers ?? appErrorHandlers,
     })
+  }
+
+  /**
+   * `app.ask` with the usage it spent, summed over every attempt, parse retries included. A failed
+   * call reports its usage too. The runner records a call that failed or was aborted as a call
+   * without usage, so its cost reads as unavailable, never as free.
+   */
+  async function askWithUsage<T = string>(
+    prompt: string,
+    opts?: AskOpts<T>,
+  ): Promise<AskOutcome<T>> {
+    // Resolve model: opts.model ?? app.defaultModel; error if neither is set
+    const resolvedModel = opts?.model ?? appDefaultModel
+    if (!resolvedModel) {
+      throw new Error(
+        '[adk] app.ask: no model configured. Pass opts.model or set defaultModel in adk({ defaultModel }).',
+      )
+    }
+
+    // Build the context array: [system(opts.system), history()] when system is set, else [history()]
+    const contextRenderers = opts?.system
+      ? [injectSystemMessage<S>(opts.system), includeHistory<S>()]
+      : [includeHistory<S>()]
+
+    // Build an ephemeral no-tools agent — NO tools, NO handlers
+    const ephemeralAgent = createAgent<S, T>({
+      name: 'ask-ephemeral',
+      model: resolvedModel,
+      context: contextRenderers,
+      tools: [],
+      output: opts?.schema ? ({ schema: opts.schema } as OutputConfig<S, T>) : undefined,
+    })
+
+    // Retry budget: opts.retries ?? (opts.schema ? 2 : 0)
+    const budget = opts?.retries ?? (opts?.schema ? 2 : 0)
+    const spent: (ModelUsage | undefined)[] = []
+
+    for (let attempt = 0; attempt <= budget; attempt++) {
+      // Each attempt runs on a FRESH BaseSession, kept so a failed attempt's usage can be counted
+      const session = new BaseSession(appName)
+      try {
+        const stream = executeRun(ephemeralAgent as unknown as Runnable<S>, {
+          input: prompt,
+          session,
+        })
+
+        // Thread the abort signal into the inner stream
+        if (opts?.signal) {
+          if (opts.signal.aborted) {
+            stream.abort()
+          } else {
+            opts.signal.addEventListener('abort', () => stream.abort(), { once: true })
+          }
+        }
+
+        const result = await stream
+        const value = (opts?.schema ? result.output.value : (result.output.text ?? '')) as T
+        if (!spent.length) return { ok: true, value, usage: result.usage }
+        return { ok: true, value, usage: await priced([...spent, ...modelCalls(session)]) }
+      } catch (e) {
+        // Only OutputParseError is retried; provider/transport errors surface immediately.
+        // We check both instanceof (direct throw path) and e.name === 'OutputParseError'
+        // (channel-deserialized path where the class is reconstructed as a plain Error).
+        const isParseError =
+          e instanceof OutputParseError || (e instanceof Error && e.name === 'OutputParseError')
+        spent.push(...modelCalls(session))
+        if (isParseError && attempt < budget) continue
+        return { ok: false, error: e, usage: await priced(spent) }
+      }
+    }
+
+    // Unreachable but TypeScript requires a return/throw here
+    throw new Error('[adk] app.ask: unexpected end of retry loop')
   }
 
   const app: AdkApp<S> = {
@@ -922,65 +1016,9 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
     },
 
     async ask<T = string>(prompt: string, opts?: AskOpts<T>): Promise<T> {
-      // Resolve model: opts.model ?? app.defaultModel; error if neither is set
-      const resolvedModel = opts?.model ?? appDefaultModel
-      if (!resolvedModel) {
-        throw new Error(
-          '[adk] app.ask: no model configured. Pass opts.model or set defaultModel in adk({ defaultModel }).',
-        )
-      }
-
-      // Build the context array: [system(opts.system), history()] when system is set, else [history()]
-      const contextRenderers = opts?.system
-        ? [injectSystemMessage<S>(opts.system), includeHistory<S>()]
-        : [includeHistory<S>()]
-
-      // Build an ephemeral no-tools agent — NO tools, NO handlers
-      const ephemeralAgent = createAgent<S, T>({
-        name: 'ask-ephemeral',
-        model: resolvedModel,
-        context: contextRenderers,
-        tools: [],
-        output: opts?.schema ? ({ schema: opts.schema } as OutputConfig<S, T>) : undefined,
-      })
-
-      // Retry budget: opts.retries ?? (opts.schema ? 2 : 0)
-      const budget = opts?.retries ?? (opts?.schema ? 2 : 0)
-
-      for (let attempt = 0; attempt <= budget; attempt++) {
-        try {
-          // Run on a FRESH BaseSession (no session passed → executeRun creates one via new BaseSession)
-          const stream = executeRun(ephemeralAgent as unknown as Runnable<S>, { input: prompt })
-
-          // Thread the abort signal into the inner stream
-          if (opts?.signal) {
-            if (opts.signal.aborted) {
-              stream.abort()
-            } else {
-              opts.signal.addEventListener('abort', () => stream.abort(), { once: true })
-            }
-          }
-
-          const result = await stream
-          if (opts?.schema) {
-            return result.output.value as T
-          }
-          return (result.output.text ?? '') as T
-        } catch (e) {
-          // Only OutputParseError is retried; provider/transport errors surface immediately.
-          // We check both instanceof (direct throw path) and e.name === 'OutputParseError'
-          // (channel-deserialized path where the class is reconstructed as a plain Error).
-          const isParseError =
-            e instanceof OutputParseError || (e instanceof Error && e.name === 'OutputParseError')
-          if (isParseError && attempt < budget) {
-            continue
-          }
-          throw e
-        }
-      }
-
-      // Unreachable but TypeScript requires a return/throw here
-      throw new Error('[adk] app.ask: unexpected end of retry loop')
+      const outcome = await askWithUsage(prompt, opts)
+      if (!outcome.ok) throw outcome.error
+      return outcome.value
     },
 
     test(runnable: Runnable<S>, options: TestOptions): Promise<RunResult<S>> {
@@ -1024,10 +1062,11 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
         },
       ),
       metric: (metric: Metric<MetricRun<S>>) => metric,
+      judge: (judgeConfig: JudgeMetricConfig) => createJudgeMetric<S>(judgeConfig, askWithUsage),
       case: (evalCase: EvalCase<S>) => evalCase,
       cases: <C extends AnyEvalCase<S>>(evalCases: C[]) => evalCases,
       report:
-        <R extends BaseEvalResult>(options?: ReportOptions<S, R>) =>
+        <R extends BaseEvalResult<AnyEvalCaseResult<S>>>(options?: ReportOptions<S, R>) =>
         (result: R): string =>
           generateReport(result, options),
     }),

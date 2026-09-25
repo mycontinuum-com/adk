@@ -1,15 +1,13 @@
 import type { CostAccount } from '../types/runtime'
 import type { StateSchema } from '../types/schema'
-import type { BaseEvalCaseResult, BaseEvalResult, EvalResult } from './types'
-import type { EvalStatus } from './types'
+import type { AnyEvalCaseResult, BaseEvalCaseResult, BaseEvalResult, EvalResult } from './types'
 import type { LiveVoiceEvalUsage } from './voice/types'
 
 import { formatCost, formatCostAccount, sumCosts, usageCost } from '../providers/pricing'
-import { isLiveEvalUsage } from './voice/usage-validation'
 
 export interface ReportOptions<
   S extends StateSchema = StateSchema,
-  R extends BaseEvalResult = EvalResult<S>,
+  R extends BaseEvalResult<AnyEvalCaseResult<S>> = EvalResult<S>,
 > {
   title?: string
   footer?: string | ((result: R) => string)
@@ -22,7 +20,7 @@ export interface ReportOptions<
 
 export function generateReport<
   S extends StateSchema = StateSchema,
-  R extends BaseEvalResult = EvalResult<S>,
+  R extends BaseEvalResult<AnyEvalCaseResult<S>> = EvalResult<S>,
 >(result: R, options?: ReportOptions<S, R>): string {
   const title = options?.title ?? 'Eval Report'
   const lines: string[] = []
@@ -76,7 +74,7 @@ export function generateReport<
     .trimEnd()
 }
 
-function formatSummary(result: BaseEvalResult, lines: string[]): void {
+function formatSummary(result: BaseEvalResult<AnyEvalCaseResult>, lines: string[]): void {
   const { summary, durationMs } = result
   const passRate = summary.total > 0 ? ((summary.passed / summary.total) * 100).toFixed(3) : '0.000'
 
@@ -101,6 +99,11 @@ function formatSummary(result: BaseEvalResult, lines: string[]): void {
       totalOutput += u.totalOutputTokens
       if (u.cost) totalCost += u.cost.totalCost
     }
+    for (const usage of metricUsage(r)) {
+      hasUsage = true
+      totalInput += usage.totalInputTokens
+      totalOutput += usage.totalOutputTokens
+    }
   }
 
   if (hasUsage) {
@@ -109,51 +112,107 @@ function formatSummary(result: BaseEvalResult, lines: string[]): void {
     )
   }
 
-  const live = result.results.flatMap((r) => {
-    const usage = liveUsageOf(r)
-    return usage ? [usage] : []
-  })
-  if (live.length) {
-    const others = result.results.filter((r) => !liveUsageOf(r))
-    const components: Array<[string, CostAccount]> = [
-      ['backend', sumCosts(live.map((usage) => usage.backend.cost))],
-      ['voice', sumCosts(live.map((usage) => usage.voice.cost))],
-      ['caller', sumCosts(live.map((usage) => usage.caller.cost))],
-    ]
-    if (others.length) components.push(['other cases', sumCosts(others.map(caseCost))])
-    const total = sumCosts(components.map(([, cost]) => cost))
-    let partial = ''
-    if (total.basis === 'unavailable') {
-      const caseTotals = [...live.map((usage) => usage.total), ...others.map(caseCost)]
-      let known = 0
-      let knownCases = 0
-      for (const cost of caseTotals) {
-        if (cost.basis === 'unavailable') continue
-        known += cost.totalCost
-        knownCases++
-      }
-      partial = ` (${formatCost(known)} known across ${knownCases} of ${caseTotals.length} cases)`
-    }
-    lines.push(
-      `**Cost:** ${formatCostAccount(total)}${partial} — ${components.map(([name, cost]) => `${name} ${formatCostAccount(cost)}`).join(', ')}`,
-    )
+  const cost = suiteCost(result.results)
+  if (cost.backend || cost.judge) {
+    const partial = cost.known
+      ? ` (${formatCost(cost.known.totalCost)} known across ${cost.known.caseCount} of ${result.results.length} cases)`
+      : ''
+    const components = COST_COMPONENTS.flatMap(([key, label]) => {
+      const account = cost[key]
+      return account ? [`${label} ${formatCostAccount(account)}`] : []
+    })
+    lines.push(`**Cost:** ${formatCostAccount(cost.total)}${partial} — ${components.join(', ')}`)
   } else if (hasUsage && totalCost > 0) {
     lines.push(`**Cost:** $${totalCost.toFixed(2)}`)
   }
 }
 
-function liveUsageOf(result: BaseEvalCaseResult): LiveVoiceEvalUsage | undefined {
-  if (!('run' in result) || typeof result.run !== 'object' || result.run === null) return undefined
-  if (!('liveUsage' in result.run)) return undefined
-  return isLiveEvalUsage(result.run.liveUsage) ? result.run.liveUsage : undefined
+/** What a suite spent, as `result.json` records it under `cost` and `report.md` prints it. */
+export interface SuiteCost {
+  /** Every case's own spend plus its judge spend. */
+  total: CostAccount
+  /** Set when `total` is unavailable: the sum over the cases whose whole cost is known. */
+  known?: { totalCost: number; caseCount: number }
+  /** GPT Live cases' backend, voice and simulated caller spend. */
+  backend?: CostAccount
+  voice?: CostAccount
+  caller?: CostAccount
+  /** With GPT Live cases: the other cases' own spend. */
+  otherCases?: CostAccount
+  /** Without GPT Live cases: every case's own spend. */
+  cases?: CostAccount
+  /** Model calls the cases' metrics made, such as judge calls. Set when a metric reported usage. */
+  judge?: CostAccount
 }
 
-/** Statuses whose run can stop with a model call in flight, so recorded usage may be partial. */
-const INTERRUPTED: ReadonlySet<EvalStatus> = new Set(['error', 'timeout', 'aborted'])
+const COST_COMPONENTS = [
+  ['backend', 'backend'],
+  ['voice', 'voice'],
+  ['caller', 'caller'],
+  ['otherCases', 'other cases'],
+  ['cases', 'cases'],
+  ['judge', 'judge'],
+] as const satisfies ReadonlyArray<readonly [keyof SuiteCost, string]>
 
-/** Cost of a non-Live case. An interrupted run's usage may omit a billed call. */
+export function suiteCost(results: readonly AnyEvalCaseResult[]): SuiteCost {
+  const live = results.flatMap((r) => {
+    const usage = liveUsageOf(r)
+    return usage ? [usage] : []
+  })
+  const others = results.filter((r) => !liveUsageOf(r))
+  const judged = results.flatMap((r) => {
+    const cost = caseJudgeCost(r)
+    return cost ? [cost] : []
+  })
+  const caseTotals = results.map((r) =>
+    sumCosts([liveUsageOf(r)?.total ?? caseCost(r), caseJudgeCost(r) ?? FREE]),
+  )
+  const total = sumCosts(caseTotals)
+  const known = caseTotals.flatMap((cost) => (cost.basis === 'unavailable' ? [] : [cost.totalCost]))
+  return {
+    total,
+    ...(total.basis === 'unavailable' && {
+      known: { totalCost: known.reduce((sum, cost) => sum + cost, 0), caseCount: known.length },
+    }),
+    ...(live.length
+      ? {
+          backend: sumCosts(live.map((usage) => usage.backend.cost)),
+          voice: sumCosts(live.map((usage) => usage.voice.cost)),
+          caller: sumCosts(live.map((usage) => usage.caller.cost)),
+          ...(others.length > 0 && { otherCases: sumCosts(others.map(caseCost)) }),
+        }
+      : { cases: sumCosts(results.map(caseCost)) }),
+    ...(judged.length > 0 && { judge: sumCosts(judged) }),
+  }
+}
+
+const FREE: CostAccount = { basis: 'reported', totalCost: 0, currency: 'USD' }
+
+function metricUsage(result: BaseEvalCaseResult) {
+  return Object.values(result.metrics).flatMap((metric) => (metric.usage ? [metric.usage] : []))
+}
+
+/**
+ * Cost the case's metrics spent, such as judge calls, or `undefined` when no metric reported usage.
+ * A judge call that failed reports its usage too, so a metric error does not hide this figure.
+ */
+export function caseJudgeCost(result: BaseEvalCaseResult): CostAccount | undefined {
+  const usage = metricUsage(result)
+  return usage.length ? sumCosts(usage.map(usageCost)) : undefined
+}
+
+function liveUsageOf(result: AnyEvalCaseResult): LiveVoiceEvalUsage | undefined {
+  return 'liveUsage' in result.run ? result.run.liveUsage : undefined
+}
+
+/**
+ * Cost of a non-Live case's own run. A run that errored, timed out or was aborted may have stopped
+ * with a billed model call unrecorded. A metric error leaves the run's recorded usage complete.
+ */
 function caseCost(result: BaseEvalCaseResult): CostAccount {
-  return INTERRUPTED.has(result.status) ? { basis: 'unavailable' } : usageCost(result.usage)
+  const interrupted =
+    result.error !== undefined || result.status === 'timeout' || result.status === 'aborted'
+  return interrupted ? { basis: 'unavailable' } : usageCost(result.usage)
 }
 
 function formatMetrics(result: BaseEvalResult, lines: string[]): void {

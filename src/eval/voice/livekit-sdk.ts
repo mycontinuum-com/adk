@@ -2,36 +2,23 @@
 
 let lkLoggerInitialized = false
 
+function load(name: string): any {
+  try {
+    return require(name)
+  } catch {
+    throw new Error(`[adk/voice-eval] ${name} is required. Install with: npm install ${name}`)
+  }
+}
+
 /**
  * Loads the LiveKit server SDK, agents framework and RTC bindings that voice evals need.
  *
  * @throws When a package is missing, with the install command in the message.
  */
 export function requireLiveKit() {
-  let serverSdk: any
-  let lk: any
-  let rtc: any
-  try {
-    serverSdk = require('livekit-server-sdk')
-  } catch {
-    throw new Error(
-      '[adk/voice-eval] livekit-server-sdk is required. Install with: npm install livekit-server-sdk',
-    )
-  }
-  try {
-    lk = require('@livekit/agents')
-  } catch {
-    throw new Error(
-      '[adk/voice-eval] @livekit/agents is required. Install with: npm install @livekit/agents',
-    )
-  }
-  try {
-    rtc = require('@livekit/rtc-node')
-  } catch {
-    throw new Error(
-      '[adk/voice-eval] @livekit/rtc-node is required. Install with: npm install @livekit/rtc-node',
-    )
-  }
+  const serverSdk = load('livekit-server-sdk')
+  const lk = load('@livekit/agents')
+  const rtc = load('@livekit/rtc-node')
   if (!lkLoggerInitialized) {
     try {
       lk.initializeLogger({ pretty: false, level: 'error' })

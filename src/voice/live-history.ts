@@ -15,34 +15,26 @@ export function transcriptMessages(
   snapshot: GPTLiveTranscriptSnapshot,
   agentName: string,
 ): Array<UserEvent | AssistantEvent> {
-  return [...snapshot.fragments]
-    .sort((a, b) => a.sequence - b.sequence)
-    .map((fragment) => ({
-      id: `${snapshot.callId}/transcript/${fragment.sequence}`,
-      type: fragment.speaker === 'caller' ? 'user' : 'assistant',
-      text: fragment.text,
-      createdAt: fragment.receivedAt,
-      invocationId: '',
-      agentName,
-      source: 'transcript',
-      transcriptFragment: {
-        connection: fragment.connection,
-        sequence: fragment.sequence,
-        startMs: fragment.startMs,
-        endMs: fragment.endMs,
-      },
-    }))
-}
-
-function backendHistory(events: readonly Event[]): Event[] {
-  return events.filter((event) => backendEventTypes.has(event.type))
+  return snapshot.fragments.map((fragment) => ({
+    id: `${snapshot.callId}/transcript/${fragment.sequence}`,
+    type: fragment.speaker === 'caller' ? 'user' : 'assistant',
+    text: fragment.text,
+    createdAt: fragment.receivedAt,
+    invocationId: '',
+    agentName,
+    source: 'transcript',
+    transcriptFragment: {
+      connection: fragment.connection,
+      sequence: fragment.sequence,
+      startMs: fragment.startMs,
+      endMs: fragment.endMs,
+    },
+  }))
 }
 
 /**
  * Builds a delegation's backend history. Each earlier batch of backend work is placed after the
  * transcript fragments at its receipt boundary, followed by the fragments that arrived later.
- *
- * @throws When a recorded boundary is invalid or later than `snapshot`.
  */
 export function liveHistory(
   events: readonly Event[],
@@ -52,18 +44,9 @@ export function liveHistory(
   const messages = transcriptMessages(snapshot, agentName)
   const history: Event[] = []
   let index = 0
-  let previousThrough = 0
   for (const event of events) {
     if (event.type === 'annotation' && event.label === 'live-backend-work') {
-      const through = event.data?.transcriptThrough
-      if (
-        typeof through !== 'number' ||
-        !Number.isInteger(through) ||
-        through < previousThrough ||
-        through > snapshot.receivedThrough
-      )
-        throw new Error('Invalid Live backend transcript boundary')
-      previousThrough = through
+      const through = event.data?.transcriptThrough as number
       while (index < messages.length && messages[index]!.transcriptFragment!.sequence <= through)
         history.push(messages[index++]!)
     } else if (backendEventTypes.has(event.type)) history.push(event)
@@ -92,10 +75,11 @@ export function completedBackendWork(events: readonly Event[]): {
       .map((call) => JSON.stringify([call.invocationId, call.callId])),
   )
   return {
-    events: backendHistory(events).filter(
+    events: events.filter(
       (event) =>
-        (event.type !== 'tool_call' && event.type !== 'tool_result') ||
-        paired.has(JSON.stringify([event.invocationId, event.callId])),
+        backendEventTypes.has(event.type) &&
+        ((event.type !== 'tool_call' && event.type !== 'tool_result') ||
+          paired.has(JSON.stringify([event.invocationId, event.callId]))),
     ),
     unresolved: calls
       .filter((call) => !paired.has(JSON.stringify([call.invocationId, call.callId])))

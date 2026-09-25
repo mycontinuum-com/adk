@@ -13,6 +13,7 @@ function controls(messages: string[]): LiveVoiceControls {
     appendThinking: (text) => messages.push(`thinking:${text}`),
     appendCommentary: (text) => messages.push(`commentary:${text}`),
     appendInstructions: (text) => messages.push(`instructions:${text}`),
+    turnCount: 0,
   }
 }
 

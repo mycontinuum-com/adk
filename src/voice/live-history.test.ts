@@ -2,11 +2,12 @@ import { EventEmitter } from 'node:events'
 
 import type { Event } from '../types/events'
 
-import { openGPTLiveTranscript } from './gpt-live-transcript'
+import { InMemoryStore } from '../session/memory'
+import { createGPTLiveTranscript } from './gpt-live-transcript'
 import { completedBackendWork, liveHistory, transcriptMessages } from './live-history'
 
 test('projects receipt order with stable identity instead of inventing turn order', async () => {
-  const recorder = await openGPTLiveTranscript({ callId: 'call' })
+  const recorder = await createGPTLiveTranscript(new InMemoryStore(), 'call', () => {})
   const source = Object.assign(new EventEmitter(), { sessionId: 'connection' })
   recorder.attach(source)
   const fragment = (id: string, text: string, start: number, end: number) => {
@@ -77,7 +78,7 @@ test('carries completed tool pairs and lineage without backend prose or orphan c
 })
 
 test('restores receipt-anchored work in stable blocks across equal boundaries and reconnects', async () => {
-  const recorder = await openGPTLiveTranscript({ callId: 'call' })
+  const recorder = await createGPTLiveTranscript(new InMemoryStore(), 'call', () => {})
   const source = Object.assign(new EventEmitter(), { sessionId: 'connection' })
   recorder.attach(source)
   const fragment = (text: string) =>
@@ -101,7 +102,7 @@ test('restores receipt-anchored work in stable blocks across equal boundaries an
       type: 'annotation',
       kind: 'mark',
       label: 'live-backend-work',
-      data: { transcriptThrough: first.receivedThrough, receiptThroughAtCompletion: 99 },
+      data: { transcriptThrough: first.receivedThrough },
     },
     { ...base, id: 'note', type: 'system', text: 'Unresolved submit; do not retry.' },
     ...work.events,
@@ -111,7 +112,7 @@ test('restores receipt-anchored work in stable blocks across equal boundaries an
       type: 'annotation',
       kind: 'mark',
       label: 'live-backend-work',
-      data: { transcriptThrough: first.receivedThrough, receiptThroughAtCompletion: 100 },
+      data: { transcriptThrough: first.receivedThrough },
     },
     { ...base, id: 'second-note', type: 'system', text: 'Second batch.' },
   ]
