@@ -54,10 +54,7 @@ export async function createVoiceEvalCaller({
   const rendered = await buildContextAsync(session, agent, randomUUID())
   const caller = createLiveKitAgent(
     agent,
-    rendered.events
-      .filter(isSystemEvent)
-      .map((event) => event.text)
-      .join('\n'),
+    rendered.events.flatMap((event) => (isSystemEvent(event) ? [event.text] : [])).join('\n'),
     {},
     session,
     createLiveKitModel(agent.model),

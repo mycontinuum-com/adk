@@ -5,7 +5,7 @@ import type { Runnable } from '../../types/runnables'
 import type { RunResult } from '../../types/runtime'
 import type { TerminalOptions, TerminalStatus } from '../types'
 
-import { BaseRunner } from '../../core'
+import { BaseRunner } from '../../core/runner'
 import { BaseSession } from '../../session'
 import { useOnTick } from '../components/SpinnerContext'
 
@@ -38,6 +38,7 @@ export interface UseAgentConfig {
   runner?: BaseRunner
   session?: BaseSession
   options?: TerminalOptions
+  onResult?: (result: RunResult) => void
 }
 
 const DELTA_TYPES = new Set(['thought_delta', 'assistant_delta'])
@@ -93,7 +94,7 @@ function applyRunResult(
 }
 
 export function useAgent(runnable: Runnable, config: UseAgentConfig = {}): UseAgentReturn {
-  const { runner: externalRunner, session: externalSession, options = {} } = config
+  const { runner: externalRunner, session: externalSession, options = {}, onResult } = config
 
   const [state, setState] = useState<UseAgentState>({
     status: 'idle',
@@ -214,6 +215,8 @@ export function useAgent(runnable: Runnable, config: UseAgentConfig = {}): UseAg
         })
         flushEvents()
         applyRunResult(result, setState)
+        if (result.status !== 'yielded_tool' && result.status !== 'yielded_message')
+          onResult?.(result)
       } catch (err) {
         flushEvents()
         setState((prev) => ({
@@ -224,7 +227,7 @@ export function useAgent(runnable: Runnable, config: UseAgentConfig = {}): UseAg
         }))
       }
     },
-    [runnable, handleStreamEvent, flushEvents],
+    [runnable, handleStreamEvent, flushEvents, onResult],
   )
 
   const resume = useCallback(
@@ -260,6 +263,8 @@ export function useAgent(runnable: Runnable, config: UseAgentConfig = {}): UseAg
         })
         flushEvents()
         applyRunResult(result, setState)
+        if (result.status !== 'yielded_tool' && result.status !== 'yielded_message')
+          onResult?.(result)
       } catch (err) {
         flushEvents()
         setState((prev) => ({
@@ -270,7 +275,7 @@ export function useAgent(runnable: Runnable, config: UseAgentConfig = {}): UseAg
         }))
       }
     },
-    [runnable, handleStreamEvent, flushEvents],
+    [runnable, handleStreamEvent, flushEvents, onResult],
   )
 
   const resumeWithInput = useCallback(
@@ -303,6 +308,8 @@ export function useAgent(runnable: Runnable, config: UseAgentConfig = {}): UseAg
         })
         flushEvents()
         applyRunResult(result, setState)
+        if (result.status !== 'yielded_tool' && result.status !== 'yielded_message')
+          onResult?.(result)
       } catch (err) {
         flushEvents()
         setState((prev) => ({
@@ -313,7 +320,7 @@ export function useAgent(runnable: Runnable, config: UseAgentConfig = {}): UseAg
         }))
       }
     },
-    [runnable, handleStreamEvent, flushEvents, state.yieldedInvocationId],
+    [runnable, handleStreamEvent, flushEvents, onResult, state.yieldedInvocationId],
   )
 
   const reset = useCallback(() => {

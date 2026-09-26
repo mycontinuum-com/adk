@@ -341,8 +341,7 @@ export async function runVoiceCase<S extends StateSchema>(
     const invocationId = `inv_voice_eval_${createEventId()}`
     const renderCtx = await buildContextAsync(session as Session, agent, invocationId)
     const instructions = renderCtx.events
-      .filter(isSystemEvent)
-      .map((e) => e.text)
+      .flatMap((e) => (isSystemEvent(e) ? [e.text] : []))
       .join('\n')
 
     const lkModel = createLiveKitModel(agent.model as RealtimeModelConfig)
@@ -513,6 +512,7 @@ export async function runVoiceCase<S extends StateSchema>(
             }
             for (const fn of onEnterFns) {
               try {
+                // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onEnter hooks run in registration order, matching the voice runtime
                 await fn(hookCtx)
               } catch (err) {
                 console.warn('[adk/voice-eval] onEnter hook error:', err)
@@ -537,8 +537,7 @@ export async function runVoiceCase<S extends StateSchema>(
       `inv_voice_eval_user_${createEventId()}`,
     )
     const userInstructions = userRenderCtx.events
-      .filter(isSystemEvent)
-      .map((e) => e.text)
+      .flatMap((e) => (isSystemEvent(e) ? [e.text] : []))
       .join('\n')
     const userLkModel = createLiveKitModel(evalCase.userAgent.model as RealtimeModelConfig)
     const userLkAgent = createLiveKitAgent(
@@ -625,6 +624,7 @@ export async function runVoiceCase<S extends StateSchema>(
               })
               for (const fn of transcriptFns) {
                 try {
+                  // react-doctor-disable-next-line react-doctor/async-await-in-loop -- transcript hooks run in registration order, matching the voice runtime
                   await fn({
                     session: session as Session,
                     state: createStateAccessor(session as Session, snapshotInvocationId),

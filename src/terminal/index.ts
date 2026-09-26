@@ -3,7 +3,7 @@ import type { RunResult, Runner } from '../types/runtime'
 import type { Session } from '../types/session'
 import type { TerminalOptions, TerminalConfig, TerminalHandle } from './types'
 
-import { BaseRunner } from '../core'
+import { BaseRunner } from '../core/runner'
 import { BaseSession } from '../session'
 import { initLogCapture, repatchConsole } from './logCapture'
 

@@ -7,7 +7,7 @@ import type {
   MCPClientInterface,
 } from './types'
 
-import { withRetry } from '../core'
+import { withRetry } from '../core/retry'
 
 type AnyClient = {
   connect(transport: unknown): Promise<void>

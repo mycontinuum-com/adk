@@ -165,9 +165,7 @@ it.each([
       type: 'json_schema',
       json_schema: { strict: true },
     })
-    const messages = z
-      .array(z.object({ role: z.string() }).passthrough())
-      .parse(http.requests[1].messages)
+    const messages = z.array(z.looseObject({ role: z.string() })).parse(http.requests[1].messages)
     expect(messages.filter((message) => message.role === 'assistant')).toEqual([
       {
         role: 'assistant',
@@ -653,9 +651,7 @@ it('keeps reused gateway tool IDs distinct in ADK history while replaying the wi
   expect(calls).toHaveLength(2)
   expect(new Set(calls.map((event) => event.callId)).size).toBe(2)
   expect(count).toBe(2)
-  const messages = z
-    .array(z.object({ role: z.string() }).passthrough())
-    .parse(http.requests[3].messages)
+  const messages = z.array(z.looseObject({ role: z.string() })).parse(http.requests[3].messages)
   expect(messages.filter((message) => message.role === 'tool')).toEqual([
     { role: 'tool', tool_call_id: 'call_0', content: '1' },
     { role: 'tool', tool_call_id: 'call_0', content: '2' },
@@ -784,9 +780,7 @@ it.each([
         },
       }).run(agent, restored)
       expect(second.status).toBe('completed')
-      const messages = z
-        .array(z.object({ role: z.string() }).passthrough())
-        .parse(http.requests[2].messages)
+      const messages = z.array(z.looseObject({ role: z.string() })).parse(http.requests[2].messages)
       expect(messages.filter((message) => message.role === 'assistant')).toEqual([
         {
           role: 'assistant',

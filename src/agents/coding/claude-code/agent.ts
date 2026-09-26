@@ -200,7 +200,7 @@ export function createClaudeCodeAgent<S extends StateSchema = StateSchema>(
     // Track state
     let aborted = false
     let resultMessage: SDKResultMessage | null = null
-    const modifiedFiles: string[] = []
+    const modifiedFiles = new Set<string>()
 
     // Create abort controller
     const abortController = new AbortController()
@@ -302,9 +302,7 @@ export function createClaudeCodeAgent<S extends StateSchema = StateSchema>(
             // Track modified files from tool calls
             if (event.type === 'tool_call') {
               const path = extractModifiedFile(event as ToolCallEvent)
-              if (path && !modifiedFiles.includes(path)) {
-                modifiedFiles.push(path)
-              }
+              if (path) modifiedFiles.add(path)
             }
 
             yield event
@@ -345,7 +343,7 @@ export function createClaudeCodeAgent<S extends StateSchema = StateSchema>(
               resultMessage,
               sessionId,
               startTime,
-              modifiedFiles,
+              [...modifiedFiles],
               ctx.accumulatedText,
             ),
           )

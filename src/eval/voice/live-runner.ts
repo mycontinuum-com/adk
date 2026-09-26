@@ -431,12 +431,14 @@ class LiveVoiceCaseRun<S extends StateSchema> {
   }
 
   private async shutdownHandler(): Promise<void> {
-    for (const callback of this.shutdown.splice(0))
+    for (const callback of this.shutdown.splice(0)) {
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- shutdown callbacks run in registration order and share the remaining timeout budget
       await this.cleanup(
         'Live handler shutdown',
         callback,
         Math.max(1, this.window.timeoutMs - (Date.now() - this.startedAtMs)),
       )
+    }
   }
 
   private async release(startup: Promise<void>): Promise<void> {
@@ -463,8 +465,10 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     try {
       this.session = this.context?.session ?? (await app.sessions.get(this.callId)) ?? this.session
       if (liveTranscript) {
-        for (const event of transcriptMessages(liveTranscript, this.evalCase.backend.name))
+        for (const event of transcriptMessages(liveTranscript, this.evalCase.backend.name)) {
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- transcript events are appended to the session in spoken order
           await sessionService.appendEvent(this.session, event)
+        }
         const backendSessionIds = this.session.events.flatMap((event) =>
           event.type === 'annotation' &&
           event.label === 'live-backend-work' &&
@@ -472,10 +476,14 @@ class LiveVoiceCaseRun<S extends StateSchema> {
             ? [event.data.backendSessionId]
             : [],
         )
-        for (const backendSessionId of backendSessionIds) {
-          const backendSession = await app.sessions.get(backendSessionId)
+        const backendSessions = await Promise.all(
+          backendSessionIds.map((backendSessionId) => app.sessions.get(backendSessionId)),
+        )
+        for (const backendSession of backendSessions) {
           for (const usage of backendSession?.events ?? []) {
-            if (usage.type === 'model_end') await sessionService.appendEvent(this.session, usage)
+            if (usage.type !== 'model_end') continue
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- backend usage events are appended to the session in delegation order
+            await sessionService.appendEvent(this.session, usage)
           }
         }
         if (!(await app.sessions.commit(this.session)).ok)

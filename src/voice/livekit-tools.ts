@@ -13,7 +13,7 @@ import type { ForcedToolGate } from './forced-tool-gate'
 import type { VoiceDeps } from './livekit-types'
 import type { VoiceSession } from './types'
 
-import { createStateAccessor } from '../context'
+import { createStateAccessor } from '../context/state'
 import { createEventId, MAX_TOOL_RETRY_ATTEMPTS } from '../core/constants'
 import { createOrchestrationContext } from '../core/orchestration'
 import {
@@ -62,6 +62,7 @@ export function convertTools(
   const lk = deps.agents()
   const result: Record<string, unknown> = {}
   for (const adkTool of adkTools) {
+    // react-doctor-disable-next-line react-doctor/agent-tool-capability-risk -- bridges already-registered ADK tools to LiveKit without adding capabilities; each tool keeps its own schema and executor
     result[adkTool.name] = lk.llm.tool({
       description: adkTool.description,
       parameters: isZodSchema(adkTool.schema)
@@ -448,6 +449,7 @@ async function appendEvents(bridgeCtx: ToolBridgeContext, events: Event[]): Prom
   }
   for (const event of events) {
     try {
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- tool events are appended to the session in order
       await bridgeCtx.sessionService.appendEvent(bridgeCtx.session, event)
     } catch (err) {
       console.error('[adk/voice] Failed to append event:', err)

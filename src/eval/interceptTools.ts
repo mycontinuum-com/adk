@@ -2,7 +2,7 @@ import type { Runnable, FunctionTool, Agent, ToolExecutionContext } from '../typ
 import type { StateSchema } from '../types/schema'
 import type { ToolMocks, MockToolContext } from './types'
 
-import { isFunctionTool } from '../core'
+import { isFunctionTool } from '../core/tools'
 import { EvalToolError } from './errors'
 
 export interface InterceptToolsOptions {

@@ -115,7 +115,7 @@ export function recordRooms(
     stop() {
       return (stopping ??= (async () => {
         active = false
-        for (const cleanup of cleanups.splice(0)) await cleanup()
+        await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()))
         await Promise.all(
           trackStreams.map((stream) => new Promise<void>((resolve) => stream.end(resolve))),
         )

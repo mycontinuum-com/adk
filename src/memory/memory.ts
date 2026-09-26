@@ -376,6 +376,7 @@ function createVariant<TMetadata extends Record<string, unknown>>(opts: {
       for (let i = 0; i < needsEmbedding.length; i += EMBED_BATCH_SIZE) {
         const chunk = needsEmbedding.slice(i, i + EMBED_BATCH_SIZE)
         const texts = chunk.map((item) => item.content)
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- embedding batches are sent one at a time to bound provider load
         const result = await indexEmbedder.embed(texts, {
           inputType: 'document',
         })

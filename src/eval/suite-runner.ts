@@ -59,6 +59,7 @@ export async function runMetrics<TRun>(
 
   for (const metric of metrics) {
     try {
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- Metrics run one at a time so LLM-judge evaluators do not burst provider rate limits.
       results[metric.name] = await metric.evaluate(run)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

@@ -287,39 +287,40 @@ Either:
         if (event.type === 'content_block_delta') {
           const lastBlock = contentBlocks[contentBlocks.length - 1]
           if (!lastBlock) continue
+          const { delta } = event
 
-          if (event.delta.type === 'text_delta' && lastBlock.type === 'text') {
-            lastBlock.text += event.delta.text
+          if (delta.type === 'text_delta' && lastBlock.type === 'text') {
+            lastBlock.text += delta.text
             const rawEvent: RawDeltaEvent = {
               id: createEventId(),
               type: 'assistant_delta',
               createdAt: Date.now(),
               invocationId: ctx.invocationId,
               agentName: ctx.agentName,
-              delta: event.delta.text,
+              delta: delta.text,
             }
             yield accumulator.push(rawEvent)
           }
 
-          if (event.delta.type === 'thinking_delta' && lastBlock.type === 'thinking') {
-            lastBlock.thinking += event.delta.thinking
+          if (delta.type === 'thinking_delta' && lastBlock.type === 'thinking') {
+            lastBlock.thinking += delta.thinking
             const rawEvent: RawDeltaEvent = {
               id: createEventId(),
               type: 'thought_delta',
               createdAt: Date.now(),
               invocationId: ctx.invocationId,
               agentName: ctx.agentName,
-              delta: event.delta.thinking,
+              delta: delta.thinking,
             }
             yield accumulator.push(rawEvent)
           }
 
-          if (event.delta.type === 'input_json_delta' && lastBlock.type === 'tool_use') {
-            lastBlock.inputJson += event.delta.partial_json || ''
+          if (delta.type === 'input_json_delta' && lastBlock.type === 'tool_use') {
+            lastBlock.inputJson += delta.partial_json || ''
           }
 
-          if (event.delta.type === 'signature_delta' && lastBlock.type === 'thinking') {
-            lastBlock.signature += event.delta.signature || ''
+          if (delta.type === 'signature_delta' && lastBlock.type === 'thinking') {
+            lastBlock.signature += delta.signature || ''
           }
         }
       }

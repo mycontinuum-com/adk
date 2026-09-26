@@ -311,8 +311,7 @@ function createOpenAIClassifier(): RealtimeEventClassifier {
 
 function extractInstructions(ctx: RenderContext): string {
   return ctx.events
-    .filter((e) => e.type === 'system')
-    .map((e) => (e as any).text as string)
+    .flatMap((e) => (e.type === 'system' ? [(e as any).text as string] : []))
     .join('\n\n')
 }
 

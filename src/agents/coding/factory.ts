@@ -18,9 +18,10 @@
  * @module
  */
 
+import type { ClaudeCodeOptions } from './claude-code/types'
 import type { CodingAgent, CodingResult, CodingTask } from './types'
 
-import { createClaudeCodeAgent, type ClaudeCodeOptions } from './claude-code'
+import { createClaudeCodeAgent } from './claude-code/agent'
 
 /** Options handed to {@link CodingAgentFactory.create}. */
 export interface CreateCodingAgentOptions {

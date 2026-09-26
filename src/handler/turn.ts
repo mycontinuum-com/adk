@@ -4,9 +4,9 @@ import type { RunResult, TurnResult, Output } from '../types/runtime'
 import type { StateSchema } from '../types/schema'
 import type { HandlerConfig, HandlerInput, TurnStream } from './types'
 
-import { BaseRunner, createStreamResult } from '../core'
 import { normalizeSessionId, createSessionId } from '../core/constants'
 import { createInvocationId } from '../core/invocation'
+import { BaseRunner, createStreamResult } from '../core/runner'
 import { BaseSession } from '../session'
 import { resolveSession, applyInput, resolveConflict } from './conflict'
 
@@ -79,6 +79,7 @@ export function turn<S extends StateSchema>(
       if (result.status !== 'aborted') {
         const ctx = { session, state: session.state, result, runnable: cfg.agent }
         for (const hook of hooks) {
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- afterTurn hooks run in registration order before the session commits
           await hook.afterTurn?.(ctx)
         }
 

@@ -289,6 +289,7 @@ export async function screenshotPage(
         })
       }
 
+      // react-doctor-disable-next-line react-doctor/no-dynamic-import-path -- sharp is an optional peer dependency kept out of bundling and type resolution
       const sharpModule = await import('sharp' as string)
       const sharp = sharpModule.default as (input: Buffer) => {
         metadata(): Promise<{ width?: number; height?: number }>

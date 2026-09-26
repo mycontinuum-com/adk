@@ -330,7 +330,7 @@ function formatRepeatedCases(groups: RepeatedGroup[], lines: string[]): void {
     }
 
     for (const metricName of [...metricNames].toSorted()) {
-      const metricResults = results.map((r) => r.metrics[metricName]).filter(Boolean)
+      const metricResults = results.flatMap((r) => r.metrics[metricName] ?? [])
       const metricPassed = metricResults.filter((m) => m.passed).length
       const metricTotal = metricResults.length
       lines.push(`- **${metricName}:** ${metricPassed}/${metricTotal} passed`)

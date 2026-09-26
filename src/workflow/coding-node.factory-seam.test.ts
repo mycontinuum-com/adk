@@ -23,7 +23,7 @@ import {
   type CodingAgentFactory,
   type CodingNodeResult,
 } from '../agents/coding'
-import * as claudeCodeModule from '../agents/coding/claude-code'
+import * as claudeCodeModule from '../agents/coding/claude-code/agent'
 import { createWorkspaceProvisioner } from '../agents/coding/workspace-provisioner'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))

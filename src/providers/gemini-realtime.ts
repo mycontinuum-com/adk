@@ -473,21 +473,15 @@ function parseGeminiUsage(raw: Record<string, unknown>): ModelUsage {
 function sanitizeForLiveApi(
   contents: Array<{ role?: string; parts?: any[] }>,
 ): Array<{ role?: string; parts: any[] }> {
-  return contents
-    .map((turn) => ({
-      role: turn.role,
-      parts: (turn.parts ?? [])
-        .map((part: any) => {
-          const { thoughtSignature: _, thought: __, ...clean } = part
-          return clean
-        })
-        .filter((part: any) => {
-          // Remove empty text-only parts
-          if (Object.keys(part).length === 1 && 'text' in part && !part.text) return false
-          return true
-        }),
-    }))
-    .filter((turn) => turn.parts.length > 0)
+  return contents.flatMap((turn) => {
+    const parts = (turn.parts ?? []).flatMap((part: any) => {
+      const { thoughtSignature: _, thought: __, ...clean } = part
+      // Remove empty text-only parts
+      if (Object.keys(clean).length === 1 && 'text' in clean && !clean.text) return []
+      return [clean]
+    })
+    return parts.length > 0 ? [{ role: turn.role, parts }] : []
+  })
 }
 
 /**

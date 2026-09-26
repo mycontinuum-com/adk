@@ -98,12 +98,10 @@ describe('normalizeSchema', () => {
   })
 
   it('preserves strict mode on objects', () => {
-    const schema = z
-      .object({
-        name: z.string(),
-        tag: z.string().optional(),
-      })
-      .strict()
+    const schema = z.strictObject({
+      name: z.string(),
+      tag: z.string().optional(),
+    })
     const result = normalizeSchema(schema, 'test') as z.ZodObject<any>
     expect(result.safeParse({ name: 'test', extra: true }).success).toBe(false)
   })

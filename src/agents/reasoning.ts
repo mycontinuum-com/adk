@@ -55,7 +55,7 @@ import { createParser } from '../parser/parser'
 import { getModelName, getModelProvider, getInnerModel } from '../providers/models'
 
 function enrichToolCallsWithYieldFlag(toolCalls: ToolCallEvent[], tools: FunctionTool[]): void {
-  const yieldingToolNames = new Set(tools.filter((t) => t.yieldSchema).map((t) => t.name))
+  const yieldingToolNames = new Set(tools.flatMap((t) => (t.yieldSchema ? [t.name] : [])))
   for (const toolCall of toolCalls) {
     if (yieldingToolNames.has(toolCall.name)) {
       toolCall.yields = true
@@ -579,6 +579,7 @@ async function* executeModelStep(
   const adapter = await runnerConfig.getAdapter(agent.model)
 
   signal.throwIfAborted()
+  // react-doctor-disable-next-line react-doctor/server-sequential-independent-await -- beforeModel hooks run only after the adapter resolves, so misconfiguration fails before hook side effects
   const skipModel = await composedHook.beforeModel?.(ctx, renderCtx)
   signal.throwIfAborted()
   if (isRunnable(skipModel)) {
@@ -1031,6 +1032,7 @@ async function* executeAgentLoop(
       enrichToolCallsWithYieldFlag(finalStepResult.toolCalls, agent.tools.filter(isFunctionTool))
 
       for (const event of finalStepResult.stepEvents) {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- step events are persisted and streamed in order
         await runnerConfig.sessionService.appendEvent(session, event)
         yield event
       }
@@ -1067,6 +1069,7 @@ async function* executeAgentLoop(
             runnerConfig.signal,
             runnerConfig.channel,
           )
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- non-yielding tool calls execute and persist sequentially in model order
           const { event: resultEvent } = await executeToolCall(
             toolCall,
             agent,

@@ -68,7 +68,7 @@ function jsonSchemaToZod(schema: Record<string, unknown>): z.ZodType<Record<stri
     shape[key] = field
   }
 
-  return z.object(shape).strict() as z.ZodType<Record<string, unknown>>
+  return z.strictObject(shape) as z.ZodType<Record<string, unknown>>
 }
 
 function propToZod(prop: Record<string, unknown>): z.ZodType {

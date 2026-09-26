@@ -182,6 +182,7 @@ export function DetailPane({
   }, [wrappedLines, effectiveOffset, hasMoreBelow, event, maxContentLines])
 
   useEffect(() => {
+    // react-doctor-disable-next-line react-doctor/no-pass-data-to-parent -- maxOffset depends on this pane's wrapped-line layout; the parent only uses it to clamp keyboard scrolling
     onMaxOffsetChange?.(maxOffset)
   }, [maxOffset, onMaxOffsetChange])
 

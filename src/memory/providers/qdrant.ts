@@ -241,6 +241,7 @@ export function createQdrantIndex(config: QdrantConfig, injectedClient?: unknown
       for (let i = 0; i < points.length; i += batchSize) {
         const chunk = points.slice(i, i + batchSize)
         const mapped = chunk.map((p) => ({ point: p, ...mapId(p.id) }))
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- upsert batches run one at a time to bound Qdrant load and keep retries per batch
         await withRetry(async () => {
           const operations: unknown[] = []
 

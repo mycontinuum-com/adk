@@ -217,6 +217,7 @@ export function transformUserMessages<T extends StateSchema = StateSchema>(
     const sessionEvents = renderCtx.session.events
     const result: Event[] = []
     let currentAgentName: string | undefined
+    let sessionEventIndexById: Map<string, number> | undefined
 
     const currentStateValues =
       useEnrichment && stateAt === 'current'
@@ -261,7 +262,15 @@ export function transformUserMessages<T extends StateSchema = StateSchema>(
         if (stateAt === 'invocation') {
           stateIndex = findInvocationStartIndex(sessionEvents, event.invocationId)
         } else {
-          const eventIndex = sessionEvents.findIndex((e) => e.id === event.id)
+          if (!sessionEventIndexById) {
+            sessionEventIndexById = new Map()
+            for (const [index, sessionEvent] of sessionEvents.entries()) {
+              if (!sessionEventIndexById.has(sessionEvent.id)) {
+                sessionEventIndexById.set(sessionEvent.id, index)
+              }
+            }
+          }
+          const eventIndex = sessionEventIndexById.get(event.id) ?? -1
           stateIndex = eventIndex > 0 ? eventIndex - 1 : 0
         }
 

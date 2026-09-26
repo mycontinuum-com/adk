@@ -193,11 +193,9 @@ export function getEventConfig(event: DisplayEvent): EventDisplayConfig {
 }
 
 export function getSelectableTypes(): Set<string> {
-  return new Set(
-    Object.entries(EVENT_CONFIGS)
-      .filter(([, config]) => config.selectable)
-      .map(([type]) => type),
-  )
+  const types = new Set<string>()
+  for (const [type, config] of Object.entries(EVENT_CONFIGS)) if (config.selectable) types.add(type)
+  return types
 }
 
 export function isHiddenEvent(event: DisplayEvent): boolean {

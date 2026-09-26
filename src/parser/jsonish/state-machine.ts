@@ -130,7 +130,7 @@ function jsonishToString(value: JsonishValue): string {
     case 'null':
       return 'null'
     case 'object':
-      return JSON.stringify(value.entries.reduce((acc, e) => ({ ...acc, [e.key]: e.value }), {}))
+      return JSON.stringify(Object.fromEntries(value.entries.map((e) => [e.key, e.value])))
     case 'array':
       return JSON.stringify(value.items)
     case 'anyOf':

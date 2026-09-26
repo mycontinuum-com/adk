@@ -339,9 +339,9 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
   }
 
   getRunningSpawnedTasks(): SpawnedTaskStatus[] {
-    return [...this.spawnedTasks.values()]
-      .filter((t) => t.status.status === 'running')
-      .map((t) => t.status)
+    return [...this.spawnedTasks.values()].flatMap((t) =>
+      t.status.status === 'running' ? [t.status] : [],
+    )
   }
 
   getAllSpawnedTasks(): SpawnedTaskStatus[] {

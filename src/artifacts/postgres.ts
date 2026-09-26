@@ -35,6 +35,8 @@ export interface PostgresArtifactServiceConfig {
   schema?: string
 }
 
+const SCHEMA_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+
 interface PgPool {
   query(
     text: string,
@@ -64,8 +66,14 @@ export class PostgresArtifactService implements ArtifactService {
     if (config.pool) {
       this.pool = config.pool as PgPool
     }
+    const schema = config.schema ?? 'adk'
+    if (!SCHEMA_NAME_RE.test(schema)) {
+      throw new Error(
+        `PostgresArtifactService schema must be a plain SQL identifier, got '${schema}'`,
+      )
+    }
     this.config = config
-    this.schema = config.schema ?? 'adk'
+    this.schema = schema
   }
 
   private async getPool(): Promise<PgPool> {
@@ -119,6 +127,7 @@ export class PostgresArtifactService implements ArtifactService {
     // Convert string to Buffer for storage
     const dataBuffer = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf-8')
 
+    // react-doctor-disable-next-line react-doctor/raw-sql-injection-risk -- only the constructor-validated schema identifier is interpolated; values are bound parameters
     await pool.query(
       `INSERT INTO ${this.schema}.artifact_versions
        (app_name, process_id, name, version, mime_type, data, metadata, created_at)

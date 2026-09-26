@@ -61,6 +61,7 @@ export function webSearch(
   return (
     app: AdkApp<StateSchema>,
   ): FunctionTool<WebSearchArgs, WebSearchResult, never, StateSchema> => {
+    // react-doctor-disable-next-line react-doctor/agent-tool-capability-risk -- web_search sends only a query string to the configured search provider; it cannot fetch arbitrary URLs
     return app.tool({
       name: 'web_search',
       description:

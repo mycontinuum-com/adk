@@ -35,6 +35,7 @@ class InProcessExecutor implements Executor {
         createdAt: Date.now(),
         text: typeof msg.payload === 'string' ? msg.payload : JSON.stringify(msg.payload),
       }
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- queued user messages are appended to the session in arrival order
       await this.sessionService.appendEvent(session, userEvent)
     }
 

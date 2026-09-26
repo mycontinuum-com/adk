@@ -223,6 +223,7 @@ export function createPgVectorIndex(config: PgVectorConfig): VectorIndex {
 
       for (let i = 0; i < points.length; i += batchSize) {
         const chunk = points.slice(i, i + batchSize)
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- upsert batches run one at a time to bound database load and keep retries per batch
         await withRetry(async () => {
           const withMeta = chunk.filter((pt) => pt.metadata)
           const withoutMeta = chunk.filter((pt) => !pt.metadata)

@@ -5,7 +5,6 @@ import React, { useMemo } from 'react'
 import type { ToolCallEvent } from '../../types'
 import type { InvocationBlock, DisplayEvent, ContextBlock } from '../blocks'
 
-import { formatCost } from '../../providers/pricing'
 import {
   LABEL_WIDTH,
   INDENT_WIDTH,
@@ -14,33 +13,18 @@ import {
   MAX_VISUAL_LINES_PER_EVENT,
   CLEAN_MODE_EVENT_TYPES,
 } from '../constants'
-import { isHiddenEvent, truncate, getEventConfig } from '../event-display'
-import {
-  renderJsonLine,
-  renderThoughtText,
-  renderToolCallLine,
-  stripJsonNewlines,
-  formatThoughtTextMultiLine,
-} from '../text-formatting'
-import { EventLine } from './EventLine'
-import { SyncedSpinner } from './SpinnerContext'
+import { isHiddenEvent } from '../event-display'
+import { stripJsonNewlines } from '../text-formatting'
 import { useTerminalWidth } from './TerminalContext'
+import { findWrapPoint } from './trace-helpers'
+import { computeTraceViewport } from './trace-viewport'
+import { TraceLineRow, TracePartialEventLine } from './TraceLineViews'
 
-const RESET = '\x1b[0m'
-
-function getIndent(depth: number): string {
-  return ' '.repeat(depth * INDENT_WIDTH)
-}
+const EMPTY_SELECTABLE_EVENTS: DisplayEvent[] = []
+const EMPTY_EXPANDED_CONTEXT_IDS = new Set<string>()
 
 function formatThoughtTextForCalc(text: string): string {
   return text.replace(/\n\n+/g, '\n').replace(/([^\n])\*\*([A-Z])/g, '$1\n**$2')
-}
-
-function findWrapPoint(textToWrap: string, width: number): number {
-  if (textToWrap.length <= width) return textToWrap.length
-  const lastSpace = textToWrap.lastIndexOf(' ', width)
-  if (lastSpace > width * 0.4) return lastSpace
-  return width
 }
 
 function wrapTextLines(text: string, maxWidth: number): string[] {
@@ -183,47 +167,6 @@ function isLineVisibleInCleanMode(line: FlattenedLine): boolean {
       }
     }
     return true
-  }
-  return false
-}
-
-const OUTPUT_EVENT_TYPES = new Set([
-  'thought',
-  'thought_delta',
-  'assistant',
-  'assistant_delta',
-  'delta_batch',
-  'tool_call',
-  'tool_result',
-  'state_change',
-])
-
-function countBlockEvents(block: InvocationBlock): number {
-  let count = 0
-  for (const ctx of block.contextBlocks) {
-    for (const event of ctx.producedEvents) {
-      if (!OUTPUT_EVENT_TYPES.has(event.type)) continue
-      if (event.type === 'delta_batch') {
-        count += (event as { count: number }).count
-      } else {
-        count++
-      }
-    }
-  }
-  for (const child of block.children) {
-    count += countBlockEvents(child)
-  }
-  return count
-}
-
-function isBlockActive(block: InvocationBlock): boolean {
-  if (block.state === 'running' || block.state === 'yielded') {
-    return true
-  }
-  for (const child of block.children) {
-    if (isBlockActive(child)) {
-      return true
-    }
   }
   return false
 }
@@ -465,18 +408,13 @@ function flattenBlocks(
   return lines
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
-}
-
 export function TraceView({
   blocks,
   showDurations = true,
   showIds = false,
   selectedIndex,
-  selectableEvents = [],
-  expandedContextIds = new Set(),
+  selectableEvents = EMPTY_SELECTABLE_EVENTS,
+  expandedContextIds = EMPTY_EXPANDED_CONTEXT_IDS,
   maxHeight,
   scrollOffset = 0,
   yieldedToolIds,
@@ -556,117 +494,27 @@ export function TraceView({
     partialLineMaxVisual,
     partialLineIsTruncated,
     topPartialSkipLines,
-  } = useMemo(() => {
-    if (contentHeight === undefined || lines.length === 0) {
-      return {
-        visibleLines: lines,
-        linesAbove: 0,
-        linesBelow: 0,
-        renderedVisualLines: 0,
-        partialLine: null,
-        partialLineMaxVisual: 0,
-        partialLineIsTruncated: false,
-        topPartialSkipLines: 0,
-      }
-    }
-
-    const viewportStart = clampedScrollOffset
-    const isSimpleMode = !contentMode && !visualLineHeights
-
-    let startIdx = 0
-    let topSkip = 0
-
-    if (isSimpleMode) {
-      startIdx = Math.min(Math.floor(viewportStart), lines.length - 1)
-      startIdx = Math.max(0, startIdx)
-    } else {
-      for (let i = 0; i < lines.length; i++) {
-        const lineStart = visualLineStarts?.[i] ?? i
-        const lineHeight = visualLineHeights?.[i] ?? 1
-        const lineEnd = lineStart + lineHeight
-
-        if (lineEnd <= viewportStart) {
-          startIdx = i + 1
-        } else if (lineStart < viewportStart) {
-          startIdx = i
-          topSkip = viewportStart - lineStart
-          break
-        } else {
-          break
-        }
-      }
-    }
-
-    let endIdx = startIdx
-    let usedHeight = 0
-
-    if (isSimpleMode) {
-      endIdx = Math.min(startIdx + contentHeight, lines.length)
-      usedHeight = endIdx - startIdx
-    } else {
-      for (let i = startIdx; i < lines.length; i++) {
-        const lineHeight = visualLineHeights?.[i] ?? 1
-        const effectiveHeight = i === startIdx ? lineHeight - topSkip : lineHeight
-
-        if (usedHeight + effectiveHeight <= contentHeight) {
-          usedHeight += effectiveHeight
-          endIdx = i + 1
-        } else {
-          break
-        }
-      }
-    }
-
-    const remainingSpace = contentHeight - usedHeight
-    let partial: FlattenedLine | null = null
-    let partialMax = 0
-    let partialFullHeight = 0
-    let partialIsTruncated = false
-
-    if (contentMode && !isSimpleMode && endIdx < lines.length && remainingSpace >= 1) {
-      partial = lines[endIdx]
-      partialFullHeight = visualLineHeights?.[endIdx] ?? 1
-
-      if (partialFullHeight <= remainingSpace) {
-        partialMax = partialFullHeight
-        partialIsTruncated = false
-      } else if (remainingSpace >= 2) {
-        partialMax = remainingSpace - 1
-        partialIsTruncated = true
-      } else {
-        partial = null
-      }
-    }
-
-    const above = clampedScrollOffset
-    const partialRenderedHeight = partial ? (partialIsTruncated ? partialMax + 1 : partialMax) : 0
-    const below = isSimpleMode
-      ? totalVisualLines - endIdx
-      : partial
-        ? totalVisualLines - (visualLineStarts?.[endIdx] ?? endIdx) - partialRenderedHeight
-        : endIdx < lines.length
-          ? totalVisualLines - (visualLineStarts?.[endIdx] ?? endIdx)
-          : 0
-
-    return {
-      visibleLines: lines.slice(startIdx, endIdx),
-      linesAbove: above,
-      linesBelow: Math.max(0, below),
-      renderedVisualLines: usedHeight + partialRenderedHeight,
-      partialLine: partial,
-      partialLineMaxVisual: partialMax,
-      partialLineIsTruncated: partialIsTruncated,
-      topPartialSkipLines: topSkip,
-    }
-  }, [
-    lines,
-    contentHeight,
-    clampedScrollOffset,
-    visualLineStarts,
-    visualLineHeights,
-    totalVisualLines,
-    contentMode,
-  ])
+  } = useMemo(
+    () =>
+      computeTraceViewport({
+        lines,
+        contentHeight,
+        clampedScrollOffset,
+        visualLineStarts,
+        visualLineHeights,
+        totalVisualLines,
+        contentMode,
+      }),
+    [
+      lines,
+      contentHeight,
+      clampedScrollOffset,
+      visualLineStarts,
+      visualLineHeights,
+      totalVisualLines,
+      contentMode,
+    ],
+  )
 
   const hasScrollableContent = contentHeight !== undefined && totalVisualLines > contentHeight
   const showMoreAbove = hasScrollableContent && linesAbove > 1
@@ -675,726 +523,35 @@ export function TraceView({
   return (
     <Box flexDirection="column">
       {showMoreAbove && <Text dimColor> ↑ {linesAbove} more above</Text>}
-      {visibleLines.map((line, idx) => {
-        const indent = getIndent(line.depth)
-
-        if (line.type === 'block_start' && line.block) {
-          const isSelected = line.eventIndex === selectedIndex
-          const handoffType = line.block.handoffOrigin?.type
-          const isSpawn = handoffType === 'spawn'
-          const isDispatch = handoffType === 'dispatch'
-          const isTransfer = handoffType === 'transfer'
-          const isRunning = line.block.state === 'running'
-          const isYielded = line.block.state === 'yielded'
-          const hasError = line.block.hasError
-          const loopLabel =
-            line.block.loopIteration !== undefined && line.block.loopMax !== undefined
-              ? ` ${line.block.loopIteration}/${line.block.loopMax}`
-              : null
-
-          const kindIndicator =
-            {
-              agent: (
-                <Text color="gray" dimColor>
-                  {' '}
-                  ◆ agent
-                </Text>
-              ),
-              step: (
-                <Text color="gray" dimColor>
-                  {' '}
-                  ▸ step
-                </Text>
-              ),
-              sequence: (
-                <Text color="gray" dimColor>
-                  {' '}
-                  → sequence
-                </Text>
-              ),
-              parallel: (
-                <Text color="gray" dimColor>
-                  {' '}
-                  ║ parallel
-                </Text>
-              ),
-              loop: (
-                <Text color="gray" dimColor>
-                  {' '}
-                  ○ loop
-                </Text>
-              ),
-            }[line.block.kind] ?? null
-
-          let edgeIndicator: React.ReactNode = null
-          if (isSpawn) {
-            edgeIndicator = (
-              <Text color="gray" dimColor>
-                :spawn
-              </Text>
-            )
-          } else if (isDispatch) {
-            edgeIndicator = (
-              <Text color="gray" dimColor>
-                :dispatch
-              </Text>
-            )
-          } else if (isTransfer) {
-            edgeIndicator = (
-              <Text color="gray" dimColor>
-                :transfer
-              </Text>
-            )
-          }
-
-          const startChar = isSpawn || isDispatch ? '╠═' : '┌─'
-          const startColor = hasError
-            ? 'redBright'
-            : isRunning || isYielded
-              ? 'yellowBright'
-              : 'cyanBright'
-
-          const blockActive = isBlockActive(line.block)
-          const eventCount = blockActive ? countBlockEvents(line.block) : 0
-
-          const showBlockMeta = !contentMode
-          return (
-            <Box key={line.key}>
-              <Text>
-                {RESET}
-                {indent}
-                {isSelected ? '▸' : ' '}
-              </Text>
-              <Text color={startColor}>{startChar}</Text>
-              <Text> </Text>
-              <Text bold={!contentMode} dimColor={contentMode}>
-                {line.block.agentName}
-              </Text>
-              {showIds && (
-                <Text color="gray" dimColor>
-                  {' '}
-                  ({line.block.invocationId})
-                </Text>
-              )}
-              {showBlockMeta && kindIndicator}
-              {showBlockMeta && edgeIndicator}
-              {showBlockMeta && loopLabel && (
-                <Text color="gray" dimColor>
-                  {loopLabel}
-                </Text>
-              )}
-              {showBlockMeta && blockActive && eventCount > 0 && (
-                <Text color="gray" dimColor>
-                  {' '}
-                  [{eventCount}]
-                </Text>
-              )}
-              {(isRunning || isYielded) && !hasError && (
-                <Text>
-                  {' '}
-                  <SyncedSpinner />
-                </Text>
-              )}
-            </Box>
-          )
-        }
-
-        if (line.type === 'event' && line.event) {
-          const isSelected = line.eventIndex === selectedIndex
-          const eventType = line.event.type
-          const isCleanModeType =
-            eventType === 'user' ||
-            eventType === 'assistant' ||
-            eventType === 'thought' ||
-            eventType === 'delta_batch' ||
-            eventType === 'tool_call' ||
-            eventType === 'tool_input'
-          const useCleanModeRendering =
-            eventType === 'user' ||
-            eventType === 'assistant' ||
-            eventType === 'thought' ||
-            eventType === 'delta_batch' ||
-            eventType === 'tool_call' ||
-            eventType === 'tool_input'
-
-          if (contentMode && !isCleanModeType) {
-            return null
-          }
-
-          if (contentMode && useCleanModeRendering) {
-            let rawText: string
-            let displayLabel: string
-            let displayColor: string
-            let isPendingYield = false
-
-            if (line.event.type === 'delta_batch') {
-              rawText = line.event.finalText
-              const isThoughtDelta = line.event.deltaType === 'thought_delta'
-              displayLabel = isThoughtDelta ? 'think' : 'output'
-              displayColor = isThoughtDelta ? 'gray' : 'greenBright'
-            } else if (line.event.type === 'tool_call') {
-              const argsStr = line.event.args ? JSON.stringify(line.event.args) : ''
-              rawText = argsStr ? `${line.event.name} ${argsStr}` : line.event.name
-              displayLabel = 'call'
-              isPendingYield = !!(line.event.yields && yieldedToolIds?.has(line.event.callId))
-              displayColor = isPendingYield ? 'yellowBright' : 'cyanBright'
-            } else if (line.event.type === 'tool_input') {
-              const inputStr = line.event.input ? JSON.stringify(line.event.input) : ''
-              rawText = inputStr ? `${line.event.name} ${inputStr}` : line.event.name
-              displayLabel = 'input'
-              displayColor = 'yellowBright'
-            } else if ('text' in line.event) {
-              rawText = line.event.text
-              const config = getEventConfig(line.event)
-              displayLabel = config.label
-              displayColor = config.color
-            } else {
-              return null
-            }
-
-            const isThoughtType =
-              line.event.type === 'thought' ||
-              (line.event.type === 'delta_batch' && line.event.deltaType === 'thought_delta')
-            if (isThoughtType && (!rawText || rawText.trim() === '')) {
-              return null
-            }
-
-            const isStreaming = eventType === 'delta_batch'
-            const showSpinner = isStreaming || isPendingYield
-            const spinnerWidth = showSpinner ? 2 : 0
-            const isInsideModelContext = eventType !== 'user'
-            const contentModeIndent = isInsideModelContext
-              ? getIndent(Math.max(0, line.depth - 1))
-              : indent
-            const selectionIndicator = isSelected ? '▸' : ' '
-            const labelWidth = LABEL_WIDTH
-            const labelPadding = ' '.repeat(
-              Math.max(0, labelWidth - displayLabel.length - spinnerWidth),
-            )
-            const continuationPadding = ' '.repeat(labelWidth + 1)
-            const indentWidth = contentModeIndent.length
-            const prefixWidth = indentWidth + 1 + 3 + labelWidth + 1
-            const maxTextWidth = Math.max(MIN_TEXT_WIDTH, terminalWidth - prefixWidth - 2)
-
-            let text = rawText
-            const isJson =
-              rawText.trimStart().startsWith('{') || rawText.trimStart().startsWith('[')
-
-            if (isThoughtType) {
-              const singleLineThought = rawText.replace(/\s+/g, ' ').trim()
-              if (singleLineThought.length <= maxTextWidth) {
-                text = singleLineThought
-              } else {
-                text = formatThoughtTextMultiLine(rawText)
-              }
-            } else if (isJson) {
-              const compactJson = stripJsonNewlines(rawText)
-              if (compactJson.length <= maxTextWidth) {
-                text = compactJson
-              } else {
-                try {
-                  const parsed = JSON.parse(rawText.trim())
-                  text = JSON.stringify(parsed, null, 2)
-                } catch {
-                  text = rawText
-                }
-              }
-            } else {
-              const singleLine = rawText.replace(/\s+/g, ' ').trim()
-              if (singleLine.length <= maxTextWidth) {
-                text = singleLine
-              }
-            }
-
-            const wrapLine = (sourceLine: string): string[] => {
-              if (sourceLine.length <= maxTextWidth) return [sourceLine]
-
-              const leadingMatch = sourceLine.match(/^(\s*)/)
-              const leadingSpaces = leadingMatch ? leadingMatch[1] : ''
-              const leadingLen = leadingSpaces.length
-
-              const wrapped: string[] = []
-              let remaining = sourceLine
-
-              const firstWrap = findWrapPoint(remaining, maxTextWidth)
-              wrapped.push(remaining.slice(0, firstWrap))
-              remaining = remaining.slice(firstWrap).trimStart()
-
-              const continuationWidth = Math.max(10, maxTextWidth - leadingLen)
-              while (remaining.length > 0) {
-                const wrapAt = findWrapPoint(remaining, continuationWidth)
-                wrapped.push(leadingSpaces + remaining.slice(0, wrapAt))
-                remaining = remaining.slice(wrapAt).trimStart()
-              }
-
-              return wrapped
-            }
-
-            const sourceLines = text.split('\n')
-            const allLines: { text: string; isFirst: boolean; isFirstOfSource: boolean }[] = []
-            sourceLines.forEach((sourceLine, srcIdx) => {
-              const wrapped = wrapLine(sourceLine)
-              wrapped.forEach((wrappedLine, wrapIdx) => {
-                allLines.push({
-                  text: wrappedLine,
-                  isFirst: srcIdx === 0 && wrapIdx === 0,
-                  isFirstOfSource: wrapIdx === 0,
-                })
-              })
-            })
-
-            const isAssistantType =
-              line.event.type === 'assistant' ||
-              (line.event.type === 'delta_batch' && line.event.deltaType === 'assistant_delta')
-            const isToolCallType = eventType === 'tool_call'
-            const jsonKeyColor = isAssistantType
-              ? 'greenBright'
-              : isToolCallType
-                ? displayColor
-                : null
-            const isDimmedLabel =
-              (isThoughtType || isToolCallType) && !isPendingYield && !isStreaming
-
-            const skipTopLines = idx === 0 ? topPartialSkipLines : 0
-            const willTruncate = allLines.length > MAX_VISUAL_LINES_PER_EVENT && skipTopLines === 0
-            const cappedTotalLines = willTruncate
-              ? MAX_VISUAL_LINES_PER_EVENT - 1
-              : Math.min(allLines.length, MAX_VISUAL_LINES_PER_EVENT)
-            const remainingLines = Math.max(0, cappedTotalLines - skipTopLines)
-            const linesToRender = allLines.slice(skipTopLines, skipTopLines + remainingLines)
-            const isTopPartial = skipTopLines > 0
-            const hiddenLinesCount = allLines.length - cappedTotalLines
-
-            return (
-              <Box key={line.key} flexDirection="column">
-                {linesToRender.map((lineData, lineIdx) => {
-                  const isFirstRenderedLine = lineIdx === 0
-                  const showAsFirst = lineData.isFirst && !isTopPartial
-                  return (
-                    <Box key={`${line.key}-${lineIdx}`}>
-                      <Text>
-                        {RESET}
-                        {contentModeIndent}
-                      </Text>
-                      <Text>{isFirstRenderedLine && isSelected ? selectionIndicator : ' '}</Text>
-                      <Text dimColor>{showAsFirst ? '├─ ' : '│  '}</Text>
-                      {showAsFirst ? (
-                        <Text dimColor={isDimmedLabel && !isPendingYield}>
-                          <Text color={displayColor} dimColor={isToolCallType && !isPendingYield}>
-                            {displayLabel}
-                          </Text>
-                          {showSpinner && (
-                            <>
-                              <Text> </Text>
-                              <SyncedSpinner color={displayColor} />
-                            </>
-                          )}
-                          {labelPadding}{' '}
-                        </Text>
-                      ) : (
-                        <Text dimColor>{continuationPadding}</Text>
-                      )}
-                      {isThoughtType ? (
-                        renderThoughtText(lineData.text, true)
-                      ) : isToolCallType ? (
-                        renderToolCallLine(lineData.text, displayColor, isDimmedLabel)
-                      ) : jsonKeyColor ? (
-                        renderJsonLine(lineData.text, jsonKeyColor, isDimmedLabel)
-                      ) : (
-                        <Text dimColor={isDimmedLabel}>{lineData.text || ' '}</Text>
-                      )}
-                    </Box>
-                  )
-                })}
-                {hiddenLinesCount > 0 && skipTopLines === 0 && (
-                  <Box key={`${line.key}-truncated`}>
-                    <Text>
-                      {RESET}
-                      {contentModeIndent}
-                    </Text>
-                    <Text> </Text>
-                    <Text dimColor>│ </Text>
-                    <Text dimColor>
-                      {continuationPadding}... ({hiddenLinesCount} more lines)
-                    </Text>
-                  </Box>
-                )}
-              </Box>
-            )
-          }
-
-          const isInsideModelContext = eventType !== 'user'
-          const eventIndent =
-            contentMode && isInsideModelContext ? getIndent(Math.max(0, line.depth - 1)) : indent
-          const eventDepth =
-            contentMode && isInsideModelContext ? Math.max(0, line.depth - 1) : line.depth
-          const skipHighlight = line.event.type === 'tool_result'
-          return (
-            <Box key={line.key}>
-              <Text>
-                {RESET}
-                {eventIndent}
-              </Text>
-              <EventLine
-                event={line.event}
-                isSelected={isSelected}
-                yieldedToolIds={yieldedToolIds}
-                executingCallIds={executingCallIds}
-                depth={eventDepth}
-                skipHighlighting={skipHighlight}
-              />
-            </Box>
-          )
-        }
-
-        if (line.type === 'context_start' && line.contextBlock) {
-          if (contentMode) return null
-          const isSelected = line.eventIndex === selectedIndex
-          const isPending = !line.contextBlock.responseEvent
-          const hasError = line.contextBlock.hasError
-          const bracketColor = hasError ? 'redBright' : isPending ? 'yellowBright' : 'magentaBright'
-          return (
-            <Box key={line.key}>
-              <Text>
-                {RESET}
-                {indent}
-                {isSelected ? '▸' : ' '}
-                <Text color={bracketColor}>┌─</Text> <Text color="magentaBright">model</Text>
-                {isPending && !hasError && (
-                  <>
-                    <Text> </Text>
-                    <SyncedSpinner color="magentaBright" />
-                  </>
-                )}
-              </Text>
-            </Box>
-          )
-        }
-
-        if (line.type === 'context_child' && line.event) {
-          if (contentMode) return null
-          const isSelected = line.eventIndex === selectedIndex
-          const skipHighlight = line.event.type === 'tool_result'
-          return (
-            <Box key={line.key}>
-              <Text>
-                {RESET}
-                {indent}
-              </Text>
-              <EventLine
-                event={line.event}
-                isSelected={isSelected}
-                yieldedToolIds={yieldedToolIds}
-                executingCallIds={executingCallIds}
-                depth={line.depth}
-                skipHighlighting={skipHighlight}
-              />
-            </Box>
-          )
-        }
-
-        if (line.type === 'context_separator') {
-          if (contentMode) return null
-          return (
-            <Box key={line.key}>
-              <Text>
-                {RESET}
-                {indent} <Text color="magentaBright">├─</Text>
-              </Text>
-            </Box>
-          )
-        }
-
-        if (line.type === 'context_end' && line.contextBlock) {
-          if (contentMode) return null
-          const response = line.contextBlock.responseEvent
-          const isPending = !response
-          const hasError = line.contextBlock.hasError
-          const isSelected = line.eventIndex === selectedIndex
-          const bracketColor = hasError ? 'redBright' : isPending ? 'yellowBright' : 'magentaBright'
-          const durationStr = response ? formatDuration(response.durationMs) : ''
-          const costStr =
-            line.contextBlock.cost !== undefined ? ` • ${formatCost(line.contextBlock.cost)}` : ''
-          const prefixLen = indent.length + 4 + durationStr.length + costStr.length + 3
-          const errorMaxLen = Math.max(20, terminalWidth - prefixLen)
-          return (
-            <Box key={line.key}>
-              <Text>
-                {RESET}
-                {indent}
-                {isSelected ? '▸' : ' '}
-                <Text color={bracketColor}>└─</Text>
-                {!isPending && (
-                  <Text color="gray" dimColor>
-                    {' '}
-                    {durationStr}
-                    {costStr}
-                  </Text>
-                )}
-                {Boolean(response?.error) && (
-                  <Text color="redBright"> • {truncate(response!.error!, errorMaxLen)}</Text>
-                )}
-              </Text>
-            </Box>
-          )
-        }
-
-        if (line.type === 'block_end' && line.block) {
-          const block = line.block
-          const isRunning = block.state === 'running'
-          const isYielded = block.state === 'yielded'
-          const hasError = block.hasError
-          const isSelected = line.eventIndex === selectedIndex
-          const isSpawnOrDispatch =
-            block.handoffOrigin?.type === 'spawn' || block.handoffOrigin?.type === 'dispatch'
-          const isTransferred = block.state === 'transferred'
-          const endChar = isSpawnOrDispatch ? '╚═' : '└─'
-          const endColor = hasError
-            ? 'redBright'
-            : isRunning || isYielded
-              ? 'yellowBright'
-              : 'cyanBright'
-
-          const endEvent = block.events.find((e) => e.type === 'invocation_end') as
-            | { error?: string }
-            | undefined
-          const errorMsg = endEvent?.error
-          const childHasError =
-            block.children.some((c) => c.hasError) || block.contextBlocks.some((c) => c.hasError)
-          const showError = Boolean(errorMsg) && !childHasError
-          const costStr = block.cost !== undefined ? formatCost(block.cost) : ''
-
-          let statusContent: React.ReactNode
-          if (contentMode) {
-            statusContent = null
-          } else if (isRunning || isYielded) {
-            statusContent = costStr ? (
-              <Text color="gray" dimColor>
-                {costStr}
-              </Text>
-            ) : null
-          } else if (isTransferred && block.handoffTarget) {
-            const durationStr =
-              showDurations && block.duration !== undefined ? formatDuration(block.duration) : ''
-            statusContent = (
-              <>
-                <Text color="yellowBright" dimColor>
-                  {block.handoffTarget.agentName}
-                </Text>
-                {Boolean(durationStr) && (
-                  <Text color="gray" dimColor>
-                    {' '}
-                    • {durationStr}
-                  </Text>
-                )}
-                {Boolean(costStr) && (
-                  <Text color="gray" dimColor>
-                    {' '}
-                    • {costStr}
-                  </Text>
-                )}
-              </>
-            )
-          } else if (showDurations && block.duration !== undefined) {
-            statusContent = (
-              <>
-                <Text color="gray" dimColor>
-                  {formatDuration(block.duration)}
-                </Text>
-                {Boolean(costStr) && (
-                  <Text color="gray" dimColor>
-                    {' '}
-                    • {costStr}
-                  </Text>
-                )}
-              </>
-            )
-          } else {
-            statusContent = (
-              <>
-                <Text color="gray" dimColor>
-                  {block.state}
-                </Text>
-                {Boolean(costStr) && (
-                  <Text color="gray" dimColor>
-                    {' '}
-                    • {costStr}
-                  </Text>
-                )}
-              </>
-            )
-          }
-
-          return (
-            <Box key={line.key}>
-              <Text>
-                {RESET}
-                {indent}
-              </Text>
-              <Text>{isSelected ? '▸' : ' '}</Text>
-              <Text color={endColor}>{endChar}</Text>
-              <Text> </Text>
-              {statusContent}
-              {showError && (
-                <Text color="redBright">
-                  {' '}
-                  • {truncate(errorMsg!, Math.max(20, terminalWidth - indent.length - 20))}
-                </Text>
-              )}
-            </Box>
-          )
-        }
-
-        return null
-      })}
+      {visibleLines.map((line, idx) => (
+        <TraceLineRow
+          key={line.key}
+          line={line}
+          selectedIndex={selectedIndex}
+          skipTopLines={idx === 0 ? topPartialSkipLines : 0}
+          contentMode={contentMode}
+          showIds={showIds}
+          showDurations={showDurations}
+          terminalWidth={terminalWidth}
+          yieldedToolIds={yieldedToolIds}
+          executingCallIds={executingCallIds}
+        />
+      ))}
       {partialLine &&
         contentMode &&
         partialLineMaxVisual > 0 &&
-        (() => {
-          const line = partialLine
-
-          if (line.type === 'event' && line.event) {
-            const event = line.event
-            const isSelected = line.eventIndex === selectedIndex
-            const config = getEventConfig(event)
-            const labelColor = config?.color ?? 'gray'
-            const label = config?.label ?? event.type
-
-            let text = ''
-            if (event.type === 'delta_batch') {
-              text = event.finalText
-            } else if (event.type === 'tool_call') {
-              const argsStr = event.args ? JSON.stringify(event.args) : ''
-              text = argsStr ? `${event.name} ${argsStr}` : event.name
-            } else if ('text' in event) {
-              text = event.text
-            }
-
-            const isThought =
-              event.type === 'thought' ||
-              (event.type === 'delta_batch' && event.deltaType === 'thought_delta')
-            if (isThought) {
-              text = text.replace(/\n\n+/g, '\n')
-            } else {
-              try {
-                const parsed = JSON.parse(text.trim())
-                text = JSON.stringify(parsed, null, 2)
-              } catch {
-                // Not JSON
-              }
-            }
-
-            const isInsideModelContext = event.type !== 'user'
-            const depth = isInsideModelContext ? Math.max(0, line.depth - 1) : line.depth
-            const depthIndent = getIndent(depth)
-            const paddedLabel = label.padEnd(LABEL_WIDTH)
-            const prefixWidth = depth * INDENT_WIDTH + 1 + 3 + LABEL_WIDTH + 1
-            const maxTextWidth = Math.max(40, terminalWidth - prefixWidth - 2)
-
-            const wrapLine = (sourceLine: string): string[] => {
-              if (sourceLine.length <= maxTextWidth) return [sourceLine]
-              const leadingMatch = sourceLine.match(/^(\s*)/)
-              const leadingSpaces = leadingMatch ? leadingMatch[1] : ''
-              const leadingLen = leadingSpaces.length
-              const wrapped: string[] = []
-              let remaining = sourceLine
-              const firstWrap = findWrapPoint(remaining, maxTextWidth)
-              wrapped.push(remaining.slice(0, firstWrap))
-              remaining = remaining.slice(firstWrap).trimStart()
-              const continuationWidth = Math.max(10, maxTextWidth - leadingLen)
-              while (remaining.length > 0) {
-                const wrapAt = findWrapPoint(remaining, continuationWidth)
-                wrapped.push(leadingSpaces + remaining.slice(0, wrapAt))
-                remaining = remaining.slice(wrapAt).trimStart()
-              }
-              return wrapped
-            }
-
-            const sourceLines = text.split('\n')
-            const allWrappedLines: { text: string; isFirst: boolean; isFirstOfSource: boolean }[] =
-              []
-            sourceLines.forEach((sourceLine, srcIdx) => {
-              const wrapped = wrapLine(sourceLine)
-              wrapped.forEach((wrappedLine, wrapIdx) => {
-                allWrappedLines.push({
-                  text: wrappedLine,
-                  isFirst: srcIdx === 0 && wrapIdx === 0,
-                  isFirstOfSource: wrapIdx === 0,
-                })
-              })
-            })
-
-            const linesToRender = allWrappedLines.slice(0, partialLineMaxVisual)
-
-            return (
-              <React.Fragment key={`partial-${line.key}`}>
-                {linesToRender.map((wrappedLine, wrapIdx) => {
-                  const treeChar = wrappedLine.isFirstOfSource ? '│' : '│'
-                  const continueIndent = ' '.repeat(LABEL_WIDTH + 3)
-
-                  if (wrappedLine.isFirst) {
-                    return (
-                      <Box key={`partial-wrap-${wrapIdx}`}>
-                        <Text>
-                          {RESET}
-                          {depthIndent}
-                          {isSelected ? '▸' : ' '}
-                          <Text color="gray" dimColor>
-                            {treeChar}
-                          </Text>
-                          <Text color="gray" dimColor>
-                            ─{' '}
-                          </Text>
-                          <Text color={labelColor}>{paddedLabel}</Text>
-                          {isThought ? (
-                            renderThoughtText(wrappedLine.text, true)
-                          ) : event.type === 'assistant' ? (
-                            renderJsonLine(wrappedLine.text, labelColor, false)
-                          ) : (
-                            <Text>{wrappedLine.text || ' '}</Text>
-                          )}
-                        </Text>
-                      </Box>
-                    )
-                  } else {
-                    return (
-                      <Box key={`partial-wrap-${wrapIdx}`}>
-                        <Text>
-                          {RESET}
-                          {depthIndent}{' '}
-                          <Text color="gray" dimColor>
-                            {treeChar}
-                          </Text>
-                          {continueIndent}
-                          {isThought ? (
-                            renderThoughtText(wrappedLine.text, true)
-                          ) : event.type === 'assistant' ? (
-                            renderJsonLine(wrappedLine.text, labelColor, false)
-                          ) : (
-                            <Text>{wrappedLine.text || ' '}</Text>
-                          )}
-                        </Text>
-                      </Box>
-                    )
-                  }
-                })}
-                {partialLineIsTruncated && (
-                  <Box key="partial-truncated">
-                    <Text>
-                      {depthIndent}{' '}
-                      <Text color="gray" dimColor>
-                        │
-                      </Text>
-                      {' '.repeat(LABEL_WIDTH + 3)}
-                      <Text dimColor>...</Text>
-                    </Text>
-                  </Box>
-                )}
-              </React.Fragment>
-            )
-          }
-          return null
-        })()}
+        partialLine.type === 'event' &&
+        partialLine.event && (
+          <TracePartialEventLine
+            key={`partial-${partialLine.key}`}
+            line={partialLine}
+            event={partialLine.event}
+            isSelected={partialLine.eventIndex === selectedIndex}
+            maxVisualLines={partialLineMaxVisual}
+            isTruncated={partialLineIsTruncated}
+            terminalWidth={terminalWidth}
+          />
+        )}
       {(() => {
         if (maxHeight === undefined) return null
         if (!hasScrollableContent) return null

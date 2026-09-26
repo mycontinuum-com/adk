@@ -29,20 +29,18 @@ export type ChatCompletionsCoreOptions = {
   requestMetadata?: { provider: Record<string, unknown> }
 } & ({ provider: 'eurouter' } | { provider: 'chat-completions'; endpoint: string })
 
-const chatTemplateSchema = z
-  .object({
-    enable_thinking: z.boolean().optional(),
-    preserve_thinking: z.boolean().optional(),
-    reasoning_effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
-  })
-  .strict()
+const chatTemplateSchema = z.strictObject({
+  enable_thinking: z.boolean().optional(),
+  preserve_thinking: z.boolean().optional(),
+  reasoning_effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+})
 
 const toolCallSchema = z.object({
   id: z.string().min(1),
   type: z.literal('function'),
   function: z.object({ name: z.string().min(1), arguments: z.string() }),
 })
-const reasoningDetailsSchema = z.array(z.object({ type: z.string() }).passthrough())
+const reasoningDetailsSchema = z.array(z.object({ type: z.string() }).catchall(z.unknown()))
 const continuationSchema = z.object({
   completionId: z.string(),
   scope: z.string().optional(),
@@ -190,19 +188,24 @@ function requestFor(
   const choice = ctx.toolChoice ?? ctx.agent.toolChoice
   const toolChoice: ChatCompletionToolChoiceOption | undefined =
     typeof choice === 'object' ? { type: 'function', function: { name: choice.name } } : choice
-  const tools = ctx.functionTools
-    .filter((tool) => !ctx.allowedTools || ctx.allowedTools.includes(tool.name))
-    .map((tool) => ({
-      type: 'function' as const,
-      function: {
-        ...zodToToolSchema(
-          tool.name,
-          tool.description ?? '',
-          normalizeSchema(tool.schema, tool.name),
-        ),
-        strict: true,
-      },
-    }))
+  const allowedTools = ctx.allowedTools && new Set(ctx.allowedTools)
+  const tools = ctx.functionTools.flatMap((tool) =>
+    allowedTools && !allowedTools.has(tool.name)
+      ? []
+      : [
+          {
+            type: 'function' as const,
+            function: {
+              ...zodToToolSchema(
+                tool.name,
+                tool.description ?? '',
+                normalizeSchema(tool.schema, tool.name),
+              ),
+              strict: true,
+            },
+          },
+        ],
+  )
   // Compatible servers support effort values beyond the OpenAI SDK's enum.
   const extensions: Record<string, unknown> =
     config.provider === 'chat-completions'

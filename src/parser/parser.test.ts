@@ -1436,7 +1436,7 @@ describe('Deeply Nested Structures', () => {
 
 describe('Object Passthrough Mode', () => {
   it('should preserve extra keys with passthrough', () => {
-    const schema = z.object({ name: z.string() }).passthrough()
+    const schema = z.looseObject({ name: z.string() })
     const result = coerce({ name: 'John', extra: 'value', another: 123 }, schema)
     expect(result.success).toBe(true)
     if (result.success) {

@@ -188,6 +188,7 @@ async function streamCopy(
     const buf = Buffer.alloc(MIX_CHUNK)
     let result: { bytesRead: number }
     while ((result = await srcFh.read(buf, 0, MIX_CHUNK, null)).bytesRead > 0) {
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- each chunk is read into one buffer and written before the next read
       await outFh.write(buf, 0, result.bytesRead)
     }
   } finally {
@@ -216,6 +217,7 @@ async function streamMix(
         const readable = offset < sizes[t] ? Math.min(chunkBytes, sizes[t] - offset) : 0
         if (readable === 0) continue
 
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- tracks are read into one shared buffer and mixed in turn
         await fhs[t].read(readBuf, 0, readable, null)
         const readSamples = Math.floor(readable / BYTES_PER_SAMPLE)
 

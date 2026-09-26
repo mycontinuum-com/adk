@@ -30,6 +30,8 @@ export interface PostgresProcessStoreConfig {
   schema?: string
 }
 
+const SCHEMA_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+
 interface PgQueryable {
   query(
     text: string,
@@ -67,8 +69,12 @@ export class PostgresProcessStore implements ProcessStore {
     if (config.pool) {
       this.pool = config.pool as PgPool
     }
+    const schema = config.schema ?? 'adk'
+    if (!SCHEMA_NAME_RE.test(schema)) {
+      throw new Error(`PostgresProcessStore schema must be a plain SQL identifier, got '${schema}'`)
+    }
     this.config = config
-    this.schema = config.schema ?? 'adk'
+    this.schema = schema
   }
 
   private async getPool(): Promise<PgPool> {
@@ -143,6 +149,7 @@ export class PostgresProcessStore implements ProcessStore {
     const pool = await this.getPool()
 
     // Check if process already exists
+    // react-doctor-disable-next-line react-doctor/raw-sql-injection-risk -- only the constructor-validated schema identifier is interpolated; values are bound parameters
     const existing = await pool.query(
       `SELECT 1 FROM ${this.schema}.processes WHERE app_name = $1 AND id = $2`,
       [process.appName, process.id],

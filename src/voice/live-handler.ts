@@ -309,6 +309,7 @@ class LiveCall<S extends StateSchema, T> {
           for (const hook of this.runtime.hooks) {
             if (!hook[name]) continue
             try {
+              // react-doctor-disable-next-line react-doctor/async-await-in-loop -- lifecycle hooks run in registration order, one at a time
               if ((await hook[name]({ ...context, inactivityCount })) === false) keep = true
             } catch {
               this.log({ callId: context.callId }, `Live ${name} hook failed`)
@@ -336,7 +337,10 @@ class LiveCall<S extends StateSchema, T> {
       this.context = entered
       if (!this.agentActive) this.silence.agentWentIdle()
       this.queue = this.queue.then(async () => {
-        for (const hook of this.runtime.hooks) await hook.onEnter?.(entered)
+        for (const hook of this.runtime.hooks) {
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onEnter hooks run in registration order, one at a time
+          await hook.onEnter?.(entered)
+        }
         await this.commitQueued(this.session)
       })
       live.on('delegation_created', (event) => this.admit(live, event.id))
@@ -524,8 +528,10 @@ class LiveCall<S extends StateSchema, T> {
     await persist(() => this.transcript.checkpoint())
     if (this.stopped) return
     const session = await persist(() => app.sessions.create({ scopes: this.session.scopes }))
-    for (const historyEvent of liveHistory(this.session.events, snapshot, config.backend.name))
+    for (const historyEvent of liveHistory(this.session.events, snapshot, config.backend.name)) {
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- carried history is appended to the backend session in transcript order
       await sessionService.appendEvent(session, structuredClone(historyEvent))
+    }
     seedLiveState(this.session, session)
     await this.commit(session)
     if (this.stopped) return
@@ -551,13 +557,15 @@ class LiveCall<S extends StateSchema, T> {
     if (result.output.value === undefined)
       throw new Error('Live backend completed without an output value')
     try {
-      for (const hook of hooks)
+      for (const hook of hooks) {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onResult hooks run in registration order, one at a time
         await hook.onResult?.({
           ...liveContext(this, voice),
           delegation,
           backendSession: session,
           output: result.output.value,
         })
+      }
     } finally {
       await this.commitQueued(this.session)
     }
@@ -593,7 +601,10 @@ class LiveCall<S extends StateSchema, T> {
       invocationId: '',
       agentName: config.backend.name,
     })
-    for (const completed of work.events) await sessionService.appendEvent(callSession, completed)
+    for (const completed of work.events) {
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- settled backend work is appended to the call session in event order
+      await sessionService.appendEvent(callSession, completed)
+    }
     if (this.ledgerClosed) {
       this.log({ callId, delegationId: delegation.id }, 'Late Live backend work was not recorded')
       return
@@ -775,7 +786,10 @@ class LiveCall<S extends StateSchema, T> {
       const exit = Object.assign(liveContext({ ...context, session: ledger }, context.voice), {
         usage: this.usage(await loadPricing({ maxWaitMs: RESULT_PRICING_WAIT_MS })),
       })
-      for (const hook of this.runtime.hooks) await hook.onExit?.(exit)
+      for (const hook of this.runtime.hooks) {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onExit hooks run in registration order, one at a time
+        await hook.onExit?.(exit)
+      }
     } finally {
       await this.commitAtClose(ledger)
     }
@@ -802,6 +816,7 @@ class LiveCall<S extends StateSchema, T> {
       let handled = false
       let terminate = false
       for (const hook of this.runtime.hooks) {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onError hooks run in registration order and each decision is folded before the next hook
         const decision = await hook.onError?.({ ...errorContext, error, recoverable })
         handled ||= decision === 'continue'
         terminate ||= decision === 'end'

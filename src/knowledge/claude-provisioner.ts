@@ -98,6 +98,7 @@ export async function provisionClaudeProtocol(
     const ruleName = sanitizeName(rule.name)
     const rulePath = join(CLAUDE_DIR, RULES_DIR, `${ruleName}.md`)
     const ruleContent = renderRule(rule)
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- writes share the manifest and sanitized names can collide, so file writes stay ordered
     await writeFileWithHash(workspace, rulePath, ruleContent, manifest)
   }
 
@@ -125,6 +126,7 @@ export async function provisionClaudeProtocol(
     const artifactPath = join(ARTIFACTS_DIR, `${artifactName}${ext}`)
     const content =
       typeof artifact.content === 'string' ? artifact.content : artifact.content.toString('utf8')
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- writes share the manifest and sanitized names can collide, so file writes stay ordered
     await writeFileWithHash(workspace, artifactPath, content, manifest, {
       inherited: artifact.scope !== 'process',
     })
@@ -140,6 +142,7 @@ export async function provisionClaudeProtocol(
       // Only seed if not already written
       if (!manifest.files.has(artifactPath)) {
         const placeholder = createPlaceholder(name, meta.mimeType, meta.label)
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- seeding depends on manifest entries written by earlier iterations
         await writeFileWithHash(workspace, artifactPath, placeholder, manifest, {
           seeded: true,
         })

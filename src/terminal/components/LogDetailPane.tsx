@@ -57,7 +57,9 @@ export function LogDetailPane({
   const totalLines = allLines.length
   const maxOffset = Math.max(0, totalLines - contentHeight)
   const effectiveOffset = Math.min(scrollOffset, maxOffset)
-  const visibleLines = allLines.slice(effectiveOffset, effectiveOffset + contentHeight)
+  const visibleLines = allLines
+    .map((text, lineNumber) => ({ text, lineNumber }))
+    .slice(effectiveOffset, effectiveOffset + contentHeight)
   const hasMore = totalLines > contentHeight
 
   return (
@@ -75,9 +77,9 @@ export function LogDetailPane({
         <Text dimColor> • scroll [↑↓] • close [Esc]</Text>
       </Box>
       <Box flexDirection="column" flexGrow={1}>
-        {visibleLines.map((line, idx) => (
-          <Text key={idx} wrap="truncate">
-            {line}
+        {visibleLines.map((line) => (
+          <Text key={line.lineNumber} wrap="truncate">
+            {line.text}
           </Text>
         ))}
       </Box>

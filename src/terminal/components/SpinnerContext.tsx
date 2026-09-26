@@ -66,7 +66,10 @@ function useSpinner(): string {
 export function useOnTick(callback: () => void): void {
   const { subscribe } = useContext(SpinnerContext)
   const callbackRef = useRef(callback)
-  callbackRef.current = callback
+
+  useEffect(() => {
+    callbackRef.current = callback
+  })
 
   useEffect(() => {
     return subscribe(() => callbackRef.current())

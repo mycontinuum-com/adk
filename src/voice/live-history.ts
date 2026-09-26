@@ -63,26 +63,25 @@ export function completedBackendWork(events: readonly Event[]): {
   events: Event[]
   unresolved: Array<{ callId: string; name: string }>
 } {
-  const calls = events.filter((event) => event.type === 'tool_call')
-  const results = events.filter((event) => event.type === 'tool_result')
-  const paired = new Set(
-    calls
-      .filter((call) =>
-        results.some(
-          (result) => result.callId === call.callId && result.invocationId === call.invocationId,
-        ),
-      )
-      .map((call) => JSON.stringify([call.invocationId, call.callId])),
-  )
+  const workKey = (event: { invocationId: string; callId: string }) =>
+    JSON.stringify([event.invocationId, event.callId])
+  const resultKeys = new Set<string>()
+  for (const event of events) if (event.type === 'tool_result') resultKeys.add(workKey(event))
+  const paired = new Set<string>()
+  const unresolved: Array<{ callId: string; name: string }> = []
+  for (const event of events) {
+    if (event.type !== 'tool_call') continue
+    const key = workKey(event)
+    if (resultKeys.has(key)) paired.add(key)
+    else unresolved.push({ callId: event.callId, name: event.name })
+  }
   return {
     events: events.filter(
       (event) =>
         backendEventTypes.has(event.type) &&
         ((event.type !== 'tool_call' && event.type !== 'tool_result') ||
-          paired.has(JSON.stringify([event.invocationId, event.callId]))),
+          paired.has(workKey(event))),
     ),
-    unresolved: calls
-      .filter((call) => !paired.has(JSON.stringify([call.invocationId, call.callId])))
-      .map(({ callId, name }) => ({ callId, name })),
+    unresolved,
   }
 }

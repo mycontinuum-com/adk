@@ -9,9 +9,9 @@ import type { Hook, TurnContext } from './types'
 export function composeHooks(hooks: readonly Hook<any>[]): Hook<any> {
   if (hooks.length === 0) return {}
 
-  const eventFns = hooks.map((h) => h.onEvent).filter(defined)
-  const stepFns = hooks.map((h) => h.onStep).filter(defined)
-  const afterTurnFns = hooks.map((h) => h.afterTurn).filter(defined)
+  const eventFns = hooks.flatMap((h) => (h.onEvent ? [h.onEvent] : []))
+  const stepFns = hooks.flatMap((h) => (h.onStep ? [h.onStep] : []))
+  const afterTurnFns = hooks.flatMap((h) => (h.afterTurn ? [h.afterTurn] : []))
 
   return {
     beforeAgent: composeBeforeHook(hooks.map((h) => h.beforeAgent)),
@@ -35,14 +35,11 @@ export function composeHooks(hooks: readonly Hook<any>[]): Hook<any> {
     afterTurn:
       afterTurnFns.length > 0
         ? async (ctx: TurnContext) => {
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- composed afterTurn hooks run in registration order, one at a time
             for (const fn of afterTurnFns) await fn(ctx)
           }
         : undefined,
   }
-}
-
-function defined<T>(v: T | undefined | null): v is T {
-  return v != null
 }
 
 type AnyHook = ((...args: any[]) => any) | undefined

@@ -167,9 +167,7 @@ it.each([
         },
       }).run(agent, restored)
       expect(second.status).toBe('completed')
-      const messages = z
-        .array(z.object({ role: z.string() }).passthrough())
-        .parse(http.requests[2].messages)
+      const messages = z.array(z.looseObject({ role: z.string() })).parse(http.requests[2].messages)
       expect(messages.filter((message) => message.role === 'assistant')).toEqual([
         {
           role: 'assistant',
@@ -547,7 +545,7 @@ it.each(['same', 'host', 'alias', 'model', 'unscoped'])(
       }).run(makeAgent(adapter, change === 'model' ? 'other-model' : 'fixture-model'), restored)
       expect(second.status).toBe('completed')
       const body = z
-        .object({ messages: z.array(z.object({ role: z.string() }).passthrough()) })
+        .object({ messages: z.array(z.looseObject({ role: z.string() })) })
         .parse(requests[2])
       const toolCall = events.find((event) => event.type === 'tool_call')
       if (!toolCall || toolCall.type !== 'tool_call') throw new Error('Expected a tool call')

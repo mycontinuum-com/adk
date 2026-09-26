@@ -46,6 +46,7 @@ function deepClone<T>(value: T): T {
   if (Buffer.isBuffer(value)) {
     return Buffer.from(value) as T
   }
+  // react-doctor-disable-next-line react-doctor/no-json-parse-stringify-clone -- metadata clones follow the JSON round-trip the Postgres store applies, so both stores return the same shapes
   return JSON.parse(JSON.stringify(value))
 }
 

@@ -10,14 +10,12 @@ import { adk } from '@animahealth/adk'
 import { chatCompletions, ChatCompletionsAdapter } from '@animahealth/adk/chat-completions'
 import { SQLiteStore } from '@animahealth/adk/stores/sqlite'
 
-const reasoningMessage = z
-  .object({
-    role: z.string(),
-    reasoning: z.string().optional(),
-    reasoning_content: z.string().optional(),
-    reasoning_details: z.array(z.object({ type: z.string() }).passthrough()).optional(),
-  })
-  .passthrough()
+const reasoningMessage = z.looseObject({
+  role: z.string(),
+  reasoning: z.string().optional(),
+  reasoning_content: z.string().optional(),
+  reasoning_details: z.array(z.looseObject({ type: z.string() })).optional(),
+})
 const requestSchema = z.object({ model: z.string(), messages: z.array(reasoningMessage) })
 const outputSchema = z.object({ quantity: z.number().int() })
 

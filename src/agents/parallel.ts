@@ -3,8 +3,8 @@ import type { Session } from '../types'
 import type { InternalRunConfig } from '../types/runtime'
 import type { WorkflowRunnerConfig } from './config'
 
-import { createStateAccessor } from '../context'
-import { withInvocationBoundary, createInvocationId, type ResumeContext } from '../core'
+import { createStateAccessor } from '../context/state'
+import { withInvocationBoundary, createInvocationId, type ResumeContext } from '../core/invocation'
 import {
   type WorkflowResult,
   createYieldedResult,
@@ -165,6 +165,7 @@ export async function* runParallel(
     for (const branch of branches) {
       const newEvents = getNewBranchEvents(branch.session, parentEventCount)
       for (const event of newEvents) {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- branch events are appended to the parent session in order
         await runnerConfig.sessionService.appendEvent(session, event)
       }
       yield* withBranchDeltas(newEvents, branch.events)
@@ -220,6 +221,7 @@ export async function* runParallel(
         failedBranches,
       }
       for (const event of runnable.merge(mergeCtx)) {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- merged events are appended to the session in order
         await runnerConfig.sessionService.appendEvent(session, event)
         yield event
       }

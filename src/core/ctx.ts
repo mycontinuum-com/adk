@@ -10,7 +10,7 @@ import type {
 } from '../types'
 import type { StateSchema } from '../types/schema'
 
-import { createStateAccessor } from '../context'
+import { createStateAccessor } from '../context/state'
 import { createOrchestrationContext } from './orchestration'
 import { signalOutput, signalEnd } from './tools'
 

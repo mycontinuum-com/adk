@@ -11,16 +11,14 @@ export interface EurouterAdapterOptions {
   fetch?: typeof globalThis.fetch
 }
 
-const routingSchema = z
-  .object({
-    only: z.array(z.string().min(1)).nonempty().optional(),
-    order: z.array(z.string().min(1)).nonempty().optional(),
-    allowFallbacks: z.boolean().optional(),
-    dataResidency: z.string().min(1).default('eu'),
-    maxRetentionDays: z.number().int().nonnegative().default(0),
-    dataCollection: z.enum(['allow', 'deny']).default('deny'),
-  })
-  .strict()
+const routingSchema = z.strictObject({
+  only: z.array(z.string().min(1)).nonempty().optional(),
+  order: z.array(z.string().min(1)).nonempty().optional(),
+  allowFallbacks: z.boolean().optional(),
+  dataResidency: z.string().min(1).default('eu'),
+  maxRetentionDays: z.number().int().nonnegative().default(0),
+  dataCollection: z.enum(['allow', 'deny']).default('deny'),
+})
 
 export class EurouterAdapter extends ChatCompletionsCore {
   constructor(options: EurouterAdapterOptions = {}) {

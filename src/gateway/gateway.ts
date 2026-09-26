@@ -206,11 +206,10 @@ export class GatewayImpl implements Gateway {
 
       const bufferedSnapshot = subscription.emittedEvents.slice()
       for (const buffered of bufferedSnapshot) {
-        if (buffered.type === 'stream' && buffered.event.id && yieldedIds.has(buffered.event.id)) {
-          continue
-        }
-        if (buffered.type === 'stream' && buffered.event.id) {
-          yieldedIds.add(buffered.event.id)
+        const bufferedId = buffered.type === 'stream' ? buffered.event.id : undefined
+        if (bufferedId) {
+          if (yieldedIds.has(bufferedId)) continue
+          yieldedIds.add(bufferedId)
         }
         yield buffered
         if (buffered.type === 'completed') return
@@ -228,7 +227,8 @@ export class GatewayImpl implements Gateway {
           const event = eventQueue.shift()!
 
           // Deduplicate: skip stream events already yielded from history
-          if (event.type === 'stream' && event.event.id && yieldedIds.has(event.event.id)) {
+          const streamId = event.type === 'stream' ? event.event.id : undefined
+          if (streamId && yieldedIds.has(streamId)) {
             continue
           }
 
@@ -243,7 +243,8 @@ export class GatewayImpl implements Gateway {
             resolveNext = (result) => resolve(result.value)
           })
 
-          if (event.type === 'stream' && event.event.id && yieldedIds.has(event.event.id)) {
+          const streamId = event.type === 'stream' ? event.event.id : undefined
+          if (streamId && yieldedIds.has(streamId)) {
             continue
           }
 
@@ -504,11 +505,7 @@ export class GatewayImpl implements Gateway {
   ): Promise<ExecutionResult> {
     const collectedEvents: Event[] = []
 
-    const taskText =
-      session.events
-        .filter(isUserEvent)
-        .map((e) => e.text)
-        .pop() ?? ''
+    const taskText = session.events.findLast(isUserEvent)?.text ?? ''
 
     if (!taskText) {
       return { status: 'errored', error: 'No task provided', events: [] }

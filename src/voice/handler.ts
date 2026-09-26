@@ -250,6 +250,7 @@ function createEntryFunction<S extends StateSchema>(
       return (async () => {
         for (const event of events) {
           try {
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- events are appended to the session in order
             await sessionService.appendEvent(session, event)
           } catch {
             /* best-effort */
@@ -395,6 +396,7 @@ function createEntryFunction<S extends StateSchema>(
       }
       for (const fn of fns) {
         try {
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- lifecycle hooks run in registration order
           await fn(lifecycleCtx)
         } catch {
           /* best-effort */
@@ -451,6 +453,7 @@ function createEntryFunction<S extends StateSchema>(
               }
               for (const fn of transcriptFns) {
                 try {
+                  // react-doctor-disable-next-line react-doctor/async-await-in-loop -- transcript hooks run in registration order
                   await fn(transcriptCtx)
                 } catch {
                   /* best-effort */
@@ -597,6 +600,7 @@ function createEntryFunction<S extends StateSchema>(
       return tracker.queue.push(async () => {
         for (const event of events) {
           try {
+            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- events are appended to the session in order inside the serialised tracker queue
             await sessionService.appendEvent(session, event)
           } catch {
             /* best-effort */
@@ -1062,8 +1066,7 @@ async function buildAgentComponents(
 ) {
   const renderCtx = await buildContextAsync(session, agent, invocationId)
   const instructions = renderCtx.events
-    .filter(isSystemEvent)
-    .map((e) => e.text)
+    .flatMap((e) => (isSystemEvent(e) ? [e.text] : []))
     .join('\n')
   const lkModel = createLiveKitModel(agent.model as RealtimeModelConfig, deps)
   return { lkModel, renderCtx, instructions }
@@ -1464,7 +1467,7 @@ export function runComposedLifecycleHook(
   beforeEnd?: () => Promise<void> | undefined,
   onVoiceEvent?: (event: VoiceEvent) => void,
 ): void {
-  const fns = hooks?.map((h) => h[hookName]).filter(Boolean) as
+  const fns = hooks?.flatMap((h) => h[hookName] ?? []) as
     | ((ctx: LifecycleHookContext) => LifecycleHookResult)[]
     | undefined
 
@@ -1548,6 +1551,7 @@ export function runComposedLifecycleHook(
     emitHookStarted(fns.length)
     for (const fn of fns) {
       try {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- end hooks run in registration order and each may keep the call alive
         const result = await fn(hookCtx)
         if (result === false) keepAlive = true
       } catch (err) {

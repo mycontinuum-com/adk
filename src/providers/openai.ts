@@ -553,10 +553,8 @@ export function parseResponse(
     if (item.type === 'reasoning') {
       const reasoning = item as ResponseReasoningItem
       const summaryText =
-        reasoning.summary
-          ?.filter((s) => s.type === 'summary_text')
-          .map((s) => s.text)
-          .join('\n') ?? ''
+        reasoning.summary?.flatMap((s) => (s.type === 'summary_text' ? [s.text] : [])).join('\n') ??
+        ''
       const text = summaryText || streamedText?.thoughtText || ''
       stepEvents.push({
         id: createEventId(),
@@ -589,8 +587,7 @@ export function parseResponse(
     if (item.type === 'message') {
       const msg = item as ResponseOutputMessage
       const text = msg.content
-        ?.filter((c) => c.type === 'output_text')
-        .map((c) => (c as { text: string }).text)
+        ?.flatMap((c) => (c.type === 'output_text' ? [c.text] : []))
         .join('\n')
       if (text) {
         stepEvents.push({

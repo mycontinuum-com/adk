@@ -112,6 +112,7 @@ export async function runSimulateLoop(
 
     if (yieldCtx.yieldType === 'tool' && result.status === 'yielded_tool') {
       for (const call of result.yieldedTools) {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- yielded tool calls are answered in order on the shared session input
         const output = await runToolAgent(
           call.name,
           call.args,

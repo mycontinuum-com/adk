@@ -14,6 +14,7 @@ async function truncatePdf(
   maxPages: number,
 ): Promise<{ buffer: Buffer; truncated: boolean; totalPages: number }> {
   try {
+    // react-doctor-disable-next-line react-doctor/no-dynamic-import-path -- pdf-lib is an optional peer dependency kept out of bundling and type resolution
     const { PDFDocument } = await import('pdf-lib' as string)
     const pdfDoc = await PDFDocument.load(pdfBuffer, {
       ignoreEncryption: true,
@@ -249,6 +250,7 @@ async function fetchImageContent(response: Response, url: string): Promise<Fetch
   let buffer: Buffer<ArrayBufferLike> = Buffer.from(arrayBuffer)
 
   try {
+    // react-doctor-disable-next-line react-doctor/no-dynamic-import-path -- sharp is an optional peer dependency kept out of bundling and type resolution
     const sharpModule = await import('sharp' as string)
     const sharp = sharpModule.default as (input: Buffer) => {
       metadata(): Promise<{

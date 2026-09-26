@@ -113,10 +113,11 @@ export function mergeMetadata(
 export function prunePairs(pairs: DistanceMatrixPair[], limit: number): DistanceMatrixPair[] {
   const perPoint = new Map<string, DistanceMatrixPair[]>()
   for (const p of pairs) {
-    if (!perPoint.has(p.a)) perPoint.set(p.a, [])
-    perPoint.get(p.a)!.push(p)
-    if (!perPoint.has(p.b)) perPoint.set(p.b, [])
-    perPoint.get(p.b)!.push(p)
+    for (const id of [p.a, p.b]) {
+      const pointPairs = perPoint.get(id)
+      if (pointPairs) pointPairs.push(p)
+      else perPoint.set(id, [p])
+    }
   }
   const kept = new Set<DistanceMatrixPair>()
   for (const [, pointPairs] of perPoint) {

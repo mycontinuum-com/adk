@@ -389,6 +389,7 @@ export class PostgresStore implements SessionStore {
     if (deletes.length > 0) {
       const placeholders = deletes.map((_, i) => `$${i + 4}`)
       promises.push(
+        // react-doctor-disable-next-line react-doctor/raw-sql-injection-risk -- only generated $n placeholders are interpolated; keys are bound parameters
         pool.query(
           `DELETE FROM scoped_state WHERE app_name = $1 AND scope = $2 AND scope_id = $3 AND key IN (${placeholders.join(', ')})`,
           [appName, scope, scopeId, ...deletes.map(([k]) => k)],

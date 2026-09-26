@@ -267,14 +267,12 @@ export function createMockCodingAgent<S extends StateSchema = StateSchema>(
         }
 
         // Determine modified files from tool calls
-        const modifiedFiles: string[] = []
+        const modifiedFiles = new Set<string>()
         for (const event of events) {
           if (event.type === 'tool_call') {
             const args = event.args
             const path = args.path ?? args.file_path ?? args.filePath
-            if (typeof path === 'string' && path && !modifiedFiles.includes(path)) {
-              modifiedFiles.push(path)
-            }
+            if (typeof path === 'string' && path) modifiedFiles.add(path)
           }
         }
 
@@ -282,7 +280,7 @@ export function createMockCodingAgent<S extends StateSchema = StateSchema>(
 
         // Build output
         const outputValue: CodingOutput = {
-          modifiedFiles,
+          modifiedFiles: [...modifiedFiles],
         }
 
         resolveResult({

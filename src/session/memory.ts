@@ -73,6 +73,7 @@ export class InMemoryStore implements SessionStore {
 
     if (scopedChanges) {
       for (const { scope, scopeId, changes } of scopedChanges) {
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- scoped state changes are applied in order; a later change to the same scope must win
         await this.saveScopedState(session.appName, scope, scopeId, changes)
       }
     }
