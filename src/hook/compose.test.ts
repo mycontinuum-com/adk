@@ -26,8 +26,8 @@ describe('Hook', () => {
     })
 
     it('preserves inner hooks when no outer hooks', () => {
-      const beforeAgent = vi.fn<(...args: unknown[]) => unknown>()
-      const afterAgent = vi.fn<(...args: unknown[]) => unknown>()
+      const beforeAgent = vi.fn<NonNullable<Hook['beforeAgent']>>()
+      const afterAgent = vi.fn<NonNullable<Hook['afterAgent']>>()
       const inner: Hook = { beforeAgent, afterAgent }
 
       const result = composeHooks([inner])

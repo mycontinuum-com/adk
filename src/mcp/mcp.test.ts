@@ -7,19 +7,19 @@ import { createMCPServer } from './server'
 import { createMCPTool } from './tools'
 
 const createMockClient = (tools: MCPToolInfo[] = []): MCPClientInterface => ({
-  connect: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
-  disconnect: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
-  isConnected: vi.fn<(...args: unknown[]) => unknown>().mockReturnValue(true),
-  listTools: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(tools),
-  callTool: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({
+  connect: vi.fn<MCPClientInterface['connect']>().mockResolvedValue(undefined),
+  disconnect: vi.fn<MCPClientInterface['disconnect']>().mockResolvedValue(undefined),
+  isConnected: vi.fn<MCPClientInterface['isConnected']>().mockReturnValue(true),
+  listTools: vi.fn<MCPClientInterface['listTools']>().mockResolvedValue(tools),
+  callTool: vi.fn<MCPClientInterface['callTool']>().mockResolvedValue({
     content: [{ type: 'text', text: '{"result": "ok"}' }],
   }),
-  listResources: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue([]),
+  listResources: vi.fn<MCPClientInterface['listResources']>().mockResolvedValue([]),
   readResource: vi
-    .fn<(...args: unknown[]) => unknown>()
+    .fn<MCPClientInterface['readResource']>()
     .mockResolvedValue({ uri: 'test', text: 'content' }),
-  listPrompts: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue([]),
-  getPrompt: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({ messages: [] }),
+  listPrompts: vi.fn<MCPClientInterface['listPrompts']>().mockResolvedValue([]),
+  getPrompt: vi.fn<MCPClientInterface['getPrompt']>().mockResolvedValue({ messages: [] }),
 })
 
 describe('MCPServer', () => {
@@ -57,19 +57,21 @@ describe('MCPServer', () => {
       let connectCalls = 0
       let connected = false
       const mockClient: MCPClientInterface = {
-        connect: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(async () => {
+        connect: vi.fn<MCPClientInterface['connect']>().mockImplementation(async () => {
           connectCalls++
           await new Promise((r) => setTimeout(r, 50))
           connected = true
         }),
-        disconnect: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
-        isConnected: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(() => connected),
-        listTools: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue([]),
-        callTool: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({ content: [] }),
-        listResources: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue([]),
-        readResource: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({ uri: 'test' }),
-        listPrompts: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue([]),
-        getPrompt: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({ messages: [] }),
+        disconnect: vi.fn<MCPClientInterface['disconnect']>().mockResolvedValue(undefined),
+        isConnected: vi.fn<MCPClientInterface['isConnected']>().mockImplementation(() => connected),
+        listTools: vi.fn<MCPClientInterface['listTools']>().mockResolvedValue([]),
+        callTool: vi.fn<MCPClientInterface['callTool']>().mockResolvedValue({ content: [] }),
+        listResources: vi.fn<MCPClientInterface['listResources']>().mockResolvedValue([]),
+        readResource: vi
+          .fn<MCPClientInterface['readResource']>()
+          .mockResolvedValue({ uri: 'test' }),
+        listPrompts: vi.fn<MCPClientInterface['listPrompts']>().mockResolvedValue([]),
+        getPrompt: vi.fn<MCPClientInterface['getPrompt']>().mockResolvedValue({ messages: [] }),
       }
       ;(server as unknown as { client: MCPClientInterface }).client = mockClient
 
@@ -186,8 +188,8 @@ describe('MCPServer', () => {
       let connected = true
       const mockClient: MCPClientInterface = {
         ...createMockClient([{ name: 'tool1', inputSchema: { type: 'object' } }]),
-        isConnected: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(() => connected),
-        disconnect: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(async () => {
+        isConnected: vi.fn<MCPClientInterface['isConnected']>().mockImplementation(() => connected),
+        disconnect: vi.fn<MCPClientInterface['disconnect']>().mockImplementation(async () => {
           connected = false
         }),
       }

@@ -52,6 +52,7 @@ describe('workflow.cc-compat-coding-node-runner', () => {
     const provisioner: WorkspaceProvisioner = {
       provision: async () => ({
         path: path.join(tmpDir, 'workspace'),
+        isolation: 'session',
         dispose: async () => {
           disposed++
         },

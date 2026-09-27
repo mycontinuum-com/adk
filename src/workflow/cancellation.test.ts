@@ -18,15 +18,13 @@ describe('workflow.cancellation', () => {
 
     const wf = app.step({
       name: 'cancel-test',
-      execute: async (ctx) => {
+      execute: async () => {
         const thunks = Array.from({ length: 10 }, (_, i) => async () => {
-          // Queued thunks must NOT begin once the run is aborted (ctx.signal flips on stream.abort()).
-          if (ctx.signal?.aborted) return -1
           started.push(i)
           await new Promise<void>((res) => setTimeout(res, 100))
           return i
         })
-        return fanout(thunks, { limit: 2 })
+        await fanout(thunks, { limit: 2 })
       },
     })
 
@@ -49,7 +47,7 @@ describe('workflow.cancellation', () => {
     expect(abortedReject || result?.status === 'aborted').toBe(true)
     expect(result?.status).not.toBe('completed')
     // Queued thunks were cancelled: with limit 2 and an abort at 30ms (well before the 100ms thunks
-    // finish), the thunks admitted after the abort short-circuit on ctx.signal and never start.
+    // finish), the run settles before the queued thunks are admitted.
     expect(started.length).toBeLessThan(10)
   })
 
@@ -60,7 +58,6 @@ describe('workflow.cancellation', () => {
       name: 'abort-stream-test',
       execute: async () => {
         await new Promise<void>((res) => setTimeout(res, 500)) // long-running
-        return { ran: true }
       },
     })
 

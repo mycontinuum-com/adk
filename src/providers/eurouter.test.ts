@@ -54,12 +54,13 @@ function fixture(responses: Response[]) {
 
 function context(): RenderContext {
   const app = adk()
+  const session = createTestSession('hello')
   return {
     invocationId: 'invocation',
     agentName: 'test',
-    session: createTestSession('hello'),
-    state: {},
-    agent: app.agent({ name: 'test', model: eurouter('requested-model') }),
+    session,
+    state: session.state,
+    agent: app.agent({ name: 'test', model: eurouter('requested-model'), context: [] }),
     events: [],
     functionTools: [],
     providerTools: [],

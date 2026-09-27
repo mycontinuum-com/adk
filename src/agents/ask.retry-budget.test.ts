@@ -56,10 +56,10 @@ describe('workflow.ask-default-and-explicit-retries', () => {
       defaultModel: openai('gpt-4o-mini'),
     })
 
-    let thrownError: Error | null = null
-    await app.ask('hello', { schema, retries: 0 }).catch((e: Error) => {
-      thrownError = e
-    })
+    const thrownError: Error | null = await app.ask('hello', { schema, retries: 0 }).then(
+      () => null,
+      (e: Error) => e,
+    )
     expect(thrownError).not.toBeNull()
     expect((thrownError as Error).name).toBe('OutputParseError')
     // Exactly 1 call despite schema being set
@@ -84,10 +84,10 @@ describe('workflow.ask-default-and-explicit-retries', () => {
       defaultModel: openai('gpt-4o-mini'),
     })
 
-    let thrownError: Error | null = null
-    await app.ask('hello', { schema, retries: 4 }).catch((e: Error) => {
-      thrownError = e
-    })
+    const thrownError: Error | null = await app.ask('hello', { schema, retries: 4 }).then(
+      () => null,
+      (e: Error) => e,
+    )
     expect(thrownError).not.toBeNull()
     expect((thrownError as Error).name).toBe('OutputParseError')
     // 5 total attempts = retries + 1
@@ -105,10 +105,10 @@ describe('workflow.ask-default-and-explicit-retries', () => {
       defaultModel: openai('gpt-4o-mini'),
     })
 
-    let thrownError: Error | null = null
-    await app.ask('hello', { schema }).catch((e: Error) => {
-      thrownError = e
-    })
+    const thrownError: Error | null = await app.ask('hello', { schema }).then(
+      () => null,
+      (e: Error) => e,
+    )
     expect(thrownError).not.toBeNull()
     expect((thrownError as Error).name).toBe('OutputParseError')
     // Default is retries:2 → 3 total attempts

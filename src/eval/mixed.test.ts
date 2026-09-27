@@ -203,7 +203,11 @@ it('rejects lossy voice metric data before worker serialization', async () => {
   expect(
     stringifyEvidence(
       serializeEvent({
+        id: 'change',
+        createdAt: 0,
         type: 'state_change',
+        scope: 'session',
+        source: 'mutation',
         changes: [{ key: 'greeted', oldValue: undefined, newValue: true }],
       }),
     ),

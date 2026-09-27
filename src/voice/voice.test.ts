@@ -1,7 +1,10 @@
 import { vi } from 'vitest'
 
-import type { LKAgentSession, VoiceDeps } from './livekit-types'
-import type { VoiceSession, VoiceReply, VoiceHandlerConfig, VoiceEvent } from './types'
+import type { ComposedErrorHandler } from '../errors/types'
+import type { CreateSessionOptions } from '../types/session'
+import type { ToolBridgeContext } from './livekit-tools'
+import type { LKAgentSession, LKImports, VoiceDeps } from './livekit-types'
+import type { VoiceSession, VoiceReply, VoiceHandlerConfig, VoiceEvent, VoiceHook } from './types'
 
 import { signalOutput } from '../core/tools'
 import { realtime } from '../providers/models'
@@ -11,27 +14,34 @@ import { createLiveKitModel as _createLiveKitModel } from './livekit-model'
 import { convertTools as _convertTools } from './livekit-tools'
 import { LiveKitVoiceSession } from './session'
 
+type WireCallback<K extends 'onTranscript' | 'onAssistantMessage'> = NonNullable<
+  Parameters<typeof wireEventListeners>[0][K]
+>
+type BridgeHookFn<K extends 'beforeTool' | 'afterTool'> = NonNullable<
+  NonNullable<ToolBridgeContext['hook']>[K]
+>
+type BridgeCallback<K extends 'onTransfer' | 'onOutput' | 'onToolStart' | 'onToolEnd'> =
+  NonNullable<ToolBridgeContext[K]>
+
 function mockLKSession(overrides?: Partial<LKAgentSession>): LKAgentSession {
   return {
-    on: vi.fn<(...args: unknown[]) => unknown>(),
-    start: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
-    updateAgent: vi.fn<(...args: unknown[]) => unknown>(),
-    close: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
-    generateReply: vi.fn<(...args: unknown[]) => unknown>().mockReturnValue({}),
+    on: vi.fn<LKAgentSession['on']>(),
+    start: vi.fn<LKAgentSession['start']>().mockResolvedValue(undefined),
+    updateAgent: vi.fn<LKAgentSession['updateAgent']>(),
+    close: vi.fn<LKAgentSession['close']>().mockResolvedValue(undefined),
+    generateReply: vi.fn<LKAgentSession['generateReply']>().mockReturnValue({}),
     ...overrides,
   }
 }
 
 // ---- Mock LiveKit dependencies via DI (no module mocking needed) ----
 
-const mockLLMTool = vi.fn<(...args: unknown[]) => unknown>(
-  (opts: { description: string; parameters: unknown; execute: Function }) => ({
-    __lk_tool: true,
-    description: opts.description,
-    parameters: opts.parameters,
-    execute: opts.execute,
-  }),
-)
+const mockLLMTool = vi.fn<LKImports['llm']['tool']>((opts) => ({
+  __lk_tool: true,
+  description: opts.description,
+  parameters: opts.parameters,
+  execute: opts.execute,
+}))
 
 const mockAgents = {
   voice: {
@@ -215,10 +225,14 @@ describe('Voice module', () => {
         })
       })
       const then = vi
-        .fn<(...args: unknown[]) => unknown>()
-        .mockImplementation(
-          (onFulfilled?: (value: unknown) => unknown, onRejected?: (reason: unknown) => unknown) =>
-            playout.promise.then(() => onFulfilled?.(speechHandle), onRejected),
+        .fn<
+          (
+            onFulfilled?: (value: unknown) => unknown,
+            onRejected?: (reason: unknown) => unknown,
+          ) => Promise<unknown>
+        >()
+        .mockImplementation((onFulfilled, onRejected) =>
+          playout.promise.then(() => onFulfilled?.(speechHandle), onRejected),
         )
       const speechHandle = { waitForPlayout } as {
         waitForPlayout: typeof waitForPlayout
@@ -288,7 +302,7 @@ describe('Voice module', () => {
     })
 
     test('shutdown falls back to close()', () => {
-      const mockClose = vi.fn<(...args: unknown[]) => unknown>()
+      const mockClose = vi.fn<LKAgentSession['close']>()
       const session = new LiveKitVoiceSession(
         mockLKSession({
           close: mockClose,
@@ -342,9 +356,9 @@ describe('Voice module', () => {
     })
 
     test('say delegates to agent session say()', async () => {
-      const mockPlayout = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined)
+      const mockPlayout = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
       const mockSay = vi
-        .fn<(...args: unknown[]) => unknown>()
+        .fn<NonNullable<LKAgentSession['say']>>()
         .mockReturnValue({ waitForPlayout: mockPlayout })
       const session = new LiveKitVoiceSession(mockLKSession({ say: mockSay }))
 
@@ -360,8 +374,8 @@ describe('Voice module', () => {
     test('say throws after shutdown', async () => {
       const session = new LiveKitVoiceSession(
         mockLKSession({
-          shutdown: vi.fn<(...args: unknown[]) => unknown>(),
-          say: vi.fn<(...args: unknown[]) => unknown>(),
+          shutdown: vi.fn<NonNullable<LKAgentSession['shutdown']>>(),
+          say: vi.fn<NonNullable<LKAgentSession['say']>>(),
         }),
       )
       session.shutdown()
@@ -839,7 +853,7 @@ describe('Voice module', () => {
     })
 
     test('patches onEnter when callback provided', async () => {
-      const onEnterFn = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined)
+      const onEnterFn = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
       const testAgent = {
         kind: 'agent' as const,
         name: 'test',
@@ -1001,7 +1015,7 @@ describe('Voice module', () => {
       const mockExecute = vi
         .fn<(...args: unknown[]) => unknown>()
         .mockResolvedValue(signalOutput({ summary: 'Call ended' }))
-      const onOutput = vi.fn<(...args: unknown[]) => unknown>()
+      const onOutput = vi.fn<BridgeCallback<'onOutput'>>()
       const adkTools = [
         {
           name: 'endCall',
@@ -1025,7 +1039,7 @@ describe('Voice module', () => {
       const transferAgent = { kind: 'agent', name: 'specialist' }
       const mockExecute = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(transferAgent)
       const handoffResult = { __handoff: true, agent: 'specialist' }
-      const onTransfer = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(handoffResult)
+      const onTransfer = vi.fn<BridgeCallback<'onTransfer'>>().mockResolvedValue(handoffResult)
       const adkTools = [
         {
           name: 'transfer',
@@ -1117,7 +1131,7 @@ describe('Voice module', () => {
       const bridgeCtx = {
         ...makeBridgeCtx(),
         hook: {
-          beforeTool: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({
+          beforeTool: vi.fn<BridgeHookFn<'beforeTool'>>().mockResolvedValue({
             id: 'evt_1',
             type: 'tool_result',
             createdAt: Date.now(),
@@ -1154,7 +1168,7 @@ describe('Voice module', () => {
       const bridgeCtx = {
         ...makeBridgeCtx(),
         hook: {
-          afterTool: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({
+          afterTool: vi.fn<BridgeHookFn<'afterTool'>>().mockResolvedValue({
             id: 'evt_2',
             type: 'tool_result',
             createdAt: Date.now(),
@@ -1259,8 +1273,8 @@ describe('Voice module', () => {
     })
 
     test('onToolEnd called even when tool throws', async () => {
-      const onToolStart = vi.fn<(...args: unknown[]) => unknown>()
-      const onToolEnd = vi.fn<(...args: unknown[]) => unknown>()
+      const onToolStart = vi.fn<BridgeCallback<'onToolStart'>>()
+      const onToolEnd = vi.fn<BridgeCallback<'onToolEnd'>>()
       const executeFn = vi
         .fn<(...args: unknown[]) => unknown>()
         .mockRejectedValue(new Error('boom'))
@@ -1299,12 +1313,12 @@ describe('Voice module', () => {
       ]
 
       const mockVoiceSession = {
-        generateReply: vi.fn<(...args: unknown[]) => unknown>(),
-        say: vi.fn<(...args: unknown[]) => unknown>(),
-        playSound: vi.fn<(...args: unknown[]) => unknown>(),
+        generateReply: vi.fn<VoiceSession['generateReply']>(),
+        say: vi.fn<VoiceSession['say']>(),
+        playSound: vi.fn<VoiceSession['playSound']>(),
         waitForPlayout: vi.fn<(...args: unknown[]) => unknown>(),
         shutdown: vi.fn<(...args: unknown[]) => unknown>(),
-        interrupt: vi.fn<(...args: unknown[]) => unknown>(),
+        interrupt: vi.fn<VoiceSession['interrupt']>(),
         turnCount: 0,
       }
       const bridgeCtx = { ...makeBridgeCtx(), voiceSession: mockVoiceSession }
@@ -1319,13 +1333,13 @@ describe('Voice module', () => {
     test('tool execute can trigger voice.generateReply before returning', async () => {
       const order: string[] = []
       const mockVoiceSession = {
-        generateReply: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(async () => {
+        generateReply: vi.fn<VoiceSession['generateReply']>().mockImplementation(async () => {
           order.push('generateReply')
-          return {}
+          return { waitForPlayout: async () => {} }
         }),
-        say: vi.fn<(...args: unknown[]) => unknown>(),
-        playSound: vi.fn<(...args: unknown[]) => unknown>(),
-        interrupt: vi.fn<(...args: unknown[]) => unknown>(),
+        say: vi.fn<VoiceSession['say']>(),
+        playSound: vi.fn<VoiceSession['playSound']>(),
+        interrupt: vi.fn<VoiceSession['interrupt']>(),
         turnCount: 1,
       }
 
@@ -1370,16 +1384,16 @@ describe('Voice module', () => {
       const playout = deferred()
       const order: string[] = []
       const mockVoiceSession = {
-        generateReply: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(async () => ({
-          waitForPlayout: vi.fn<(...args: unknown[]) => unknown>().mockImplementation(async () => {
+        generateReply: vi.fn<VoiceSession['generateReply']>().mockImplementation(async () => ({
+          waitForPlayout: vi.fn<() => Promise<void>>().mockImplementation(async () => {
             order.push('wait-start')
             await playout.promise
             order.push('wait-end')
           }),
         })),
-        say: vi.fn<(...args: unknown[]) => unknown>(),
-        playSound: vi.fn<(...args: unknown[]) => unknown>(),
-        interrupt: vi.fn<(...args: unknown[]) => unknown>(),
+        say: vi.fn<VoiceSession['say']>(),
+        playSound: vi.fn<VoiceSession['playSound']>(),
+        interrupt: vi.fn<VoiceSession['interrupt']>(),
         turnCount: 1,
       }
 
@@ -1531,7 +1545,7 @@ describe('Voice module', () => {
         ...makeBridgeCtx(),
         errorHandler: {
           handle: vi
-            .fn<(...args: unknown[]) => unknown>()
+            .fn<ComposedErrorHandler['handle']>()
             .mockResolvedValue({ action: 'retry', delay: 0 }),
         },
       }
@@ -1568,7 +1582,7 @@ describe('Voice module', () => {
       const bridgeCtx = {
         ...makeBridgeCtx(),
         errorHandler: {
-          handle: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({
+          handle: vi.fn<ComposedErrorHandler['handle']>().mockResolvedValue({
             action: 'fallback',
             result: { fallback: true },
           }),
@@ -1603,7 +1617,7 @@ describe('Voice module', () => {
       const bridgeCtx = {
         ...makeBridgeCtx(),
         errorHandler: {
-          handle: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({ action: 'skip' }),
+          handle: vi.fn<ComposedErrorHandler['handle']>().mockResolvedValue({ action: 'skip' }),
         },
       }
       convertTools(adkTools as any, () => bridgeCtx)
@@ -1630,7 +1644,7 @@ describe('Voice module', () => {
       const bridgeCtx = {
         ...makeBridgeCtx(),
         errorHandler: {
-          handle: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue({ action: 'throw' }),
+          handle: vi.fn<ComposedErrorHandler['handle']>().mockResolvedValue({ action: 'throw' }),
         },
       }
       convertTools(adkTools as any, () => bridgeCtx)
@@ -1643,8 +1657,8 @@ describe('Voice module', () => {
       const mockExecute = vi
         .fn<(...args: unknown[]) => unknown>()
         .mockResolvedValue(signalOutput({ done: true }))
-      const afterTool = vi.fn<(...args: unknown[]) => unknown>()
-      const onOutput = vi.fn<(...args: unknown[]) => unknown>()
+      const afterTool = vi.fn<BridgeHookFn<'afterTool'>>()
+      const onOutput = vi.fn<BridgeCallback<'onOutput'>>()
       const adkTools = [
         {
           name: 'endTool',
@@ -1673,8 +1687,8 @@ describe('Voice module', () => {
     test('afterTool hook fires for Runnable transfer results', async () => {
       const transferAgent = { kind: 'agent', name: 'specialist' }
       const mockExecute = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(transferAgent)
-      const afterTool = vi.fn<(...args: unknown[]) => unknown>()
-      const onTransfer = vi.fn<(...args: unknown[]) => unknown>()
+      const afterTool = vi.fn<BridgeHookFn<'afterTool'>>()
+      const onTransfer = vi.fn<BridgeCallback<'onTransfer'>>()
       const adkTools = [
         {
           name: 'transferTool',
@@ -1703,7 +1717,7 @@ describe('Voice module', () => {
       const executeFn = vi
         .fn<(...args: unknown[]) => unknown>()
         .mockRejectedValue(new Error('oops'))
-      const afterTool = vi.fn<(...args: unknown[]) => unknown>()
+      const afterTool = vi.fn<BridgeHookFn<'afterTool'>>()
       const adkTools = [
         {
           name: 'errTool',
@@ -1880,7 +1894,7 @@ describe('Voice module', () => {
 
     test('onEnter callback is awaited (async completes before onEnter returns)', async () => {
       let callbackResolved = false
-      const onEnterFn = vi.fn<(...args: unknown[]) => unknown>().mockImplementation(() => {
+      const onEnterFn = vi.fn<() => Promise<void>>().mockImplementation(() => {
         return new Promise<void>((resolve) => {
           setTimeout(() => {
             callbackResolved = true
@@ -1962,8 +1976,8 @@ describe('Voice module', () => {
     const events: any[] = []
     return {
       createSession: vi
-        .fn<(...args: unknown[]) => unknown>()
-        .mockImplementation((_app: string, opts: any) => ({
+        .fn<(appName: string, opts: CreateSessionOptions) => unknown>()
+        .mockImplementation((_app, opts) => ({
           id: opts.sessionId,
           appName: _app,
           state: {
@@ -1998,12 +2012,10 @@ describe('Voice module', () => {
   function makeLKSessionMock(generateReplyReturn: unknown = {}) {
     const listeners = new Map<string, ((...args: unknown[]) => void)[]>()
     return {
-      on: vi.fn<(...args: unknown[]) => unknown>(
-        (event: string, cb: (...args: unknown[]) => void) => {
-          if (!listeners.has(event)) listeners.set(event, [])
-          listeners.get(event)!.push(cb)
-        },
-      ),
+      on: vi.fn<(event: string, cb: (...args: unknown[]) => void) => void>((event, cb) => {
+        if (!listeners.has(event)) listeners.set(event, [])
+        listeners.get(event)!.push(cb)
+      }),
       start: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
       updateAgent: vi.fn<(...args: unknown[]) => unknown>(),
       close: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined),
@@ -2031,21 +2043,17 @@ describe('Voice module', () => {
     return {
       room: {
         name: overrides?.roomName ?? 'test-room',
-        on: vi.fn<(...args: unknown[]) => unknown>(
-          (event: string, cb: (...args: unknown[]) => void) => {
-            if (!roomListeners.has(event)) roomListeners.set(event, [])
-            roomListeners.get(event)!.push(cb)
-          },
-        ),
-        off: vi.fn<(...args: unknown[]) => unknown>(
-          (event: string, cb: (...args: unknown[]) => void) => {
-            const fns = roomListeners.get(event)
-            if (fns) {
-              const idx = fns.indexOf(cb)
-              if (idx >= 0) fns.splice(idx, 1)
-            }
-          },
-        ),
+        on: vi.fn<(event: string, cb: (...args: unknown[]) => void) => void>((event, cb) => {
+          if (!roomListeners.has(event)) roomListeners.set(event, [])
+          roomListeners.get(event)!.push(cb)
+        }),
+        off: vi.fn<(event: string, cb: (...args: unknown[]) => void) => void>((event, cb) => {
+          const fns = roomListeners.get(event)
+          if (fns) {
+            const idx = fns.indexOf(cb)
+            if (idx >= 0) fns.splice(idx, 1)
+          }
+        }),
         _emit(event: string, ...args: unknown[]) {
           for (const fn of roomListeners.get(event) ?? []) fn(...args)
         },
@@ -2056,7 +2064,7 @@ describe('Voice module', () => {
         identity: 'caller',
         attributes: overrides?.participantAttrs ?? {},
       }),
-      addShutdownCallback: vi.fn<(...args: unknown[]) => unknown>((cb: () => Promise<void>) => {
+      addShutdownCallback: vi.fn<(cb: () => Promise<void>) => void>((cb) => {
         shutdownCallbacks.push(cb)
       }),
       shutdown: vi.fn<(...args: unknown[]) => unknown>(),
@@ -3190,12 +3198,10 @@ describe('Voice module', () => {
     function makeLKSessionWithListeners() {
       const listeners = new Map<string, ((...args: unknown[]) => void)[]>()
       return {
-        on: vi.fn<(...args: unknown[]) => unknown>(
-          (event: string, cb: (...args: unknown[]) => void) => {
-            if (!listeners.has(event)) listeners.set(event, [])
-            listeners.get(event)!.push(cb)
-          },
-        ),
+        on: vi.fn<(event: string, cb: (...args: unknown[]) => void) => void>((event, cb) => {
+          if (!listeners.has(event)) listeners.set(event, [])
+          listeners.get(event)!.push(cb)
+        }),
         emit(event: string, ...args: unknown[]) {
           for (const fn of listeners.get(event) ?? []) fn(...args)
         },
@@ -3208,7 +3214,7 @@ describe('Voice module', () => {
         invocationId: overrides?.invocationId ?? 'inv_1',
         composedHook: overrides?.composedHook ?? {},
         composedErrorHandler: overrides?.composedErrorHandler ?? {
-          handle: vi.fn<(...args: unknown[]) => unknown>(),
+          handle: vi.fn<ComposedErrorHandler['handle']>(),
         },
         functionTools: overrides?.functionTools ?? [],
       })
@@ -3393,8 +3399,8 @@ describe('Voice module', () => {
       const mockAppendEvent = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined)
       const sessionService = { appendEvent: mockAppendEvent } as any
       const session = { events: [] } as any
-      const onAssistantMessage = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(true)
-      const onTranscript = vi.fn<(...args: unknown[]) => unknown>()
+      const onAssistantMessage = vi.fn<WireCallback<'onAssistantMessage'>>().mockResolvedValue(true)
+      const onTranscript = vi.fn<WireCallback<'onTranscript'>>()
 
       const tracker = wireEventListeners({
         lkSession: lkSession as any,
@@ -3453,9 +3459,9 @@ describe('Voice module', () => {
       lkSession.emit('agent_state_changed', { oldState: 'listening', newState: 'thinking' })
       await tracker.queue.drain()
 
-      expect(
-        voiceEvents.flatMap((e) => (e.type === 'voice_activity' ? [e.activity] : [])),
-      ).toEqual(['user_speech_started', 'agent_idle', 'user_speech_ended', 'agent_active'])
+      expect(voiceEvents.flatMap((e) => (e.type === 'voice_activity' ? [e.activity] : []))).toEqual(
+        ['user_speech_started', 'agent_idle', 'user_speech_ended', 'agent_active'],
+      )
     })
 
     test('onTranscript fires for user transcript with correct event', async () => {
@@ -3463,7 +3469,7 @@ describe('Voice module', () => {
       const mockAppendEvent = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined)
       const sessionService = { appendEvent: mockAppendEvent } as any
       const session = { events: [] } as any
-      const onTranscript = vi.fn<(...args: unknown[]) => unknown>()
+      const onTranscript = vi.fn<WireCallback<'onTranscript'>>()
 
       wireEventListeners({
         lkSession: lkSession as any,
@@ -3495,7 +3501,7 @@ describe('Voice module', () => {
       const mockAppendEvent = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined)
       const sessionService = { appendEvent: mockAppendEvent } as any
       const session = { events: [] } as any
-      const onTranscript = vi.fn<(...args: unknown[]) => unknown>()
+      const onTranscript = vi.fn<WireCallback<'onTranscript'>>()
 
       wireEventListeners({
         lkSession: lkSession as any,
@@ -3527,7 +3533,7 @@ describe('Voice module', () => {
       const mockAppendEvent = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined)
       const sessionService = { appendEvent: mockAppendEvent } as any
       const session = { events: [] } as any
-      const onTranscript = vi.fn<(...args: unknown[]) => unknown>()
+      const onTranscript = vi.fn<WireCallback<'onTranscript'>>()
 
       let currentState = {
         invocationId: 'inv_before',
@@ -3536,7 +3542,7 @@ describe('Voice module', () => {
       const getAgentState = () => ({
         ...currentState,
         composedHook: {},
-        composedErrorHandler: { handle: vi.fn<(...args: unknown[]) => unknown>() },
+        composedErrorHandler: { handle: vi.fn<ComposedErrorHandler['handle']>() },
         functionTools: [],
       })
 
@@ -3570,7 +3576,7 @@ describe('Voice module', () => {
       const mockAppendEvent = vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined)
       const sessionService = { appendEvent: mockAppendEvent } as any
       const session = { events: [] } as any
-      const onTranscript = vi.fn<(...args: unknown[]) => unknown>()
+      const onTranscript = vi.fn<WireCallback<'onTranscript'>>()
 
       wireEventListeners({
         lkSession: lkSession as any,
@@ -3774,7 +3780,7 @@ describe('Voice module', () => {
       const sessionService = makeSessionService()
       const jobCtx = makeJobContext()
       const onInactivity = vi
-        .fn<(...args: unknown[]) => unknown>()
+        .fn<NonNullable<VoiceHook['onInactivity']>>()
         .mockImplementation(async (ctx) => {
           await ctx.voice.generateReply({
             instructions: `Prompt ${ctx.inactivityCount}`,
@@ -3836,7 +3842,10 @@ describe('Voice module', () => {
       lkSessionMock.start.mockImplementation(async () => {
         setTimeout(() => {
           lkSessionMock._emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
-          lkSessionMock._emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+          lkSessionMock._emit('agent_state_changed', {
+            oldState: 'speaking',
+            newState: 'listening',
+          })
           // Twice the timeout: the old timer, started when the agent went idle, fires first.
           setTimeout(() => lkSessionMock._emit('close'), 60)
         }, 0)

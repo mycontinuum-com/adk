@@ -1,5 +1,7 @@
 import { vi } from 'vitest'
 
+import type { SearchProvider } from './types'
+
 import { adk } from '../api/app'
 import { linkedInPipeline, ScrapinProvider } from './scrapin'
 import { SerperProvider } from './serper'
@@ -299,7 +301,7 @@ describe('Serper response parsing', () => {
 describe('Tool configuration', () => {
   const mockProvider = {
     name: 'mock',
-    search: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue([]),
+    search: vi.fn<SearchProvider['search']>().mockResolvedValue([]),
   }
 
   const app = adk()

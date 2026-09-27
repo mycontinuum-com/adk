@@ -14,7 +14,7 @@ let lastMockWS: MockWebSocket | null = null
 
 class MockWebSocket extends EventEmitter {
   readyState = 0
-  sentMessages: Record<string, unknown>[] = []
+  sentMessages: SentMessage[] = []
   url: string
   opts: Record<string, unknown> | undefined
 
@@ -58,6 +58,38 @@ class MockWebSocket extends EventEmitter {
 }
 
 const MockWS = MockWebSocket as unknown as WSConstructor
+
+/** The subset of the OpenAI Realtime wire protocol the adapter sends and these tests inspect. */
+interface SentMessage {
+  type: string
+  session?: {
+    modalities: string[]
+    turn_detection: null
+    instructions?: string
+    temperature?: number
+    max_response_output_tokens?: number
+    tools: {
+      type: string
+      name: string
+      description: string
+      parameters: { properties: Record<string, unknown> }
+    }[]
+  }
+}
+
+function currentWS(): MockWebSocket {
+  if (!lastMockWS) throw new Error('No WebSocket was opened')
+  return lastMockWS
+}
+
+function findSessionUpdate(): SentMessage & Required<Pick<SentMessage, 'session'>> {
+  const message = currentWS().sentMessages.find(
+    (m): m is SentMessage & Required<Pick<SentMessage, 'session'>> =>
+      m.type === 'session.update' && m.session !== undefined,
+  )
+  if (!message) throw new Error('No session.update message was sent')
+  return message
+}
 
 // --- Helpers ---
 
@@ -122,8 +154,8 @@ describe('OpenAIRealtimeTextAdapter', () => {
       const adapter = new OpenAIRealtimeTextAdapter('test-api-key', MockWS)
       await collectStep(adapter, createMockCtx(), config)
 
-      expect(lastMockWS.url).toBe('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime')
-      expect(lastMockWS.opts.headers).toEqual({
+      expect(currentWS().url).toBe('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime')
+      expect(currentWS().opts?.headers).toEqual({
         Authorization: 'Bearer test-api-key',
         'OpenAI-Beta': 'realtime=v1',
       })
@@ -138,7 +170,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
         name: 'gpt-4o realtime/preview',
       })
 
-      expect(lastMockWS.url).toContain('model=gpt-4o%20realtime%2Fpreview')
+      expect(currentWS().url).toContain('model=gpt-4o%20realtime%2Fpreview')
     })
 
     test('sends session.update with text modality and null turn detection', async () => {
@@ -147,7 +179,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
       const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, createMockCtx(), config)
 
-      const sessionUpdate = lastMockWS.sentMessages.find((m: any) => m.type === 'session.update')
+      const sessionUpdate = findSessionUpdate()
       expect(sessionUpdate.session.modalities).toEqual(['text'])
       expect(sessionUpdate.session.turn_detection).toBeNull()
       expect(sessionUpdate.session.instructions).toBe('You are a helpful assistant.')
@@ -163,7 +195,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
         maxTokens: 500,
       })
 
-      const sessionUpdate = lastMockWS.sentMessages.find((m: any) => m.type === 'session.update')
+      const sessionUpdate = findSessionUpdate()
       expect(sessionUpdate.session.temperature).toBe(0.7)
       expect(sessionUpdate.session.max_response_output_tokens).toBe(500)
     })
@@ -174,7 +206,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
       const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, createMockCtx(), config)
 
-      const sessionUpdate = lastMockWS.sentMessages.find((m: any) => m.type === 'session.update')
+      const sessionUpdate = findSessionUpdate()
       expect(sessionUpdate.session.temperature).toBeUndefined()
       expect(sessionUpdate.session.max_response_output_tokens).toBeUndefined()
     })
@@ -220,8 +252,8 @@ describe('OpenAIRealtimeTextAdapter', () => {
       const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const items = lastMockWS.sentMessages
-        .filter((m: any) => m.type === 'conversation.item.create')
+      const items = currentWS()
+        .sentMessages.filter((m: any) => m.type === 'conversation.item.create')
         .map((m: any) => m.item)
 
       // 3 items: user, assistant, user (system goes into instructions)
@@ -296,8 +328,8 @@ describe('OpenAIRealtimeTextAdapter', () => {
       const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const items = lastMockWS.sentMessages
-        .filter((m: any) => m.type === 'conversation.item.create')
+      const items = currentWS()
+        .sentMessages.filter((m: any) => m.type === 'conversation.item.create')
         .map((m: any) => m.item)
 
       // 3 items: user, tool_call, tool_result
@@ -340,7 +372,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
       const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const types = lastMockWS.sentMessages.map((m: any) => m.type)
+      const types = currentWS().sentMessages.map((m) => m.type)
       const lastConvIdx = types.lastIndexOf('conversation.item.create')
       const responseIdx = types.indexOf('response.create')
 
@@ -648,7 +680,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
       const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, createMockCtx({ functionTools: tools }), config)
 
-      const sessionUpdate = lastMockWS.sentMessages.find((m: any) => m.type === 'session.update')
+      const sessionUpdate = findSessionUpdate()
       expect(sessionUpdate.session.tools).toHaveLength(1)
       expect(sessionUpdate.session.tools[0].type).toBe('function')
       expect(sessionUpdate.session.tools[0].name).toBe('get_weather')
@@ -663,7 +695,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
       const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, createMockCtx(), config)
 
-      const sessionUpdate = lastMockWS.sentMessages.find((m: any) => m.type === 'session.update')
+      const sessionUpdate = findSessionUpdate()
       expect(sessionUpdate.session.tools).toEqual([])
     })
   })
@@ -731,7 +763,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
       await expect(gen.next()).rejects.toThrow('Aborted')
 
       // WebSocket should be closed
-      expect(lastMockWS.readyState).toBe(3) // CLOSED
+      expect(currentWS().readyState).toBe(3) // CLOSED
     })
   })
 

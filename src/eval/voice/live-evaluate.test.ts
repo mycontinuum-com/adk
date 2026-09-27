@@ -269,8 +269,8 @@ describe('native Live voice eval suite', () => {
   it('binds the owning app through app.evaluate.voice', async () => {
     const { app, live } = fixture()
     boundary.run.mockImplementation(async (_case, _options, _writer, _dir, context) => {
-      if (context?.app !== app) throw new Error('The owning app was not bound')
-      return completedCall(context.app, 'facade-call')
+      if (!Object.is(context?.app, app)) throw new Error('The owning app was not bound')
+      return completedCall(app, 'facade-call')
     })
     const result = await app.evaluate.voice(live, options)
     expect(result.summary.passed).toBe(1)
@@ -280,8 +280,8 @@ describe('native Live voice eval suite', () => {
   it('binds the owning app when mixed evaluation selects a Live case', async () => {
     const { app, live } = fixture()
     boundary.run.mockImplementation(async (_case, _options, _writer, _dir, context) => {
-      if (context?.app !== app) throw new Error('The owning app was not bound')
-      return completedCall(context.app, 'mixed-live-call')
+      if (!Object.is(context?.app, app)) throw new Error('The owning app was not bound')
+      return completedCall(app, 'mixed-live-call')
     })
     const text = app.evaluate.case({
       name: 'text',
@@ -302,7 +302,7 @@ describe('native Live voice eval suite', () => {
   it('evaluates actual session state and events with the ordinary native metrics', async () => {
     const { app, live, context } = fixture()
     boundary.run.mockImplementation(async (_case, _options, _writer, _dir, suppliedContext) => {
-      if (suppliedContext !== context) throw new Error('The owning ADK context was lost')
+      if (!Object.is(suppliedContext, context)) throw new Error('The owning ADK context was lost')
       return completedCall(app)
     })
     const result = await evaluateVoice(

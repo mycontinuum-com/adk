@@ -6,7 +6,7 @@ import { z } from 'zod'
 
 import type { Event } from '../../types/events'
 import type { GPTLiveTranscriptFragment } from '../../voice/gpt-live-transcript'
-import type { VoiceRunResult } from '../voice/types'
+import type { VoiceEvalCaseResult, VoiceRunResult } from '../voice/types'
 
 import { adk } from '../../api'
 import { summarizeModelUsage } from '../../core/runner'
@@ -16,10 +16,11 @@ import { InMemoryStore } from '../../session/memory'
 import { sessionService } from '../../session/service'
 import { TEST_PRICING, useTestPricing } from '../../test-support/pricing-registry'
 import { UsageReportingAdapter } from '../../test-support/usage-adapter'
-import { MockAdapter } from '../../testing'
+import { MockAdapter, type MockAdapterConfig } from '../../testing'
 import { evalCli } from '../cli'
 import { voiceEvidence } from '../json'
 import { caseJudgeCost, generateReport } from '../report'
+import { createEvalSession } from '../session'
 import { buildSummary } from '../suite-runner'
 import { liveTranscriptTurns } from './index'
 
@@ -27,7 +28,7 @@ const criteria = { 'asks-to-send': 'Asks whether to send the request to the prac
 const verdict = (reason: string, passed: boolean) =>
   JSON.stringify({ 'asks-to-send': { reason, passed } })
 
-function judged(responses: ConstructorParameters<typeof MockAdapter>[0]['responses']) {
+function judged(responses: MockAdapterConfig['responses']) {
   const adapter = new MockAdapter({ responses })
   const app = adk({ name: 'judge', adapters: { openai: adapter } })
   const consent = app.evaluate.judge({ name: 'consent', criteria, model: openai('gpt-4o-mini') })
@@ -202,12 +203,8 @@ describe('app.evaluate.judge', () => {
   it('renders a Live run from joined transcript turns, tool use, callerHeard and status', async () => {
     const adapter = new MockAdapter({ responses: [{ text: verdict('Heard in full.', true) }] })
     const store = new InMemoryStore()
-    const app = adk({
-      name: 'judge',
-      store,
-      adapters: { openai: adapter },
-      schema: { session: { outcome: z.string().optional() } },
-    })
+    const schema = { session: { outcome: z.string().optional() } }
+    const app = adk({ name: 'judge', store, adapters: { openai: adapter }, schema })
     const session = await app.sessions.create({ sessionId: 'live' })
     session.state.update({ outcome: 'engaged' })
     const base = { invocationId: 'inv', agentName: 'voice' }
@@ -229,7 +226,7 @@ describe('app.evaluate.judge', () => {
       name: 'end_call',
       result: { ended: true },
     } satisfies Event)
-    const run: VoiceRunResult = {
+    const run: VoiceRunResult<typeof schema> = {
       status: 'max_duration',
       startedAtMs: 10_000,
       session,
@@ -624,12 +621,26 @@ describe('judge cost', () => {
     )
     const reported = { basis: 'reported', totalCost: 0.15, currency: 'USD' } as const
     const free = { basis: 'reported', totalCost: 0, currency: 'USD' } as const
-    const live = {
+    const live: VoiceEvalCaseResult = {
       name: 'live',
-      status: 'passed' as const,
+      status: 'passed',
       durationMs: 1,
       metrics: { consent: { passed: true, usage } },
       run: {
+        status: 'completed',
+        startedAtMs: 0,
+        session: createEvalSession(),
+        events: [],
+        voiceEvents: [],
+        transcript: [],
+        timing: {
+          responseTimes: [],
+          silenceGaps: [],
+          interruptions: { count: 0, byAgent: 0, byUser: 0 },
+          vadResolutionMs: 0,
+        },
+        recording: { path: '' },
+        durationMs: 1,
         liveUsage: {
           backend: { cost: reported },
           voice: { modelName: 'gpt-live-1', seconds: 0, cost: free },

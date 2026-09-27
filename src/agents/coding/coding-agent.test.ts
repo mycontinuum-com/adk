@@ -5,11 +5,12 @@
  * mappers.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 
 import type { StreamEvent, ToolCallEvent } from '../../types/events'
 import type { ClaudeSDK, SDKQueryOptions } from './claude-code/agent'
 import type {
+  ContentBlock,
   SDKMessage,
   SDKAssistantMessage,
   SDKUserMessage,
@@ -33,6 +34,39 @@ import {
 } from './claude-code/mappers'
 import { createMockCodingAgent } from './mock'
 import { createNoopTool } from './tool'
+
+/** A partial SDK wire message: tests feed only the fields the mappers read. */
+type MessageFixture<T> = T extends object ? { [K in keyof T]?: MessageFixture<T[K]> } : T
+
+function assistantMessage(content: ContentBlock[]): SDKAssistantMessage {
+  return {
+    type: 'assistant',
+    uuid: 'msg-1',
+    session_id: 'session-1',
+    message: {
+      id: 'message-1',
+      type: 'message',
+      role: 'assistant',
+      content,
+      model: 'claude-sonnet-4-20250514',
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+  }
+}
+
+function makeToolCallEvent(name: string, args: Record<string, unknown>): ToolCallEvent {
+  return {
+    id: `evt-${name}`,
+    type: 'tool_call',
+    createdAt: 0,
+    invocationId: 'inv-1',
+    agentName: 'claude-code',
+    callId: `call-${name}`,
+    name,
+    args,
+  }
+}
 
 describe('CodingAgent', () => {
   describe('mock agent', () => {
@@ -331,14 +365,16 @@ describe('CodingAgent', () => {
 
   describe('Claude Code agent', () => {
     let mockSDK: ClaudeSDK
-    let queryMock: ReturnType<typeof vi.fn>
+    let queryMock: Mock<ClaudeSDK['query']>
 
     beforeEach(() => {
-      queryMock = vi.fn<(...args: unknown[]) => unknown>()
+      queryMock = vi.fn<ClaudeSDK['query']>()
       mockSDK = { query: queryMock }
     })
 
-    function createMockMessages(messages: Partial<SDKMessage>[]): AsyncGenerator<SDKMessage> {
+    function createMockMessages(
+      messages: MessageFixture<SDKMessage>[],
+    ): AsyncGenerator<SDKMessage> {
       return (async function* () {
         for (const msg of messages) {
           yield msg as SDKMessage
@@ -533,7 +569,7 @@ describe('CodingAgent', () => {
         config: {
           model: 'claude-sonnet-4-20250514',
           maxTurns: 10,
-          permissionMode: 'bypassPermissions',
+          permissionMode: 'dontAsk',
           thinking: { type: 'enabled', budgetTokens: 5000 },
         },
       })
@@ -547,7 +583,7 @@ describe('CodingAgent', () => {
             cwd: '/my/repo',
             model: 'claude-sonnet-4-20250514',
             maxTurns: 10,
-            permissionMode: 'bypassPermissions',
+            permissionMode: 'dontAsk',
             thinking: { type: 'enabled', budgetTokens: 5000 },
           }),
         }),
@@ -812,9 +848,10 @@ describe('CodingAgent', () => {
     })
 
     it('returns completed CodingResult on execute', async () => {
-      const tool = createNoopTool()
+      const { execute } = createNoopTool()
+      if (!execute) throw new Error('The noop tool has no execute function')
 
-      const result = await tool.execute({
+      const result = await execute({
         args: { task: 'Do nothing' },
         signal: new AbortController().signal,
       } as any)
@@ -844,13 +881,7 @@ describe('CodingAgent', () => {
 
     describe('mapAssistantMessage', () => {
       it('maps text content to assistant events', () => {
-        const msg: SDKAssistantMessage = {
-          type: 'assistant',
-          uuid: 'msg-1',
-          message: {
-            content: [{ type: 'text', text: 'Hello world' }],
-          },
-        }
+        const msg = assistantMessage([{ type: 'text', text: 'Hello world' }])
 
         const events = [...mapAssistantMessage(msg, ctx)]
 
@@ -861,20 +892,14 @@ describe('CodingAgent', () => {
       })
 
       it('maps tool_use content to tool_call events', () => {
-        const msg: SDKAssistantMessage = {
-          type: 'assistant',
-          uuid: 'msg-1',
-          message: {
-            content: [
-              {
-                type: 'tool_use',
-                id: 'call-1',
-                name: 'Read',
-                input: { path: '/test.ts' },
-              },
-            ],
+        const msg = assistantMessage([
+          {
+            type: 'tool_use',
+            id: 'call-1',
+            name: 'Read',
+            input: { path: '/test.ts' },
           },
-        }
+        ])
 
         const events = [...mapAssistantMessage(msg, ctx)]
 
@@ -886,13 +911,7 @@ describe('CodingAgent', () => {
       })
 
       it('maps thinking content to thought events', () => {
-        const msg: SDKAssistantMessage = {
-          type: 'assistant',
-          uuid: 'msg-1',
-          message: {
-            content: [{ type: 'thinking', thinking: 'Let me think...' }],
-          },
-        }
+        const msg = assistantMessage([{ type: 'thinking', thinking: 'Let me think...' }])
 
         const events = [...mapAssistantMessage(msg, ctx)]
 
@@ -903,17 +922,11 @@ describe('CodingAgent', () => {
       })
 
       it('maps multiple content blocks to multiple events', () => {
-        const msg: SDKAssistantMessage = {
-          type: 'assistant',
-          uuid: 'msg-1',
-          message: {
-            content: [
-              { type: 'thinking', thinking: 'Thinking...' },
-              { type: 'text', text: 'Response' },
-              { type: 'tool_use', id: 'call-1', name: 'Write', input: {} },
-            ],
-          },
-        }
+        const msg = assistantMessage([
+          { type: 'thinking', thinking: 'Thinking...' },
+          { type: 'text', text: 'Response' },
+          { type: 'tool_use', id: 'call-1', name: 'Write', input: {} },
+        ])
 
         const events = [...mapAssistantMessage(msg, ctx)]
 
@@ -929,7 +942,9 @@ describe('CodingAgent', () => {
         const msg: SDKUserMessage = {
           type: 'user',
           uuid: 'msg-1',
+          session_id: 'session-1',
           message: {
+            role: 'user',
             content: [
               {
                 type: 'tool_result',
@@ -952,7 +967,9 @@ describe('CodingAgent', () => {
         const msg: SDKUserMessage = {
           type: 'user',
           uuid: 'msg-1',
+          session_id: 'session-1',
           message: {
+            role: 'user',
             content: [
               {
                 type: 'tool_result',
@@ -975,7 +992,9 @@ describe('CodingAgent', () => {
         const msg: SDKUserMessage = {
           type: 'user',
           uuid: 'msg-1',
+          session_id: 'session-1',
           message: {
+            role: 'user',
             content: 'User message',
           },
         }
@@ -991,6 +1010,7 @@ describe('CodingAgent', () => {
         const msg: SDKPartialAssistantMessage = {
           type: 'partial_assistant',
           uuid: 'msg-1',
+          session_id: 'session-1',
           delta: { type: 'text_delta', text: 'Hello' },
         }
 
@@ -1006,6 +1026,7 @@ describe('CodingAgent', () => {
         const msg: SDKPartialAssistantMessage = {
           type: 'partial_assistant',
           uuid: 'msg-1',
+          session_id: 'session-1',
           delta: { type: 'thinking_delta', thinking: 'Hmm...' },
         }
 
@@ -1021,6 +1042,7 @@ describe('CodingAgent', () => {
         const msg: SDKPartialAssistantMessage = {
           type: 'partial_assistant',
           uuid: 'msg-1',
+          session_id: 'session-1',
           delta: { type: 'input_json_delta' as any },
         }
 
@@ -1051,7 +1073,7 @@ describe('CodingAgent', () => {
       it('returns null for non-init messages', () => {
         const msg: SDKSystemMessage = {
           type: 'system',
-          subtype: 'api_key',
+          subtype: 'status',
         }
 
         const event = mapSystemMessage(msg, ctx)
@@ -1145,7 +1167,7 @@ describe('CodingAgent', () => {
       it('returns shouldStop false for non-rejected events', () => {
         const event: SDKRateLimitEvent = {
           type: 'rate_limit',
-          status: 'pending',
+          status: 'allowed_warning',
         }
 
         const result = mapRateLimitEvent(event, ctx)
@@ -1181,41 +1203,21 @@ describe('CodingAgent', () => {
 
     describe('extractModifiedFile', () => {
       it('extracts path from Write tool calls', () => {
-        const event = {
-          type: 'tool_call',
-          name: 'Write',
-          args: { file_path: '/repo/test.ts' },
-        } as ToolCallEvent
+        const event = makeToolCallEvent('Write', { file_path: '/repo/test.ts' })
 
         expect(extractModifiedFile(event)).toBe('/repo/test.ts')
       })
 
       it('extracts path from Edit tool calls', () => {
-        const event = {
-          type: 'tool_call',
-          name: 'Edit',
-          args: { file_path: '/repo/test.ts' },
-        } as ToolCallEvent
+        const event = makeToolCallEvent('Edit', { file_path: '/repo/test.ts' })
 
         expect(extractModifiedFile(event)).toBe('/repo/test.ts')
       })
 
       it('handles different path argument names', () => {
-        const event1 = {
-          type: 'tool_call',
-          name: 'write',
-          args: { path: '/path1.ts' },
-        } as ToolCallEvent
-        const event2 = {
-          type: 'tool_call',
-          name: 'edit',
-          args: { filePath: '/path2.ts' },
-        } as ToolCallEvent
-        const event3 = {
-          type: 'tool_call',
-          name: 'file_write',
-          args: { file: '/path3.ts' },
-        } as ToolCallEvent
+        const event1 = makeToolCallEvent('write', { path: '/path1.ts' })
+        const event2 = makeToolCallEvent('edit', { filePath: '/path2.ts' })
+        const event3 = makeToolCallEvent('file_write', { file: '/path3.ts' })
 
         expect(extractModifiedFile(event1)).toBe('/path1.ts')
         expect(extractModifiedFile(event2)).toBe('/path2.ts')
@@ -1223,21 +1225,13 @@ describe('CodingAgent', () => {
       })
 
       it('returns null for Read tool calls', () => {
-        const event = {
-          type: 'tool_call',
-          name: 'Read',
-          args: { path: '/repo/test.ts' },
-        } as ToolCallEvent
+        const event = makeToolCallEvent('Read', { path: '/repo/test.ts' })
 
         expect(extractModifiedFile(event)).toBeNull()
       })
 
       it('returns null for unknown tools', () => {
-        const event = {
-          type: 'tool_call',
-          name: 'Bash',
-          args: { command: 'ls' },
-        } as ToolCallEvent
+        const event = makeToolCallEvent('Bash', { command: 'ls' })
 
         expect(extractModifiedFile(event)).toBeNull()
       })

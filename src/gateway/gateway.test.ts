@@ -12,6 +12,7 @@ import type { Gateway, ProcessEvent } from './gateway-types'
 
 import { InMemoryArtifactService } from '../artifacts/memory'
 import { InMemoryStore } from '../session/memory'
+import { sessionService } from '../session/service'
 import { createGateway, GatewayImpl } from './gateway'
 import { createInProcessExecutor } from './in-process-executor'
 import { InMemoryProcessStore } from './memory'
@@ -21,7 +22,7 @@ function createTestAgent(name: string): Agent {
     kind: 'agent',
     name,
     model: { provider: 'openai', name: 'gpt-4o-mini' },
-    instructions: 'Test agent.',
+    context: [],
     tools: [],
   }
 }
@@ -192,7 +193,7 @@ describe('Gateway', () => {
 
   describe('subscribe()', () => {
     test('throws for non-existent process', async () => {
-      const gen = gateway.subscribe('non-existent')
+      const gen = gateway.subscribe('non-existent')[Symbol.asyncIterator]()
       await expect(gen.next()).rejects.toThrow("Process 'non-existent' not found")
     })
 
@@ -349,9 +350,7 @@ describe('InProcessExecutor', () => {
     const infra = createTestInfra()
     const executor = infra.executor
     const agent = createTestAgent('test-agent')
-    const session = await new (
-      await import('../session/service')
-    ).sessionService(infra.sessionStore).createSession('test-app', {})
+    const session = await sessionService(infra.sessionStore).createSession('test-app', {})
 
     const events: unknown[] = []
     const result = await executor.execute(
@@ -380,6 +379,7 @@ describe('InProcessExecutor', () => {
     )
 
     expect(['completed', 'sleeping', 'errored']).toContain(result.status)
-    await executor.cleanup('any-process-id') // Should not throw
+    expect(executor.cleanup).toBeDefined()
+    await executor.cleanup?.('any-process-id') // Should not throw
   })
 })

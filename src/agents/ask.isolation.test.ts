@@ -98,7 +98,7 @@ describe('workflow.ask-isolation-default', () => {
       defaultModel: openai('gpt-4o-mini'),
     })
 
-    const subAgent = app.agent({ name: 'sub-agent' })
+    const subAgent = app.agent({ name: 'sub-agent', model: openai('gpt-4o-mini'), context: [] })
 
     const parentStep = app.step({
       name: 'parent-step',

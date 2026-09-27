@@ -32,10 +32,10 @@ describe('workflow.ask-signal-aborts-call', () => {
     // Abort immediately — should cancel the slow model call
     ac.abort()
 
-    let settledError: Error | null = null
-    await askPromise.catch((e: Error) => {
-      settledError = e
-    })
+    const settledError: Error | null = await askPromise.then(
+      () => null,
+      (e: Error) => e,
+    )
 
     // The promise should have settled with an error (aborted), not the model response
     expect(settledError).not.toBeNull()
@@ -56,10 +56,10 @@ describe('workflow.ask-signal-aborts-call', () => {
     // Abort BEFORE calling app.ask
     ac.abort()
 
-    let settledError: Error | null = null
-    await app.ask('hello', { signal: ac.signal }).catch((e: Error) => {
-      settledError = e
-    })
+    const settledError: Error | null = await app.ask('hello', { signal: ac.signal }).then(
+      () => null,
+      (e: Error) => e,
+    )
 
     // Should have rejected
     expect(settledError).not.toBeNull()

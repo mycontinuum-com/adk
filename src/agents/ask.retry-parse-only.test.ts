@@ -30,10 +30,10 @@ describe('workflow.ask-retry-parse-error-only', () => {
       defaultModel: openai('gpt-4o-mini'),
     })
 
-    let thrownError: Error | null = null
-    await app.ask('hello', { schema, retries: 2 }).catch((e: Error) => {
-      thrownError = e
-    })
+    const thrownError: Error | null = await app.ask('hello', { schema, retries: 2 }).then(
+      () => null,
+      (e: Error) => e,
+    )
 
     // Exactly 1 attempt — provider errors are NOT retried even with retries:2
     expect(mockAdapter.stepCalls).toHaveLength(1)

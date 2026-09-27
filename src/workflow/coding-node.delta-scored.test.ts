@@ -9,7 +9,7 @@
  *
  * Evidence: vitest with a fake CodingAgentFactory + fake provisioner + ./eval metric.
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, type Mock } from 'vitest'
 
 import type { CodingResult } from '../agents/coding'
 import type {
@@ -51,8 +51,8 @@ function fakeAgent(opts: {
 /** A provisioner that records provision/dispose calls and returns a fixed path. */
 function recordingProvisioner(path: string): {
   provisioner: WorkspaceProvisioner
-  provisionSpy: ReturnType<typeof vi.fn>
-  disposeSpy: ReturnType<typeof vi.fn>
+  provisionSpy: Mock<(base: string, isolation: string) => Promise<ProvisionedWorkspace>>
+  disposeSpy: Mock<() => void>
 } {
   const disposeSpy = vi.fn<() => void>()
   const provisionSpy = vi.fn<(base: string, isolation: string) => Promise<ProvisionedWorkspace>>(

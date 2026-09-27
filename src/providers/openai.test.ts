@@ -619,6 +619,7 @@ describe('OpenAI serialization', () => {
       const [tool] = serializeTools([
         { name: 'finish', description: 'Finish', schema, execute: () => ({}) },
       ])
+      if (!('parameters' in tool)) throw new Error('Expected a function tool')
       const expected = {
         type: 'object',
         properties: {
@@ -648,6 +649,7 @@ describe('OpenAI serialization', () => {
       const [tool] = serializeTools([
         { name: 'finish', description: 'Finish', schema, execute: () => ({}) },
       ])
+      if (!('parameters' in tool)) throw new Error('Expected a function tool')
       expect(tool.parameters).toMatchObject({ properties: { value: { type: ['string', 'null'] } } })
     })
 

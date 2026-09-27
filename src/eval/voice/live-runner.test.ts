@@ -3,6 +3,7 @@ import { vi } from 'vitest'
 import { z } from 'zod'
 
 import type { LiveVoiceResultContext } from '../../voice/live-types'
+import type { LiveVoiceEvalCase } from './types'
 
 import { adk } from '../../api'
 import { openai, realtime } from '../../providers/models'
@@ -38,18 +39,16 @@ class SDKAgent {
   async onEnter() {}
   async onExit() {}
 }
+const schema = { session: { count: z.number().default(0) } }
+type LiveEvalCase = LiveVoiceEvalCase<typeof schema>
+
 async function fixture() {
   const store = new InMemoryStore()
   const adapter = new UsageReportingAdapter({
     responses: [{ toolCalls: [{ name: 'lookup', args: {} }] }, { text: 'Open at nine' }],
   })
   adapter.reportUsage = false
-  const app = adk({
-    name: 'live-eval',
-    store,
-    adapters: { openai: adapter },
-    schema: { session: { count: z.number().default(0) } },
-  })
+  const app = adk({ name: 'live-eval', store, adapters: { openai: adapter }, schema })
   let reportUsage = false
   const tool = vi.fn<() => { hours: string }>(() => ({ hours: 'nine' }))
   const lookup = app.tool({
@@ -461,19 +460,17 @@ test('rejects missing result delivery and invalid observation windows before con
 test('finalizes a call ended by its production hook and preserves final state', async () => {
   const f = await fixture()
   try {
-    const run = await f.run({
-      durationMs: 10_000,
-      hooks: [
-        {
-          onResult(ctx) {
-            ctx.voice.end()
-          },
-          onExit(ctx) {
-            ctx.state.update({ count: 7 })
-          },
+    const hooks: LiveEvalCase['hooks'] = [
+      {
+        onResult(ctx) {
+          ctx.voice.end()
         },
-      ],
-    })
+        onExit(ctx) {
+          ctx.state.update({ count: 7 })
+        },
+      },
+    ]
+    const run = await f.run({ durationMs: 10_000, hooks })
     expect(run.status).toBe('completed')
     expect(run.session.state.count).toBe(7)
     expect((await f.app.sessions.get(run.session.id))?.state.count).toBe(7)
@@ -710,18 +707,15 @@ test('reports final caller transcriptions of the agent as what the caller heard'
 test('an agent-ended call whose backend work never settled is an error, not completed', async () => {
   const f = await fixture()
   try {
-    const run = await f.run({
-      durationMs: 10_000,
-      backendTimeoutMs: 20,
-      toolMocks: {
-        lookup: {
-          execute: (_args, ctx) => {
-            if (ctx.voice && 'appendCommentary' in ctx.voice) ctx.voice.end()
-            return new Promise(() => {})
-          },
+    const toolMocks: LiveEvalCase['toolMocks'] = {
+      lookup: {
+        execute: (_args, ctx) => {
+          if (ctx.voice && 'appendCommentary' in ctx.voice) ctx.voice.end()
+          return new Promise(() => {})
         },
       },
-    })
+    }
+    const run = await f.run({ durationMs: 10_000, backendTimeoutMs: 20, toolMocks })
     expect(run.status).toBe('error')
     expect(run.error?.message).toBe('Live backend work did not settle before close')
     expect(f.deleteRoom).toHaveBeenCalledOnce()

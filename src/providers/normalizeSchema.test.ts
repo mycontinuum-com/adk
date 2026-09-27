@@ -121,7 +121,7 @@ describe('normalizeSchema', () => {
   })
 
   it('warns once on first normalization', () => {
-    const spy = vi.spyOn(console, 'warn').mockImplementation()
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const schema = z.object({ a: z.string().optional() })
     normalizeSchema(schema, 'first')
@@ -134,7 +134,7 @@ describe('normalizeSchema', () => {
   })
 
   it('does not warn when no normalization is needed', () => {
-    const spy = vi.spyOn(console, 'warn').mockImplementation()
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     const schema = z.object({ a: z.string().nullable().optional() })
     normalizeSchema(schema, 'test')

@@ -68,7 +68,7 @@ describe('workflow.fanout-thunk-isolation', () => {
       name: 'isolation-test',
       execute: async () => {
         const thunks = Array.from({ length: 3 }, (_, i) => async () => app.ask(`call ${i}`))
-        return fanout(thunks, { limit: 3 })
+        await fanout(thunks, { limit: 3 })
       },
     })
 

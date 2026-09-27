@@ -54,10 +54,12 @@ describe('workflow.ask-schema-retry', () => {
     // retries: 2 → 3 total attempts (0, 1, 2)
     // Note: OutputParseError is deserialized through the channel as a plain Error
     // but retains the name 'OutputParseError'
-    let thrownError: Error | null = null
-    await app.ask('give me a number', { schema, retries: 2 }).catch((e: Error) => {
-      thrownError = e
-    })
+    const thrownError: Error | null = await app
+      .ask('give me a number', { schema, retries: 2 })
+      .then(
+        () => null,
+        (e: Error) => e,
+      )
     expect(thrownError).not.toBeNull()
     expect((thrownError as Error).name).toBe('OutputParseError')
     expect(mockAdapter.stepCalls).toHaveLength(3)
@@ -72,10 +74,12 @@ describe('workflow.ask-schema-retry', () => {
       defaultModel: openai('gpt-4o-mini'),
     })
 
-    let thrownError: Error | null = null
-    await app.ask('give me a number', { schema, retries: 0 }).catch((e: Error) => {
-      thrownError = e
-    })
+    const thrownError: Error | null = await app
+      .ask('give me a number', { schema, retries: 0 })
+      .then(
+        () => null,
+        (e: Error) => e,
+      )
     expect(thrownError).not.toBeNull()
     expect((thrownError as Error).name).toBe('OutputParseError')
     // Only 1 call despite the invalid output

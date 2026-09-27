@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import type { ErrorHandler } from '../errors'
-import type { ModelAdapter, Provider, StreamEvent } from '../types'
+import type { ModelAdapter, StreamEvent } from '../types'
 
 import { adk } from '../api'
 import { configurePricing, RESULT_PRICING_WAIT_MS } from '../providers/pricing'
@@ -314,7 +314,8 @@ describe('BaseRunner', () => {
         adapters: new Map([['openai', mockAdapter]]),
       })
       const myAgent = testAgent({
-        model: { provider: 'unknown' as Provider, name: 'test' },
+        // @ts-expect-error -- an unsupported provider is the case under test
+        model: { provider: 'unknown', name: 'test' },
       })
 
       await expect(runner.run(myAgent, createTestSession('Test'))).rejects.toThrow(

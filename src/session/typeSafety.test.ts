@@ -12,7 +12,9 @@ import type {
   ParallelMergeContext,
   InvocationContext,
   ToolContext,
+  ToolExecutionContext,
   FunctionTool,
+  RenderContext,
   ContextRenderer,
   OutputConfig,
   SessionKeyOf,
@@ -73,7 +75,9 @@ function typeSafetyMockMerge(ctx: ParallelMergeContext<typeof testSchema>): Even
   return []
 }
 
-function typeSafetyMockToolExecute(ctx: ToolContext<typeof testSchema>): string {
+function typeSafetyMockToolExecute(
+  ctx: ToolExecutionContext<{ query: string }, unknown, unknown, typeof testSchema>,
+): string {
   const mode: 'triage' | 'consultation' | 'followup' | undefined = ctx.state.mode
   ctx.state.mode = 'triage'
 

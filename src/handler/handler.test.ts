@@ -1,12 +1,7 @@
 import { z } from 'zod'
 
-import type {
-  Event,
-  ToolCallEvent,
-  ModelStepResult,
-  MockResponseConfig,
-  OpenAIModel,
-} from '../types'
+import type { MockResponseConfig } from '../testing'
+import type { Event, ToolCallEvent, ModelStepResult, OpenAIModel } from '../types'
 
 import { agent } from '../agents'
 import { adk } from '../api'

@@ -149,10 +149,12 @@ function stubOpenAIStream(capture: (request: CapturedOpenAI) => void) {
 async function runOpenAIStep(config: Record<string, unknown>): Promise<CapturedOpenAI> {
   const adapter = new OpenAIAdapter([{ type: 'openai', apiKey: 'test-key' }] as never)
   let captured: CapturedOpenAI = {}
-  // @ts-expect-error replacing the private client factory so no network call happens
-  adapter.getOrCreateClient = () => ({
-    client: { responses: { stream: stubOpenAIStream((r) => (captured = r)) } },
-    resolvedModel: 'gpt-4o',
+  // Replace the private client factory so no network call happens.
+  Object.assign(adapter, {
+    getOrCreateClient: () => ({
+      client: { responses: { stream: stubOpenAIStream((r) => (captured = r)) } },
+      resolvedModel: 'gpt-4o',
+    }),
   })
   const stream = adapter.step(
     {
@@ -212,14 +214,16 @@ describe('Claude sampling parameters', () => {
   async function request(config: Record<string, unknown>) {
     const adapter = new ClaudeAdapter()
     let captured: { temperature?: number; thinking?: unknown } = {}
-    // @ts-expect-error replacing the private client factory to capture the transport request
-    adapter.getClient = () => ({
-      messages: {
-        create: async (body: typeof captured) => {
-          captured = body
-          return (async function* () {})()
+    // Replace the private client factory to capture the transport request.
+    Object.assign(adapter, {
+      getClient: () => ({
+        messages: {
+          create: async (body: typeof captured) => {
+            captured = body
+            return (async function* () {})()
+          },
         },
-      },
+      }),
     })
     const stream = adapter.step(renderContext(), {
       provider: 'claude',

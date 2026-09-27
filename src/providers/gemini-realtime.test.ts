@@ -16,7 +16,7 @@ let allMockWSInstances: MockWebSocket[] = []
 
 class MockWebSocket extends EventEmitter {
   readyState = 0
-  sentMessages: Record<string, unknown>[] = []
+  sentMessages: SentMessage[] = []
   url: string
   opts: Record<string, unknown> | undefined
 
@@ -70,6 +70,50 @@ class MockWebSocket extends EventEmitter {
 }
 
 const MockWS = MockWebSocket as unknown as WSConstructor
+
+interface WirePart {
+  text?: string
+  functionCall?: { name: string; args?: Record<string, unknown> }
+  functionResponse?: { name: string; response?: unknown }
+}
+
+interface WireTurn {
+  role: string
+  parts: WirePart[]
+}
+
+/** The subset of the Gemini Live wire protocol the adapter sends and these tests inspect. */
+interface SentMessage {
+  setup?: {
+    model: string
+    systemInstruction?: { parts: WirePart[] }
+    tools?: { functionDeclarations: { name: string; description?: string }[] }[]
+    generationConfig: {
+      responseModalities: string[]
+      temperature?: number
+      maxOutputTokens?: number
+    }
+    outputAudioTranscription?: Record<string, never>
+  }
+  clientContent?: { turns: WireTurn[]; turnComplete: boolean }
+  toolResponse?: { functionResponses: { id: string; name: string; response: unknown }[] }
+}
+
+function currentWS(): MockWebSocket {
+  if (!lastMockWS) throw new Error('No WebSocket was opened')
+  return lastMockWS
+}
+
+function findSent<K extends keyof SentMessage>(
+  socket: MockWebSocket,
+  key: K,
+): SentMessage & Required<Pick<SentMessage, K>> {
+  const message = socket.sentMessages.find(
+    (m): m is SentMessage & Required<Pick<SentMessage, K>> => m[key] !== undefined,
+  )
+  if (!message) throw new Error(`No ${key} message was sent`)
+  return message
+}
 
 // --- Helpers ---
 
@@ -154,10 +198,10 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('test-api-key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      expect(lastMockWS.url).toBe(
+      expect(currentWS().url).toBe(
         'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=test-api-key',
       )
-      expect(lastMockWS.opts.headers).toEqual({})
+      expect(currentWS().opts?.headers).toEqual({})
     })
 
     test('sends setup with correct model, responseModalities, and system instruction', async () => {
@@ -189,7 +233,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const setupMsg = lastMockWS.sentMessages.find((m: any) => m.setup)
+      const setupMsg = findSent(currentWS(), 'setup')
       expect(setupMsg.setup.model).toBe('models/gemini-2.0-flash-live')
       expect(setupMsg.setup.generationConfig.responseModalities).toEqual(['TEXT'])
       expect(setupMsg.setup.systemInstruction).toEqual({
@@ -225,7 +269,7 @@ describe('GeminiRealtimeTextAdapter', () => {
         maxTokens: 1000,
       })
 
-      const setupMsg = lastMockWS.sentMessages.find((m: any) => m.setup)
+      const setupMsg = findSent(currentWS(), 'setup')
       expect(setupMsg.setup.generationConfig.temperature).toBe(0.5)
       expect(setupMsg.setup.generationConfig.maxOutputTokens).toBe(1000)
     })
@@ -254,7 +298,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const setupMsg = lastMockWS.sentMessages.find((m: any) => m.setup)
+      const setupMsg = findSent(currentWS(), 'setup')
       expect(setupMsg.setup.generationConfig.temperature).toBeUndefined()
       expect(setupMsg.setup.generationConfig.maxOutputTokens).toBeUndefined()
     })
@@ -288,7 +332,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, nativeAudioConfig)
 
-      const setupMsg = lastMockWS.sentMessages.find((m: any) => m.setup)
+      const setupMsg = findSent(currentWS(), 'setup')
       expect(setupMsg.setup.generationConfig.responseModalities).toEqual(['AUDIO'])
       expect(setupMsg.setup.outputAudioTranscription).toEqual({})
     })
@@ -317,7 +361,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const setupMsg = lastMockWS.sentMessages.find((m: any) => m.setup)
+      const setupMsg = findSent(currentWS(), 'setup')
       expect(setupMsg.setup.generationConfig.responseModalities).toEqual(['TEXT'])
       expect(setupMsg.setup.outputAudioTranscription).toBeUndefined()
     })
@@ -336,7 +380,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const setupMsg = lastMockWS.sentMessages.find((m: any) => m.setup)
+      const setupMsg = findSent(currentWS(), 'setup')
       expect(setupMsg.setup.systemInstruction).toBeUndefined()
     })
   })
@@ -385,7 +429,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const clientContent = lastMockWS.sentMessages.find((m: any) => m.clientContent)
+      const clientContent = findSent(currentWS(), 'clientContent')
       expect(clientContent).toBeDefined()
       expect(clientContent.clientContent.turnComplete).toBe(true)
 
@@ -427,7 +471,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const clientContent = lastMockWS.sentMessages.find((m: any) => m.clientContent)
+      const clientContent = findSent(currentWS(), 'clientContent')
       expect(clientContent).toBeDefined()
       expect(clientContent.clientContent.turnComplete).toBe(true)
       // Should have a synthetic user turn
@@ -484,7 +528,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const clientContent = lastMockWS.sentMessages.find((m: any) => m.clientContent)
+      const clientContent = findSent(currentWS(), 'clientContent')
       const turns = clientContent.clientContent.turns
 
       // Gemini serializes: user, model (functionCall), user (functionResponse)
@@ -495,12 +539,12 @@ describe('GeminiRealtimeTextAdapter', () => {
       // Tool call becomes a model turn with functionCall part
       expect(turns[1].role).toBe('model')
       expect(turns[1].parts[0].functionCall).toBeDefined()
-      expect(turns[1].parts[0].functionCall.name).toBe('get_weather')
+      expect(turns[1].parts[0].functionCall?.name).toBe('get_weather')
 
       // Tool result becomes a user turn with functionResponse part
       expect(turns[2].role).toBe('user')
       expect(turns[2].parts[0].functionResponse).toBeDefined()
-      expect(turns[2].parts[0].functionResponse.name).toBe('get_weather')
+      expect(turns[2].parts[0].functionResponse?.name).toBe('get_weather')
     })
 
     test('strips thoughtSignature and thought from context for Live API', async () => {
@@ -537,7 +581,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const clientContent = lastMockWS.sentMessages.find((m: any) => m.clientContent)
+      const clientContent = findSent(currentWS(), 'clientContent')
       const turns = clientContent.clientContent.turns
 
       // Verify no turns contain thoughtSignature or thought properties
@@ -975,7 +1019,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       expect(result1.toolCalls).toHaveLength(1)
       expect(result1.terminal).toBe(false)
 
-      const wsAfterStep1 = lastMockWS
+      const wsAfterStep1 = currentWS()
       // WS should still be open (kept alive for tool response)
       expect(wsAfterStep1.readyState).toBe(1)
 
@@ -1025,7 +1069,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       expect(allMockWSInstances).toHaveLength(1)
 
       // Should have sent a toolResponse message
-      const toolResponseMsg = wsAfterStep1.sentMessages.find((m: any) => m.toolResponse)
+      const toolResponseMsg = findSent(wsAfterStep1, 'toolResponse')
       expect(toolResponseMsg).toBeDefined()
       expect(toolResponseMsg.toolResponse.functionResponses).toHaveLength(1)
       expect(toolResponseMsg.toolResponse.functionResponses[0].name).toBe('get_weather')
@@ -1091,7 +1135,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       expect(result1.toolCalls).toHaveLength(1)
       expect(result1.toolCalls[0].name).toBe('get_weather')
 
-      const singleWS = lastMockWS
+      const singleWS = currentWS()
 
       // Step 2: send first tool response, get second tool call
       const callId1 = result1.toolCalls[0].callId
@@ -1263,7 +1307,7 @@ describe('GeminiRealtimeTextAdapter', () => {
 
       await collectStep(adapter, ctx2, config)
 
-      const toolResponseMsg = lastMockWS.sentMessages.find((m: any) => m.toolResponse)
+      const toolResponseMsg = findSent(currentWS(), 'toolResponse')
       expect(toolResponseMsg.toolResponse.functionResponses[0].response).toEqual({
         error: 'Connection timeout',
       })
@@ -1306,11 +1350,11 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const setupMsg = lastMockWS.sentMessages.find((m: any) => m.setup)
+      const setupMsg = findSent(currentWS(), 'setup')
       expect(setupMsg.setup.tools).toHaveLength(1)
-      expect(setupMsg.setup.tools[0].functionDeclarations).toHaveLength(1)
-      expect(setupMsg.setup.tools[0].functionDeclarations[0].name).toBe('get_weather')
-      expect(setupMsg.setup.tools[0].functionDeclarations[0].description).toBe(
+      expect(setupMsg.setup.tools?.[0].functionDeclarations).toHaveLength(1)
+      expect(setupMsg.setup.tools?.[0].functionDeclarations[0].name).toBe('get_weather')
+      expect(setupMsg.setup.tools?.[0].functionDeclarations[0].description).toBe(
         'Get the weather for a location',
       )
     })
@@ -1339,7 +1383,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, ctx, config)
 
-      const setupMsg = lastMockWS.sentMessages.find((m: any) => m.setup)
+      const setupMsg = findSent(currentWS(), 'setup')
       expect(setupMsg.setup.tools).toBeUndefined()
     })
   })
@@ -1538,7 +1582,7 @@ describe('GeminiRealtimeTextAdapter', () => {
       await expect(gen.next()).rejects.toThrow('Aborted')
 
       // WebSocket should be closed
-      expect(lastMockWS.readyState).toBe(3) // CLOSED
+      expect(currentWS().readyState).toBe(3) // CLOSED
     })
 
     test('cleans up session on abort between tool call steps', async () => {
@@ -1575,13 +1619,13 @@ describe('GeminiRealtimeTextAdapter', () => {
       expect(result1.toolCalls).toHaveLength(1)
 
       // WS should be alive between steps
-      expect(lastMockWS.readyState).toBe(1)
+      expect(currentWS().readyState).toBe(1)
 
       // Abort while "runner is executing tool"
       controller.abort()
 
       // WS should be cleaned up
-      expect(lastMockWS.readyState).toBe(3)
+      expect(currentWS().readyState).toBe(3)
     })
   })
 

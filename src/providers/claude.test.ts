@@ -675,14 +675,16 @@ describe('Claude provider', () => {
     const adapter = new ClaudeAdapter()
     let captured: CapturedClaudeRequest = {}
     const SENTINEL = '__captured__'
-    // @ts-expect-error replacing the private client factory so no network call happens
-    adapter.getClient = () => ({
-      messages: {
-        create: (request: CapturedClaudeRequest) => {
-          captured = request
-          throw new Error(SENTINEL)
+    // Replace the private client factory so no network call happens.
+    Object.assign(adapter, {
+      getClient: () => ({
+        messages: {
+          create: (request: CapturedClaudeRequest) => {
+            captured = request
+            throw new Error(SENTINEL)
+          },
         },
-      },
+      }),
     })
 
     const ctx = {
@@ -730,14 +732,16 @@ describe('Claude provider', () => {
   describe('Claude usage', () => {
     async function streamUsage(events: unknown[]) {
       const adapter = new ClaudeAdapter()
-      // @ts-expect-error replacing the private client factory so no network call happens
-      adapter.getClient = () => ({
-        messages: {
-          create: async () =>
-            (async function* () {
-              yield* events
-            })(),
-        },
+      // Replace the private client factory so no network call happens.
+      Object.assign(adapter, {
+        getClient: () => ({
+          messages: {
+            create: async () =>
+              (async function* () {
+                yield* events
+              })(),
+          },
+        }),
       })
       const ctx = {
         events: [{ type: 'user', text: 'hi' }],
@@ -798,8 +802,12 @@ describe('Claude provider', () => {
           output_cost_per_token: 2e-5,
         },
       })
+      if (usage?.inputTokens === undefined || usage.outputTokens === undefined) {
+        throw new Error('Claude usage reported no token counts')
+      }
+      const { inputTokens, outputTokens } = usage
       const cost = calculateCost(
-        { ...usage, provider: 'claude', modelName: 'claude-opus-5-5' },
+        { ...usage, inputTokens, outputTokens, provider: 'claude', modelName: 'claude-opus-5-5' },
         catalog,
       )
       expect(cost).not.toBeNull()
