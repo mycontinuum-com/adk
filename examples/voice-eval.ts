@@ -13,9 +13,10 @@
  * text/smoke pnpm exec tsx examples/voice-eval.ts run
  */
 
-import dotenv from 'dotenv'
+import { existsSync } from 'node:fs'
 
-dotenv.config({ path: `${__dirname}/.env.voice`, quiet: true })
+const voiceEnvFile = `${__dirname}/.env.voice`
+if (existsSync(voiceEnvFile)) process.loadEnvFile(voiceEnvFile)
 
 import { z } from 'zod'
 

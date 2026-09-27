@@ -15,9 +15,10 @@
  * Run: npx tsx examples/voice.ts dev
  */
 
-import dotenv from 'dotenv'
+import { existsSync } from 'node:fs'
 
-dotenv.config({ path: `${__dirname}/.env.voice` })
+const voiceEnvFile = `${__dirname}/.env.voice`
+if (existsSync(voiceEnvFile)) process.loadEnvFile(voiceEnvFile)
 
 import { z } from 'zod'
 
