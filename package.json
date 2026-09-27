@@ -194,12 +194,11 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "build": "rm -rf dist && tsup && tsc -p tsconfig.json --emitDeclarationOnly && node scripts/postbuild-dts-aliases.cjs && node scripts/postbuild-terminal-cjs-wrapper.cjs && node scripts/verify-package-exports.cjs",
-    "dev": "tsup --watch",
+    "build": "rm -rf dist && node scripts/build.mjs && tsc -p tsconfig.json --emitDeclarationOnly && node scripts/postbuild-dts-aliases.cjs && node scripts/postbuild-terminal-cjs-wrapper.cjs && node scripts/verify-package-exports.cjs",
+    "dev": "node scripts/build.mjs --watch",
     "test": "vp test run",
     "test:postgres": "vp test run src/**/postgres.test.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "vp lint src/",
     "ci": "pnpm run typecheck && pnpm run test",
     "prepublishOnly": "pnpm run typecheck && pnpm run build && node scripts/verify-package-exports.cjs"
   },
@@ -241,10 +240,9 @@
     "react": "^18.0.0",
     "sharp": "^0.33.5",
     "sqlite-vec": "^0.1.9",
-    "tsup": "^8.1.0",
     "tsx": "^4.21.0",
     "turndown": "^7.2.0",
-    "typescript": "^5.8.3",
+    "typescript": "^6.0.3",
     "undici": "6.25.0",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
     "vite-plus": "0.3.0",

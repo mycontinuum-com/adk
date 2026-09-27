@@ -92,7 +92,7 @@ for (const entry of KEY_FREE_ENTRIES) {
       const spec = match[1] ?? match[2]
       if (spec.startsWith('.')) {
         // Follow only specs that resolve to real files: a non-resolving "import" line is codegen
-        // text inside a template literal, not a module edge (relative imports in tsup output
+        // text inside a template literal, not a module edge (relative imports in esbuild output
         // always carry their extension).
         const resolved = path.resolve(path.dirname(file), spec)
         if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) queue.push(resolved)

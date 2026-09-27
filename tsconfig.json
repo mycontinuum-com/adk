@@ -13,6 +13,9 @@
       "ES2022",
       "ES2023"
     ],
+    "types": [
+      "node"
+    ],
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
@@ -20,10 +23,6 @@
     "jsx": "react",
     "outDir": "./dist",
     "rootDir": "./src",
-    "types": [
-      "node"
-    ],
-    "baseUrl": ".",
     "paths": {
       "@anima/adk": [
         "./src/index.ts"

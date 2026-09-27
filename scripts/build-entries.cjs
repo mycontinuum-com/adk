@@ -1,6 +1,6 @@
 'use strict'
 
-// The one place a public entry point is named. `tsup.config.ts` bundles the JavaScript for these,
+// The one place a public entry point is named. `build.mjs` bundles the JavaScript for these,
 // and `postbuild-dts-aliases.cjs` reconciles the declarations `tsc` emits with the same names.
 // Keeping both readers on one table is what stops an entry from having JavaScript but no types.
 
