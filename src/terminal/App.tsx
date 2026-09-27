@@ -36,6 +36,67 @@ interface AppProps {
   onResult?: (result: RunResult) => void
 }
 
+function terminalSize(stdout: { rows?: number; columns?: number } | undefined): {
+  terminalHeight: number
+  terminalWidth: number
+} {
+  return {
+    terminalHeight: stdout?.rows || DEFAULT_TERMINAL_HEIGHT,
+    terminalWidth: stdout?.columns || DEFAULT_TERMINAL_WIDTH,
+  }
+}
+
+/** Rows left for the trace or detail pane after the fixed chrome and any prompt input. */
+function contentAreaHeight(
+  terminalHeight: number,
+  promptInputVisible: boolean,
+  detailVisible: boolean,
+): number {
+  const promptInputHeight = promptInputVisible ? PROMPT_INPUT_HEIGHT : 0
+  const totalFixedHeight = (detailVisible ? LAYOUT.helpLines : FIXED_UI_LINES) + promptInputHeight
+  return terminalHeight - totalFixedHeight
+}
+
+function modeBarInputHint({
+  isDetailInputMode,
+  displayMode,
+  hasUnhandledYields,
+  showInputYield,
+  isPromptInputMode,
+  browseMode,
+}: {
+  isDetailInputMode: boolean
+  displayMode: string
+  hasUnhandledYields: boolean
+  showInputYield: boolean
+  isPromptInputMode: boolean
+  browseMode: boolean
+}): 'pending' | 'available' | null {
+  return isDetailInputMode || displayMode === 'logging'
+    ? null
+    : hasUnhandledYields || showInputYield
+      ? 'pending'
+      : isPromptInputMode && browseMode
+        ? 'available'
+        : null
+}
+
+function detailPaneKey(detailEvent: unknown, detailMode: string, isPendingYield: boolean): string {
+  return `${(detailEvent as { id?: string } | null)?.id ?? 'none'}:${detailMode}:${isPendingYield}`
+}
+
+/** Whether the run waits for a typed message, or for yielded tool calls it cannot answer inline. */
+function yieldState(
+  status: string,
+  inputRequired: boolean,
+  yieldedTools: readonly unknown[],
+): { showInputYield: boolean; hasUnhandledYields: boolean } {
+  return {
+    showInputYield: status === 'yielded' && inputRequired,
+    hasUnhandledYields: status === 'yielded' && yieldedTools.length > 0 && !inputRequired,
+  }
+}
+
 export function App({
   runnable,
   runner,
@@ -46,8 +107,7 @@ export function App({
 }: AppProps): React.ReactElement {
   const { exit } = useApp()
   const { stdout } = useStdout()
-  const terminalHeight = stdout?.rows || DEFAULT_TERMINAL_HEIGHT
-  const terminalWidth = stdout?.columns || DEFAULT_TERMINAL_WIDTH
+  const { terminalHeight, terminalWidth } = terminalSize(stdout)
 
   const {
     status,
@@ -95,11 +155,12 @@ export function App({
   const { selectedIndex, setSelectedIndex, selectedEventIdRef } = selection
 
   const showPrompt = status === 'idle'
-  const showInputYield = status === 'yielded' && inputRequired
-  const promptInputVisible = (showInputYield || showPrompt) && !browseMode
-  const promptInputHeight = promptInputVisible ? PROMPT_INPUT_HEIGHT : 0
-  const totalFixedHeight = (detailVisible ? LAYOUT.helpLines : FIXED_UI_LINES) + promptInputHeight
-  const availableForContent = terminalHeight - totalFixedHeight
+  const { showInputYield, hasUnhandledYields } = yieldState(status, inputRequired, yieldedTools)
+  const availableForContent = contentAreaHeight(
+    terminalHeight,
+    (showInputYield || showPrompt) && !browseMode,
+    detailVisible,
+  )
   const detailPaneHeight = useMemo(() => {
     if (!detailVisible) return 0
     return availableForContent
@@ -168,7 +229,6 @@ export function App({
 
   const isDetailInputMode = detailVisible && detailMode === 'input' && isSelectedEventPendingYield
   const isPromptInputMode = showPrompt || showInputYield
-  const hasUnhandledYields = status === 'yielded' && yieldedTools.length > 0 && !inputRequired
 
   const handleDetailInputSubmit = useCallback(
     (value: string) => {
@@ -232,15 +292,14 @@ export function App({
       {!detailVisible && (
         <ModeBar
           displayMode={displayMode}
-          inputHint={
-            isDetailInputMode || displayMode === 'logging'
-              ? null
-              : hasUnhandledYields || showInputYield
-                ? 'pending'
-                : isPromptInputMode && browseMode
-                  ? 'available'
-                  : null
-          }
+          inputHint={modeBarInputHint({
+            isDetailInputMode,
+            displayMode,
+            hasUnhandledYields,
+            showInputYield,
+            isPromptInputMode,
+            browseMode,
+          })}
         />
       )}
       {displayMode === 'logging' ? (
@@ -286,7 +345,7 @@ export function App({
 
       {displayMode !== 'logging' && (
         <DetailPane
-          key={`${(detailEvent as { id?: string } | null)?.id ?? 'none'}:${detailMode}:${isSelectedEventPendingYield}`}
+          key={detailPaneKey(detailEvent, detailMode, isSelectedEventPendingYield)}
           event={detailEvent}
           visible={detailVisible}
           mode={detailMode}

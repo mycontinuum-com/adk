@@ -289,6 +289,216 @@ interface ExecuteToolResult {
   outputSignal?: OutputInfo
 }
 
+function retryCountFor(attempt: number): number | undefined {
+  return attempt > 1 ? attempt : undefined
+}
+
+/** Shared state for turning one tool call's outcome into its result event. */
+interface ToolResultScope {
+  base: ToolResultEventBase
+  startTime: number
+  composedHook: Hook
+  toolCtx: ToolContext
+}
+
+/** Handles control-flow signals a tool can return in place of a result. */
+async function resultForToolSignal(
+  output: unknown,
+  scope: ToolResultScope,
+  attempt: number,
+): Promise<ExecuteToolResult | undefined> {
+  const { base, startTime, composedHook, toolCtx } = scope
+  if (isOutputSignal(output)) {
+    return {
+      event: await applyAfterTool(composedHook, toolCtx, {
+        ...base,
+        result: output.value,
+        output: true,
+        durationMs: Date.now() - startTime,
+        retryCount: retryCountFor(attempt),
+      }),
+      outputSignal: { value: output.value },
+    }
+  }
+
+  if (isEndSignal(output)) {
+    toolCtx.endInvocation = true
+    return {
+      event: await applyAfterTool(composedHook, toolCtx, {
+        ...base,
+        result: 'Session ending',
+        durationMs: Date.now() - startTime,
+        retryCount: retryCountFor(attempt),
+      }),
+    }
+  }
+
+  if (isYieldSignal(output)) {
+    return {
+      event: await applyAfterTool(composedHook, toolCtx, {
+        ...base,
+        result: { yielded: true, invocationId: output.invocationId },
+        durationMs: Date.now() - startTime,
+        retryCount: retryCountFor(attempt),
+      }),
+      delegateYielded: {
+        invocationId: output.invocationId,
+        yieldedTools: output.yieldedTools,
+        inputRequired: output.status === 'yielded_message',
+      },
+    }
+  }
+
+  if (isRunnable(output)) {
+    return {
+      event: await applyAfterTool(composedHook, toolCtx, {
+        ...base,
+        result: {
+          transfer: true,
+          agent: output.name,
+        },
+        durationMs: Date.now() - startTime,
+        retryCount: retryCountFor(attempt),
+      }),
+      transfer: {
+        agent: output,
+      },
+    }
+  }
+
+  return undefined
+}
+
+function splitToolMedia(output: unknown): { output: unknown; media: MediaPart[] | undefined } {
+  let media: MediaPart[] | undefined
+  if (output && typeof output === 'object' && '__media' in output) {
+    const outputWithMedia = output as {
+      __media?: MediaPart[]
+      [key: string]: unknown
+    }
+    media = outputWithMedia.__media
+    const { __media: _, ...rest } = outputWithMedia
+    output = rest
+  }
+  return { output, media }
+}
+
+async function runToolOnce(
+  tool: FunctionTool,
+  hookCtx: ToolExecutionContext,
+  toolCtx: ToolContext,
+  channel: EventChannel | undefined,
+): Promise<unknown> {
+  const executeTool = async () => {
+    toolCtx.signal?.throwIfAborted()
+    return await tool.execute!(hookCtx)
+  }
+
+  const complete = channel?.registerOperation()
+  let execution = (async () => {
+    try {
+      return await (tool.retry ? withRetry(executeTool, tool.retry) : executeTool())
+    } finally {
+      complete?.()
+    }
+  })()
+
+  if (tool.timeout) {
+    execution = withToolTimeout(
+      execution,
+      tool.timeout,
+      `Tool '${tool.name}' timed out after ${tool.timeout}ms`,
+    )
+  }
+
+  return await execution
+}
+
+async function finalizeToolOutput(
+  tool: FunctionTool,
+  hookCtx: ToolExecutionContext,
+  output: unknown,
+): Promise<unknown> {
+  if (tool.finalize) {
+    const finalizeCtx: ToolExecutionContext = {
+      ...hookCtx,
+      result: output,
+    }
+    const finalized = await tool.finalize(finalizeCtx)
+    if (finalized !== undefined) {
+      output = finalized
+    }
+  }
+  return output
+}
+
+/**
+ * Applies the error handler's recovery for a failed tool attempt. Returns the result to report, or
+ * undefined when the attempt should be retried.
+ */
+async function recoverFromToolError(
+  lastError: Error,
+  attempt: number,
+  scope: ToolResultScope,
+  toolCall: ToolCallEvent,
+  errorHandler: ComposedErrorHandler,
+): Promise<ExecuteToolResult | undefined> {
+  const { base, startTime, composedHook, toolCtx } = scope
+  const errorMessage = lastError.message
+  const timedOut = errorMessage.includes('timed out')
+
+  const { recovery } = await handleError(lastError, toolCtx, 'tool', attempt, errorHandler, {
+    toolName: toolCall.name,
+    callId: toolCall.callId,
+  })
+
+  switch (recovery.action) {
+    case 'throw':
+      throw lastError
+
+    case 'abort':
+      return {
+        event: await applyAfterTool(composedHook, toolCtx, {
+          ...base,
+          error: errorMessage,
+          durationMs: Date.now() - startTime,
+          retryCount: retryCountFor(attempt),
+          timedOut: timedOut || undefined,
+        }),
+        abort: true,
+      }
+
+    case 'retry':
+      if (recovery.delay) {
+        await sleep(recovery.delay)
+      }
+      return undefined
+
+    case 'fallback':
+      return {
+        event: await applyAfterTool(composedHook, toolCtx, {
+          ...base,
+          result: recovery.result,
+          durationMs: Date.now() - startTime,
+          retryCount: retryCountFor(attempt),
+        }),
+      }
+
+    case 'skip':
+    case 'pass':
+    default:
+      return {
+        event: await applyAfterTool(composedHook, toolCtx, {
+          ...base,
+          error: errorMessage,
+          durationMs: Date.now() - startTime,
+          retryCount: retryCountFor(attempt),
+          timedOut: timedOut || undefined,
+        }),
+      }
+  }
+}
+
 async function executeToolCall(
   toolCall: ToolCallEvent,
   agent: Agent,
@@ -313,6 +523,7 @@ async function executeToolCall(
     invocationId: toolCtx.invocationId,
     agentName: agent.name,
   }
+  const scope: ToolResultScope = { base, startTime, composedHook, toolCtx }
 
   const tool = agent.tools.filter(isFunctionTool).find((t) => t.name === toolCall.name)
   if (!tool) {
@@ -358,117 +569,18 @@ async function executeToolCall(
   }
 
   let attempt = 0
-  let lastError: Error | undefined
 
   while (attempt < MAX_TOOL_RETRY_ATTEMPTS) {
     toolCtx.signal?.throwIfAborted()
     attempt++
-    let timedOut = false
 
     try {
-      const executeTool = async () => {
-        toolCtx.signal?.throwIfAborted()
-        return await tool.execute!(hookCtx)
-      }
+      const executed = await runToolOnce(tool, hookCtx, toolCtx, channel)
 
-      const complete = channel?.registerOperation()
-      let execution = (async () => {
-        try {
-          return await (tool.retry ? withRetry(executeTool, tool.retry) : executeTool())
-        } finally {
-          complete?.()
-        }
-      })()
+      const signalled = await resultForToolSignal(executed, scope, attempt)
+      if (signalled) return signalled
 
-      if (tool.timeout) {
-        execution = withToolTimeout(
-          execution,
-          tool.timeout,
-          `Tool '${tool.name}' timed out after ${tool.timeout}ms`,
-        )
-      }
-
-      let output = await execution
-
-      if (isOutputSignal(output)) {
-        return {
-          event: await applyAfterTool(composedHook, toolCtx, {
-            ...base,
-            result: output.value,
-            output: true,
-            durationMs: Date.now() - startTime,
-            retryCount: attempt > 1 ? attempt : undefined,
-          }),
-          outputSignal: { value: output.value },
-        }
-      }
-
-      if (isEndSignal(output)) {
-        toolCtx.endInvocation = true
-        return {
-          event: await applyAfterTool(composedHook, toolCtx, {
-            ...base,
-            result: 'Session ending',
-            durationMs: Date.now() - startTime,
-            retryCount: attempt > 1 ? attempt : undefined,
-          }),
-        }
-      }
-
-      if (isYieldSignal(output)) {
-        return {
-          event: await applyAfterTool(composedHook, toolCtx, {
-            ...base,
-            result: { yielded: true, invocationId: output.invocationId },
-            durationMs: Date.now() - startTime,
-            retryCount: attempt > 1 ? attempt : undefined,
-          }),
-          delegateYielded: {
-            invocationId: output.invocationId,
-            yieldedTools: output.yieldedTools,
-            inputRequired: output.status === 'yielded_message',
-          },
-        }
-      }
-
-      if (isRunnable(output)) {
-        return {
-          event: await applyAfterTool(composedHook, toolCtx, {
-            ...base,
-            result: {
-              transfer: true,
-              agent: output.name,
-            },
-            durationMs: Date.now() - startTime,
-            retryCount: attempt > 1 ? attempt : undefined,
-          }),
-          transfer: {
-            agent: output,
-          },
-        }
-      }
-
-      if (tool.finalize) {
-        const finalizeCtx: ToolExecutionContext = {
-          ...hookCtx,
-          result: output,
-        }
-        const finalized = await tool.finalize(finalizeCtx)
-        if (finalized !== undefined) {
-          output = finalized
-        }
-      }
-
-      let media: MediaPart[] | undefined
-      if (output && typeof output === 'object' && '__media' in output) {
-        const outputWithMedia = output as {
-          __media?: MediaPart[]
-          [key: string]: unknown
-        }
-        media = outputWithMedia.__media
-        const { __media: _, ...rest } = outputWithMedia
-        output = rest
-      }
+      const { output, media } = splitToolMedia(await finalizeToolOutput(tool, hookCtx, executed))
 
       return {
         event: await applyAfterTool(composedHook, toolCtx, {
@@ -476,64 +588,18 @@ async function executeToolCall(
           result: output,
           media,
           durationMs: Date.now() - startTime,
-          retryCount: attempt > 1 ? attempt : undefined,
+          retryCount: retryCountFor(attempt),
         }),
       }
     } catch (error) {
-      lastError = error as Error
-      const errorMessage = lastError.message
-      timedOut = errorMessage.includes('timed out')
-
-      const { recovery } = await handleError(lastError, toolCtx, 'tool', attempt, errorHandler, {
-        toolName: toolCall.name,
-        callId: toolCall.callId,
-      })
-
-      switch (recovery.action) {
-        case 'throw':
-          throw lastError
-
-        case 'abort':
-          return {
-            event: await applyAfterTool(composedHook, toolCtx, {
-              ...base,
-              error: errorMessage,
-              durationMs: Date.now() - startTime,
-              retryCount: attempt > 1 ? attempt : undefined,
-              timedOut: timedOut || undefined,
-            }),
-            abort: true,
-          }
-
-        case 'retry':
-          if (recovery.delay) {
-            await sleep(recovery.delay)
-          }
-          continue
-
-        case 'fallback':
-          return {
-            event: await applyAfterTool(composedHook, toolCtx, {
-              ...base,
-              result: recovery.result,
-              durationMs: Date.now() - startTime,
-              retryCount: attempt > 1 ? attempt : undefined,
-            }),
-          }
-
-        case 'skip':
-        case 'pass':
-        default:
-          return {
-            event: await applyAfterTool(composedHook, toolCtx, {
-              ...base,
-              error: errorMessage,
-              durationMs: Date.now() - startTime,
-              retryCount: attempt > 1 ? attempt : undefined,
-              timedOut: timedOut || undefined,
-            }),
-          }
-      }
+      const recovered = await recoverFromToolError(
+        error as Error,
+        attempt,
+        scope,
+        toolCall,
+        errorHandler,
+      )
+      if (recovered) return recovered
     }
   }
 
@@ -790,51 +856,82 @@ function processAgentOutput(
   return { value: rawOutput }
 }
 
-async function* executeAgentLoop(
+/** Invocation-wide values shared by every iteration of the agent loop. */
+interface AgentLoopScope {
+  agent: Agent
+  effectiveAgent: Agent
+  composedHook: Hook
+  session: Session
+  config: InternalRunConfig | undefined
+  invocationId: string
+  runnerConfig: AgentRunnerConfig
+  errorHandler: ComposedErrorHandler
+  ctx: InvocationContext
+  mctx: ModelStepContext
+  maxSteps: number
+  effectiveYields: boolean
+  currentYieldIndex: number
+  effectiveSignal: AbortSignal
+}
+
+type IterationOutcome =
+  | { type: 'continue' }
+  | { type: 'break'; outcome?: InvocationOutcome }
+  | { type: 'return'; result: AgentResult }
+
+type InvocationTimeoutReason = 'max_duration' | 'inactivity_timeout'
+
+interface InvocationTimeout {
+  signal: AbortSignal
+  state: { reason?: InvocationTimeoutReason; timer?: ReturnType<typeof setTimeout> }
+}
+
+// maxDuration: wall-clock timer from invocation start. Creates a child
+// AbortController that fires when the timeout expires. The main loop
+// checks `timeoutSignal.aborted` and maps to the correct outcome.
+function armInvocationTimeout(agent: Agent, signal: AbortSignal): InvocationTimeout {
+  const state: InvocationTimeout['state'] = {}
+  const timeoutController = new AbortController()
+
+  // Chain parent signal → child abort
+  if (signal.aborted) {
+    timeoutController.abort()
+  } else {
+    const onParentAbort = () => timeoutController.abort()
+    signal.addEventListener('abort', onParentAbort, { once: true })
+  }
+
+  if (agent.timeouts?.maxDuration) {
+    state.timer = setTimeout(() => {
+      state.reason = 'max_duration'
+      timeoutController.abort()
+    }, agent.timeouts.maxDuration)
+  }
+
+  return { signal: timeoutController.signal, state }
+}
+
+async function withExpandedMCPTools(agent: Agent): Promise<Agent> {
+  const { mcpTools } = partitionTools(agent.tools)
+  if (mcpTools.length === 0) return agent
+  const { functionTools, providerTools } = await expandMCPTools(agent.tools)
+  return {
+    ...agent,
+    tools: [...functionTools, ...providerTools],
+  }
+}
+
+/** Runs the beforeAgent hook; returns a result when the hook replaces the agent run. */
+async function* beforeAgentResult(
   agent: Agent,
   composedHook: Hook,
   session: Session,
   config: InternalRunConfig | undefined,
-  signal: AbortSignal,
   invocationId: string,
-  parentInvocationId: string | undefined,
   runnerConfig: AgentRunnerConfig,
-  errorHandler: ComposedErrorHandler,
-  resumeContext?: ResumeContext,
-): AsyncGenerator<StreamEvent, AgentResult> {
-  const maxSteps = agent.maxSteps ?? DEFAULT_MAX_STEPS
-  const ctx = createInvocationContext(
-    session,
-    runnerConfig.sessionService,
-    invocationId,
-    agent,
-    parentInvocationId,
-    runnerConfig.subRunner,
-    runnerConfig.signal,
-    runnerConfig.channel,
-    config?.voice,
-  )
-
-  const currentYieldIndex = resumeContext ? resumeContext.yieldIndex + 1 : 0
-  const effectiveYields =
-    agent.yields ?? ('realtime' in agent.model && agent.model.realtime === true)
-  const maxTurns = agent.maxTurns ?? 100
-
-  if (effectiveYields && currentYieldIndex >= maxTurns) {
-    return {
-      session,
-      state: session.state,
-      iterations: 0,
-      runnable: agent,
-      outcome: 'max_turns',
-      yieldIndex: currentYieldIndex,
-    }
-  }
-
-  if (resumeContext) {
-    yield* processResumedYields(agent, session, ctx, runnerConfig)
-  }
-
+  ctx: InvocationContext,
+  currentYieldIndex: number,
+): AsyncGenerator<StreamEvent, AgentResult | undefined> {
   const skipAgent = await composedHook.beforeAgent?.(ctx)
   if (isRunnable(skipAgent)) {
     return {
@@ -864,42 +961,457 @@ async function* executeAgentLoop(
       yieldIndex: currentYieldIndex,
     }
   }
+  return undefined
+}
 
-  const { mcpTools } = partitionTools(agent.tools)
-  let effectiveAgent = agent
+async function* executeNonYieldingToolCalls(
+  scope: AgentLoopScope,
+  toolCalls: ToolCallEvent[],
+): AsyncGenerator<StreamEvent, void> {
+  const { agent, composedHook, session, config, runnerConfig, errorHandler, ctx } = scope
+  const nonYieldingCalls: ToolCallEvent[] = toolCalls.filter((tc) => tc.yields !== true)
 
-  if (mcpTools.length > 0) {
-    const { functionTools, providerTools } = await expandMCPTools(agent.tools)
-    effectiveAgent = {
-      ...agent,
-      tools: [...functionTools, ...providerTools],
+  for (const toolCall of nonYieldingCalls) {
+    const toolCtx = createToolContext(
+      ctx,
+      toolCall,
+      ctx.session,
+      runnerConfig.sessionService,
+      runnerConfig.subRunner,
+      runnerConfig.signal,
+      runnerConfig.channel,
+    )
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- non-yielding tool calls execute and persist sequentially in model order
+    const { event: resultEvent } = await executeToolCall(
+      toolCall,
+      agent,
+      composedHook,
+      toolCtx,
+      errorHandler,
+      runnerConfig.channel,
+    )
+    await runnerConfig.sessionService.appendEvent(session, resultEvent)
+    yield resultEvent
+    config?.onStep?.([resultEvent], session, agent)
+  }
+}
+
+/** Emits a tool_yield (or an argument error) for one yielding tool call. */
+async function* yieldToolCall(
+  scope: AgentLoopScope,
+  toolCall: ToolCallEvent,
+): AsyncGenerator<StreamEvent, ToolYieldEvent | undefined> {
+  const { agent, session, runnerConfig, ctx } = scope
+  const tool = agent.tools.filter(isFunctionTool).find((t) => t.name === toolCall.name)
+  if (!tool) return undefined
+
+  const baseToolCtx = createToolContext(
+    ctx,
+    toolCall,
+    ctx.session,
+    runnerConfig.sessionService,
+    runnerConfig.subRunner,
+    runnerConfig.signal,
+    runnerConfig.channel,
+  )
+
+  const parseResult = safeParseToolArgs(toolCall.args, tool.schema)
+  if (!parseResult.success) {
+    const errorResultEvent: ToolResultEvent = {
+      id: createEventId(),
+      type: 'tool_result',
+      createdAt: Date.now(),
+      callId: toolCall.callId,
+      name: toolCall.name,
+      error: `Invalid arguments for yielding tool '${toolCall.name}': ${parseResult.error.message}. Please retry with corrected arguments.`,
+      invocationId: toolCall.invocationId,
+      agentName: toolCall.agentName,
+      durationMs: 0,
+    }
+    await runnerConfig.sessionService.appendEvent(session, errorResultEvent)
+    yield errorResultEvent
+    return undefined
+  }
+
+  let preparedArgs = parseResult.data
+  if (tool.prepare) {
+    const hookCtx: ToolExecutionContext = {
+      ...baseToolCtx,
+      args: preparedArgs,
+    }
+    const prepared = await tool.prepare(hookCtx)
+    if (prepared !== undefined) {
+      preparedArgs = prepared
     }
   }
 
+  const yieldEvent: ToolYieldEvent = {
+    id: createEventId(),
+    type: 'tool_yield',
+    createdAt: Date.now(),
+    callId: toolCall.callId,
+    name: toolCall.name,
+    args: preparedArgs,
+    invocationId: toolCall.invocationId,
+    agentName: toolCall.agentName,
+  }
+  await runnerConfig.sessionService.appendEvent(session, yieldEvent)
+  yield yieldEvent
+  return yieldEvent
+}
+
+async function* runYieldingToolCalls(
+  scope: AgentLoopScope,
+  yieldedTools: ToolCallEvent[],
+  modelToolCalls: ToolCallEvent[],
+  iterations: number,
+): AsyncGenerator<StreamEvent, AgentResult | undefined> {
+  if (yieldedTools.length === 0) return undefined
+
+  yield* executeNonYieldingToolCalls(scope, modelToolCalls)
+
+  const yieldEvents: ToolYieldEvent[] = []
+  for (const toolCall of yieldedTools) {
+    const yieldEvent = yield* yieldToolCall(scope, toolCall)
+    if (yieldEvent) yieldEvents.push(yieldEvent)
+  }
+
+  if (yieldEvents.length > 0) {
+    return {
+      runnable: scope.agent,
+      session: scope.session,
+      state: scope.session.state,
+      iterations,
+      outcome: 'yielded',
+      yieldIndex: scope.currentYieldIndex,
+      yieldedTools: yieldEvents,
+    } satisfies AgentResult
+  }
+  return undefined
+}
+
+async function toolExecutionOutcome(
+  scope: AgentLoopScope,
+  toolResult: ToolExecutionResult,
+  iterations: number,
+): Promise<IterationOutcome | undefined> {
+  const { agent, session, composedHook, ctx, currentYieldIndex } = scope
+  if (toolResult.delegateYieldInfo) {
+    return {
+      type: 'return',
+      result: {
+        runnable: agent,
+        session,
+        state: session.state,
+        iterations,
+        outcome: 'yielded',
+        yieldIndex: currentYieldIndex,
+        yieldedTools: toolResult.delegateYieldInfo.yieldedTools,
+      } satisfies AgentResult,
+    }
+  }
+
+  if (toolResult.transferInfo) {
+    return {
+      type: 'return',
+      result: {
+        runnable: agent,
+        session,
+        state: session.state,
+        iterations,
+        outcome: 'transferred',
+        yieldIndex: currentYieldIndex,
+        transfer: {
+          invocationId: createInvocationId(),
+          agent: toolResult.transferInfo.agent,
+        },
+      } satisfies AgentResult,
+    }
+  }
+
+  if (toolResult.outputInfo) {
+    let output: unknown = toolResult.outputInfo.value
+    const modified = await composedHook.afterAgent?.(ctx, output)
+    if (modified !== undefined) output = modified
+    return {
+      type: 'return',
+      result: {
+        runnable: agent,
+        session,
+        state: session.state,
+        iterations,
+        outcome: 'completed',
+        yieldIndex: currentYieldIndex,
+        output,
+      } satisfies AgentResult,
+    }
+  }
+
+  if (toolResult.abort) {
+    return { type: 'break', outcome: 'aborted' }
+  }
+  return undefined
+}
+
+function usageWithModelDefaults(
+  stepResult: import('../types').ModelStepResult,
+  agent: Agent,
+): import('../types').ModelStepResult['usage'] {
+  return stepResult.usage
+    ? {
+        ...stepResult.usage,
+        provider: stepResult.usage.provider ?? getModelProvider(agent.model),
+        modelName: stepResult.usage.modelName ?? getModelName(agent.model),
+      }
+    : undefined
+}
+
+/** Persists a completed model step, then runs or yields its tool calls. */
+async function* completeModelStep(
+  scope: AgentLoopScope,
+  stepResult: import('../types').ModelStepResult,
+  iterations: number,
+  stepStartTime: number,
+): AsyncGenerator<StreamEvent, IterationOutcome> {
+  const { agent, composedHook, session, config, invocationId, runnerConfig, ctx, mctx } = scope
+
+  let finalStepResult = stepResult
+  const modifiedResult = await composedHook.afterModel?.(ctx, stepResult)
+  if (isRunnable(modifiedResult)) {
+    return {
+      type: 'return',
+      result: {
+        session,
+        state: session.state,
+        iterations,
+        runnable: agent,
+        outcome: 'transferred',
+        yieldIndex: scope.currentYieldIndex,
+        transfer: {
+          invocationId: createInvocationId(),
+          agent: modifiedResult,
+        },
+      },
+    }
+  }
+  if (modifiedResult) finalStepResult = modifiedResult
+
+  const endEvent = createEndEvent({
+    invocationId,
+    agentName: agent.name,
+    stepIndex: iterations,
+    durationMs: Date.now() - stepStartTime,
+    usage: usageWithModelDefaults(finalStepResult, agent),
+    finishReason: finalStepResult.finishReason,
+  })
+  await runnerConfig.sessionService.appendEvent(session, endEvent)
+  yield endEvent
+
+  enrichToolCallsWithYieldFlag(finalStepResult.toolCalls, agent.tools.filter(isFunctionTool))
+
+  for (const event of finalStepResult.stepEvents) {
+    // react-doctor-disable-next-line react-doctor/async-await-in-loop -- step events are persisted and streamed in order
+    await runnerConfig.sessionService.appendEvent(session, event)
+    yield event
+  }
+
+  config?.onStep?.(finalStepResult.stepEvents, session, agent)
+
+  if (finalStepResult.terminal) {
+    if (scope.effectiveYields) {
+      return {
+        type: 'return',
+        result: {
+          runnable: agent,
+          session,
+          state: session.state,
+          iterations,
+          outcome: 'yielded',
+          yieldIndex: scope.currentYieldIndex,
+        } satisfies AgentResult,
+      }
+    }
+    return { type: 'break' }
+  }
+
+  const yieldedTools = finalStepResult.toolCalls.filter((tc) => tc.yields === true)
+  const yieldedResult = yield* runYieldingToolCalls(
+    scope,
+    yieldedTools,
+    stepResult.toolCalls,
+    iterations,
+  )
+  if (yieldedResult) return { type: 'return', result: yieldedResult }
+
+  const toolResult = yield* processToolCalls(
+    finalStepResult.toolCalls,
+    mctx.agent,
+    composedHook,
+    ctx,
+    runnerConfig,
+    config,
+    scope.errorHandler,
+    session,
+  )
+
+  return (await toolExecutionOutcome(scope, toolResult, iterations)) ?? { type: 'continue' }
+}
+
+async function* runAgentIteration(
+  scope: AgentLoopScope,
+  loop: { iterations: number },
+): AsyncGenerator<StreamEvent, IterationOutcome> {
+  const { agent, effectiveAgent, session, invocationId, runnerConfig, mctx } = scope
+  const renderCtx = buildContext(session, effectiveAgent, invocationId)
+  const stepStartTime = Date.now()
+
+  const startEvent = createStartEvent(renderCtx, loop.iterations + 1, invocationId)
+  await runnerConfig.sessionService.appendEvent(session, startEvent)
+  yield startEvent
+
+  const { stepResult, modelError, shouldAbort, transfer, synthetic } = yield* executeModelStep(
+    mctx,
+    renderCtx,
+    stepStartTime,
+    scope.effectiveSignal,
+  )
+
+  if (!synthetic) {
+    loop.iterations++
+    mctx.iterations = loop.iterations
+  }
+  const iterations = loop.iterations
+
+  if (iterations >= scope.maxSteps) {
+    return { type: 'break', outcome: 'max_steps' }
+  }
+
+  if (transfer) {
+    return {
+      type: 'return',
+      result: {
+        session,
+        state: session.state,
+        iterations,
+        runnable: agent,
+        outcome: 'transferred',
+        yieldIndex: scope.currentYieldIndex,
+        transfer: {
+          invocationId: createInvocationId(),
+          agent: transfer.agent,
+        },
+      },
+    }
+  }
+
+  if (shouldAbort || !stepResult) {
+    const endEvent = createEndEvent({
+      invocationId,
+      agentName: agent.name,
+      stepIndex: iterations,
+      durationMs: Date.now() - stepStartTime,
+      finishReason: 'error',
+      error: modelError,
+    })
+    await runnerConfig.sessionService.appendEvent(session, endEvent)
+    yield endEvent
+    return shouldAbort ? { type: 'break', outcome: 'aborted' } : { type: 'continue' }
+  }
+
+  return yield* completeModelStep(scope, stepResult, iterations, stepStartTime)
+}
+
+function yieldBudget(
+  agent: Agent,
+  resumeContext: ResumeContext | undefined,
+): { currentYieldIndex: number; effectiveYields: boolean; turnsExhausted: boolean } {
+  const currentYieldIndex = resumeContext ? resumeContext.yieldIndex + 1 : 0
+  const effectiveYields =
+    agent.yields ?? ('realtime' in agent.model && agent.model.realtime === true)
+  const maxTurns = agent.maxTurns ?? 100
+  return {
+    currentYieldIndex,
+    effectiveYields,
+    turnsExhausted: effectiveYields && currentYieldIndex >= maxTurns,
+  }
+}
+
+async function finalAgentOutput(
+  agent: Agent,
+  composedHook: Hook,
+  session: Session,
+  invocationId: string,
+  ctx: InvocationContext,
+): Promise<unknown> {
+  const finalOutput = getLastAssistantText(session)
+  const hookResult = await composedHook.afterAgent?.(ctx, finalOutput)
+
+  if (hookResult !== undefined && typeof hookResult !== 'string') {
+    return hookResult
+  }
+  const rawOutput = typeof hookResult === 'string' ? hookResult : finalOutput
+  return processAgentOutput(agent, rawOutput, session, invocationId).value
+}
+
+async function* executeAgentLoop(
+  agent: Agent,
+  composedHook: Hook,
+  session: Session,
+  config: InternalRunConfig | undefined,
+  signal: AbortSignal,
+  invocationId: string,
+  parentInvocationId: string | undefined,
+  runnerConfig: AgentRunnerConfig,
+  errorHandler: ComposedErrorHandler,
+  resumeContext?: ResumeContext,
+): AsyncGenerator<StreamEvent, AgentResult> {
+  const maxSteps = agent.maxSteps ?? DEFAULT_MAX_STEPS
+  const ctx = createInvocationContext(
+    session,
+    runnerConfig.sessionService,
+    invocationId,
+    agent,
+    parentInvocationId,
+    runnerConfig.subRunner,
+    runnerConfig.signal,
+    runnerConfig.channel,
+    config?.voice,
+  )
+
+  const { currentYieldIndex, effectiveYields, turnsExhausted } = yieldBudget(agent, resumeContext)
+
+  if (turnsExhausted) {
+    return {
+      session,
+      state: session.state,
+      iterations: 0,
+      runnable: agent,
+      outcome: 'max_turns',
+      yieldIndex: currentYieldIndex,
+    }
+  }
+
+  if (resumeContext) {
+    yield* processResumedYields(agent, session, ctx, runnerConfig)
+  }
+
+  const skipped = yield* beforeAgentResult(
+    agent,
+    composedHook,
+    session,
+    config,
+    invocationId,
+    runnerConfig,
+    ctx,
+    currentYieldIndex,
+  )
+  if (skipped) return skipped
+
+  const effectiveAgent = await withExpandedMCPTools(agent)
+
   // --- Timeout enforcement ---
-  // maxDuration: wall-clock timer from invocation start. Creates a child
-  // AbortController that fires when the timeout expires. The main loop
-  // checks `timeoutSignal.aborted` and maps to the correct outcome.
-  let timeoutTimer: ReturnType<typeof setTimeout> | undefined
-  let timeoutReason: 'max_duration' | 'inactivity_timeout' | undefined
-  const timeoutController = new AbortController()
-
-  // Chain parent signal → child abort
-  if (signal.aborted) {
-    timeoutController.abort()
-  } else {
-    const onParentAbort = () => timeoutController.abort()
-    signal.addEventListener('abort', onParentAbort, { once: true })
-  }
-
-  if (agent.timeouts?.maxDuration) {
-    timeoutTimer = setTimeout(() => {
-      timeoutReason = 'max_duration'
-      timeoutController.abort()
-    }, agent.timeouts.maxDuration)
-  }
-
-  const effectiveSignal = timeoutController.signal
+  const timeout = armInvocationTimeout(agent, signal)
+  const effectiveSignal = timeout.signal
 
   const mctx: ModelStepContext = {
     agent: effectiveAgent,
@@ -913,344 +1425,87 @@ async function* executeAgentLoop(
     errorHandler,
   }
 
-  let iterations = 0
+  const scope: AgentLoopScope = {
+    agent,
+    effectiveAgent,
+    composedHook,
+    session,
+    config,
+    invocationId,
+    runnerConfig,
+    errorHandler,
+    ctx,
+    mctx,
+    maxSteps,
+    effectiveYields,
+    currentYieldIndex,
+    effectiveSignal,
+  }
+  const loop = { iterations: 0 }
   let outcome: InvocationOutcome | null = 'completed'
   let error: string | undefined
 
   try {
     while (true) {
       if (effectiveSignal.aborted) {
-        outcome = timeoutReason ?? 'aborted'
+        outcome = timeout.state.reason ?? 'aborted'
         break
       }
       if (ctx.endInvocation) break
 
-      const renderCtx = buildContext(session, effectiveAgent, invocationId)
-      const stepStartTime = Date.now()
-
-      const startEvent = createStartEvent(renderCtx, iterations + 1, invocationId)
-      await runnerConfig.sessionService.appendEvent(session, startEvent)
-      yield startEvent
-
-      const { stepResult, modelError, shouldAbort, transfer, synthetic } = yield* executeModelStep(
-        mctx,
-        renderCtx,
-        stepStartTime,
-        effectiveSignal,
-      )
-
-      if (!synthetic) {
-        iterations++
-        mctx.iterations = iterations
-      }
-
-      if (iterations >= maxSteps) {
-        outcome = 'max_steps'
-        break
-      }
-
-      if (transfer) {
-        return {
-          session,
-          state: session.state,
-          iterations,
-          runnable: agent,
-          outcome: 'transferred',
-          yieldIndex: currentYieldIndex,
-          transfer: {
-            invocationId: createInvocationId(),
-            agent: transfer.agent,
-          },
-        }
-      }
-
-      if (shouldAbort) {
-        outcome = 'aborted'
-        const endEvent = createEndEvent({
-          invocationId,
-          agentName: agent.name,
-          stepIndex: iterations,
-          durationMs: Date.now() - stepStartTime,
-          finishReason: 'error',
-          error: modelError,
-        })
-        await runnerConfig.sessionService.appendEvent(session, endEvent)
-        yield endEvent
-        break
-      }
-
-      if (!stepResult) {
-        const endEvent = createEndEvent({
-          invocationId,
-          agentName: agent.name,
-          stepIndex: iterations,
-          durationMs: Date.now() - stepStartTime,
-          finishReason: 'error',
-          error: modelError,
-        })
-        await runnerConfig.sessionService.appendEvent(session, endEvent)
-        yield endEvent
-        continue
-      }
-
-      let finalStepResult = stepResult
-      const modifiedResult = await composedHook.afterModel?.(ctx, stepResult)
-      if (isRunnable(modifiedResult)) {
-        return {
-          session,
-          state: session.state,
-          iterations,
-          runnable: agent,
-          outcome: 'transferred',
-          yieldIndex: currentYieldIndex,
-          transfer: {
-            invocationId: createInvocationId(),
-            agent: modifiedResult,
-          },
-        }
-      }
-      if (modifiedResult) finalStepResult = modifiedResult
-
-      const usage = finalStepResult.usage
-        ? {
-            ...finalStepResult.usage,
-            provider: finalStepResult.usage.provider ?? getModelProvider(agent.model),
-            modelName: finalStepResult.usage.modelName ?? getModelName(agent.model),
-          }
-        : undefined
-      const endEvent = createEndEvent({
-        invocationId,
-        agentName: agent.name,
-        stepIndex: iterations,
-        durationMs: Date.now() - stepStartTime,
-        usage,
-        finishReason: finalStepResult.finishReason,
-      })
-      await runnerConfig.sessionService.appendEvent(session, endEvent)
-      yield endEvent
-
-      enrichToolCallsWithYieldFlag(finalStepResult.toolCalls, agent.tools.filter(isFunctionTool))
-
-      for (const event of finalStepResult.stepEvents) {
-        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- step events are persisted and streamed in order
-        await runnerConfig.sessionService.appendEvent(session, event)
-        yield event
-      }
-
-      config?.onStep?.(finalStepResult.stepEvents, session, agent)
-
-      if (finalStepResult.terminal) {
-        if (effectiveYields) {
-          return {
-            runnable: agent,
-            session,
-            state: session.state,
-            iterations,
-            outcome: 'yielded',
-            yieldIndex: currentYieldIndex,
-          } satisfies AgentResult
-        }
-        break
-      }
-
-      const yieldedTools = finalStepResult.toolCalls.filter((tc) => tc.yields === true)
-      if (yieldedTools.length > 0) {
-        const nonYieldingCalls: ToolCallEvent[] = stepResult.toolCalls.filter(
-          (tc) => tc.yields !== true,
-        )
-
-        for (const toolCall of nonYieldingCalls) {
-          const toolCtx = createToolContext(
-            ctx,
-            toolCall,
-            ctx.session,
-            runnerConfig.sessionService,
-            runnerConfig.subRunner,
-            runnerConfig.signal,
-            runnerConfig.channel,
-          )
-          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- non-yielding tool calls execute and persist sequentially in model order
-          const { event: resultEvent } = await executeToolCall(
-            toolCall,
-            agent,
-            composedHook,
-            toolCtx,
-            errorHandler,
-            runnerConfig.channel,
-          )
-          await runnerConfig.sessionService.appendEvent(session, resultEvent)
-          yield resultEvent
-          config?.onStep?.([resultEvent], session, agent)
-        }
-      }
-
-      if (yieldedTools.length > 0) {
-        const yieldEvents: ToolYieldEvent[] = []
-        for (const toolCall of yieldedTools) {
-          const tool = agent.tools.filter(isFunctionTool).find((t) => t.name === toolCall.name)
-          if (!tool) continue
-
-          const baseToolCtx = createToolContext(
-            ctx,
-            toolCall,
-            ctx.session,
-            runnerConfig.sessionService,
-            runnerConfig.subRunner,
-            runnerConfig.signal,
-            runnerConfig.channel,
-          )
-
-          const parseResult = safeParseToolArgs(toolCall.args, tool.schema)
-          if (!parseResult.success) {
-            const errorResultEvent: ToolResultEvent = {
-              id: createEventId(),
-              type: 'tool_result',
-              createdAt: Date.now(),
-              callId: toolCall.callId,
-              name: toolCall.name,
-              error: `Invalid arguments for yielding tool '${toolCall.name}': ${parseResult.error.message}. Please retry with corrected arguments.`,
-              invocationId: toolCall.invocationId,
-              agentName: toolCall.agentName,
-              durationMs: 0,
-            }
-            await runnerConfig.sessionService.appendEvent(session, errorResultEvent)
-            yield errorResultEvent
-            continue
-          }
-
-          let preparedArgs = parseResult.data
-          if (tool.prepare) {
-            const hookCtx: ToolExecutionContext = {
-              ...baseToolCtx,
-              args: preparedArgs,
-            }
-            const prepared = await tool.prepare(hookCtx)
-            if (prepared !== undefined) {
-              preparedArgs = prepared
-            }
-          }
-
-          const yieldEvent: ToolYieldEvent = {
-            id: createEventId(),
-            type: 'tool_yield',
-            createdAt: Date.now(),
-            callId: toolCall.callId,
-            name: toolCall.name,
-            args: preparedArgs,
-            invocationId: toolCall.invocationId,
-            agentName: toolCall.agentName,
-          }
-          await runnerConfig.sessionService.appendEvent(session, yieldEvent)
-          yield yieldEvent
-          yieldEvents.push(yieldEvent)
-        }
-
-        if (yieldEvents.length > 0) {
-          return {
-            runnable: agent,
-            session,
-            state: session.state,
-            iterations,
-            outcome: 'yielded',
-            yieldIndex: currentYieldIndex,
-            yieldedTools: yieldEvents,
-          } satisfies AgentResult
-        }
-      }
-
-      const toolResult = yield* processToolCalls(
-        finalStepResult.toolCalls,
-        mctx.agent,
-        composedHook,
-        ctx,
-        runnerConfig,
-        config,
-        errorHandler,
-        session,
-      )
-
-      if (toolResult.delegateYieldInfo) {
-        return {
-          runnable: agent,
-          session,
-          state: session.state,
-          iterations,
-          outcome: 'yielded',
-          yieldIndex: currentYieldIndex,
-          yieldedTools: toolResult.delegateYieldInfo.yieldedTools,
-        } satisfies AgentResult
-      }
-
-      if (toolResult.transferInfo) {
-        return {
-          runnable: agent,
-          session,
-          state: session.state,
-          iterations,
-          outcome: 'transferred',
-          yieldIndex: currentYieldIndex,
-          transfer: {
-            invocationId: createInvocationId(),
-            agent: toolResult.transferInfo.agent,
-          },
-        } satisfies AgentResult
-      }
-
-      if (toolResult.outputInfo) {
-        let output: unknown = toolResult.outputInfo.value
-        const modified = await composedHook.afterAgent?.(ctx, output)
-        if (modified !== undefined) output = modified
-        return {
-          runnable: agent,
-          session,
-          state: session.state,
-          iterations,
-          outcome: 'completed',
-          yieldIndex: currentYieldIndex,
-          output,
-        } satisfies AgentResult
-      }
-
-      if (toolResult.abort) {
-        outcome = 'aborted'
+      const next = yield* runAgentIteration(scope, loop)
+      if (next.type === 'return') return next.result
+      if (next.type === 'break') {
+        if (next.outcome) outcome = next.outcome
         break
       }
     }
   } catch (err) {
     // If the error is due to a timeout abort, map to the timeout outcome
     // instead of propagating as an error.
-    if (effectiveSignal.aborted && timeoutReason) {
-      outcome = timeoutReason
+    if (effectiveSignal.aborted && timeout.state.reason) {
+      outcome = timeout.state.reason
     } else {
       outcome = 'error'
       error = err instanceof Error ? err.message : String(err)
       throw err
     }
   } finally {
-    if (timeoutTimer) clearTimeout(timeoutTimer)
+    if (timeout.state.timer) clearTimeout(timeout.state.timer)
   }
 
-  const finalOutput = getLastAssistantText(session)
-  const hookResult = await composedHook.afterAgent?.(ctx, finalOutput)
-
-  let output: unknown
-  if (hookResult !== undefined && typeof hookResult !== 'string') {
-    output = hookResult
-  } else {
-    const rawOutput = typeof hookResult === 'string' ? hookResult : finalOutput
-    output = processAgentOutput(agent, rawOutput, session, invocationId).value
-  }
+  const output = await finalAgentOutput(agent, composedHook, session, invocationId, ctx)
 
   return {
     session,
     state: session.state,
-    iterations,
+    iterations: loop.iterations,
     runnable: agent,
     outcome,
     yieldIndex: currentYieldIndex,
     error,
     output,
   }
+}
+
+function composeAgentHandlers(
+  agent: Agent,
+  config: InternalRunConfig | undefined,
+  runnerConfig: AgentRunnerConfig,
+): { composedHooks: Hook; composedErrorHandler: ComposedErrorHandler } {
+  const composedHooks = composeHooks([
+    ...(runnerConfig.runnerHooks ?? []),
+    ...(agent.hooks ?? []),
+    ...(config?.hooks ?? []),
+  ])
+
+  const composedErrorHandler = composeErrorHandlers(
+    runnerConfig.runnerErrorHandlers ?? [],
+    agent.errorHandlers ?? [],
+    config?.errorHandlers ?? [],
+  )
+
+  return { composedHooks, composedErrorHandler }
 }
 
 export async function* runAgent(
@@ -1264,17 +1519,7 @@ export async function* runAgent(
 ): AsyncGenerator<StreamEvent, RunResult> {
   const invocationId = resumeContext?.invocationId ?? createInvocationId()
 
-  const composedHooks = composeHooks([
-    ...(runnerConfig.runnerHooks ?? []),
-    ...(agent.hooks ?? []),
-    ...(config?.hooks ?? []),
-  ])
-
-  const composedErrorHandler = composeErrorHandlers(
-    runnerConfig.runnerErrorHandlers ?? [],
-    agent.errorHandlers ?? [],
-    config?.errorHandlers ?? [],
-  )
+  const { composedHooks, composedErrorHandler } = composeAgentHandlers(agent, config, runnerConfig)
 
   const options: InvocationBoundaryOptions<AgentResult> = {
     getIterations: (r) => r.iterations,

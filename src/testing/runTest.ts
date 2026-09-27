@@ -153,6 +153,23 @@ function collectMockResponses(runnable: Runnable): MockResponseConfig[] {
   return []
 }
 
+/** Feeds the tool's next scripted value, if any remain, as the yielded call's input. */
+function supplyNextToolValue(
+  session: BaseSession,
+  call: { name: string; callId: string },
+  valuesByTool: Record<string, unknown[]>,
+  counters: Map<string, number>,
+): void {
+  const values = valuesByTool[call.name]
+  if (values) {
+    const index = counters.get(call.name) ?? 0
+    if (index < values.length) {
+      session.input.tool({ callId: call.callId, input: values[index] })
+      counters.set(call.name, index + 1)
+    }
+  }
+}
+
 export async function runTest(
   runnable: Runnable,
   steps: Step[],
@@ -212,27 +229,8 @@ export async function runTest(
       const currentResults = processed.resultValues.get(modelResponseIndex) ?? {}
 
       for (const call of yieldedTools) {
-        const toolInputs = currentInputs[call.name]
-        if (toolInputs) {
-          const inputIndex = inputCounters.get(call.name) ?? 0
-          if (inputIndex < toolInputs.length) {
-            session.input.tool({
-              callId: call.callId,
-              input: toolInputs[inputIndex],
-            })
-            inputCounters.set(call.name, inputIndex + 1)
-          }
-        }
-
-        const toolResults = currentResults[call.name]
-        if (toolResults) {
-          const resultIndex = resultCounters.get(call.name) ?? 0
-          if (resultIndex < toolResults.length) {
-            const mockResult = toolResults[resultIndex]
-            session.input.tool({ callId: call.callId, input: mockResult })
-            resultCounters.set(call.name, resultIndex + 1)
-          }
-        }
+        supplyNextToolValue(session, call, currentInputs, inputCounters)
+        supplyNextToolValue(session, call, currentResults, resultCounters)
       }
     } else {
       const nextMessage = processed.userMessages[messageIndex]

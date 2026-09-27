@@ -129,6 +129,65 @@ function renderDetailLine(
   }
 }
 
+function inputFormHeight(
+  useSchemaForm: boolean,
+  schemaDescriptor: ReturnType<typeof inspectSchema> | null,
+): number {
+  return useSchemaForm && schemaDescriptor ? estimateFormHeight(schemaDescriptor) : 3
+}
+
+interface DetailHeaderProps {
+  summary: ReturnType<typeof getEventSummary>
+  mode: DetailViewMode
+  isPendingYield: boolean
+  isInputMode: boolean
+  showScroll: boolean
+  effectiveOffset: number
+  scrollPercent: number
+}
+
+function renderDetailHeader({
+  summary,
+  mode,
+  isPendingYield,
+  isInputMode,
+  showScroll,
+  effectiveOffset,
+  scrollPercent,
+}: DetailHeaderProps): React.ReactElement {
+  return (
+    <Box>
+      <Text bold color="gray">
+        Event
+      </Text>
+      <Text dimColor> • </Text>
+      <Text color={summary.color}>{summary.label}</Text>
+      <Text dimColor> • </Text>
+      <Text color={mode === 'clean' ? 'cyanBright' : 'gray'} dimColor={mode !== 'clean'}>
+        {mode === 'clean' ? '●' : '○'} clean [c]
+      </Text>
+      <Text dimColor> </Text>
+      <Text color={mode === 'raw' ? 'cyanBright' : 'gray'} dimColor={mode !== 'raw'}>
+        {mode === 'raw' ? '●' : '○'} raw [r]
+      </Text>
+      {isPendingYield && (
+        <>
+          <Text dimColor> </Text>
+          <Text color={isInputMode ? 'yellowBright' : 'gray'} dimColor={!isInputMode}>
+            {isInputMode ? '●' : '○'} input [i]
+          </Text>
+        </>
+      )}
+      {showScroll && (
+        <>
+          <Text dimColor> • </Text>
+          <Text dimColor>{effectiveOffset > 0 ? `${scrollPercent}%` : 'scroll [↑↓]'}</Text>
+        </>
+      )}
+    </Box>
+  )
+}
+
 export function DetailPane({
   event,
   visible,
@@ -228,11 +287,7 @@ export function DetailPane({
   const summary = getEventSummary(event)
   const hasMore = totalLines > maxContentLines
   const scrollPercent = maxOffset > 0 ? Math.round((effectiveOffset / maxOffset) * 100) : 0
-  const inputLinesReserved = isInputMode
-    ? useSchemaForm && schemaDescriptor
-      ? estimateFormHeight(schemaDescriptor)
-      : 3
-    : 0
+  const inputLinesReserved = isInputMode ? inputFormHeight(useSchemaForm, schemaDescriptor) : 0
   const errorLines = Math.min(inputErrors.length, 3)
   const displayLines = isInputMode
     ? wrappedLines.slice(0, Math.max(0, maxContentLines - inputLinesReserved - errorLines))
@@ -244,35 +299,15 @@ export function DetailPane({
 
   return (
     <Box flexDirection="column" height={height}>
-      <Box>
-        <Text bold color="gray">
-          Event
-        </Text>
-        <Text dimColor> • </Text>
-        <Text color={summary.color}>{summary.label}</Text>
-        <Text dimColor> • </Text>
-        <Text color={mode === 'clean' ? 'cyanBright' : 'gray'} dimColor={mode !== 'clean'}>
-          {mode === 'clean' ? '●' : '○'} clean [c]
-        </Text>
-        <Text dimColor> </Text>
-        <Text color={mode === 'raw' ? 'cyanBright' : 'gray'} dimColor={mode !== 'raw'}>
-          {mode === 'raw' ? '●' : '○'} raw [r]
-        </Text>
-        {isPendingYield && (
-          <>
-            <Text dimColor> </Text>
-            <Text color={isInputMode ? 'yellowBright' : 'gray'} dimColor={!isInputMode}>
-              {isInputMode ? '●' : '○'} input [i]
-            </Text>
-          </>
-        )}
-        {hasMore && !isInputMode && (
-          <>
-            <Text dimColor> • </Text>
-            <Text dimColor>{effectiveOffset > 0 ? `${scrollPercent}%` : 'scroll [↑↓]'}</Text>
-          </>
-        )}
-      </Box>
+      {renderDetailHeader({
+        summary,
+        mode,
+        isPendingYield,
+        isInputMode,
+        showScroll: hasMore && !isInputMode,
+        effectiveOffset,
+        scrollPercent,
+      })}
       {displayRows.map(({ key, line }) => (
         <Box key={key}>
           {useHighlighting ? (

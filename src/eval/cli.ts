@@ -35,6 +35,93 @@ function caseEvidence(result: AnyEvalCaseResult) {
   }
 }
 
+type CliValues = { case?: string; repeat?: string; output?: string; help?: boolean }
+
+function assertKnownCommand(positionals: string[], command: string): void {
+  if (positionals.length !== 1 || (command !== 'list' && command !== 'run')) {
+    throw new Error('Expected list or run. Use --help for usage.')
+  }
+}
+
+function assertUniqueCaseNames(cases: readonly { name: string }[]): void {
+  if (!cases.length) throw new Error('The evaluation suite is empty')
+  const names = new Set<string>()
+  for (const item of cases) {
+    if (!item.name.trim() || names.has(item.name))
+      throw new Error(`Invalid or duplicate case name: ${item.name}`)
+    names.add(item.name)
+  }
+}
+
+function caseListDocument<S extends StateSchema>(
+  command: string,
+  values: CliValues,
+  cases: AnyEvalCase<S>[],
+) {
+  if (values.case !== undefined || values.repeat !== undefined || values.output !== undefined)
+    throw new Error('Run options cannot be used with list')
+  return {
+    command,
+    source: resolve(process.argv[1]),
+    cases: cases.map((item) => ({
+      name: item.name,
+      ...(item.description === undefined ? {} : { description: item.description }),
+      kind: 'runnable' in item ? 'text' : 'voice',
+    })),
+  }
+}
+
+function resolveRepeat<S extends StateSchema>(
+  values: CliValues,
+  options: MixedEvalOptions<S>,
+): number {
+  const repeat = values.repeat === undefined ? (options.repeat ?? 1) : Number(values.repeat)
+  if (!Number.isSafeInteger(repeat) || repeat < 1)
+    throw new Error('repeat must be a positive integer')
+  if (
+    options.concurrency !== undefined &&
+    (!Number.isSafeInteger(options.concurrency) || options.concurrency < 1)
+  ) {
+    throw new Error('concurrency must be a positive integer')
+  }
+  return repeat
+}
+
+async function prepareRunDirectory<S extends StateSchema>(
+  worker: boolean,
+  originalRunDirectory: string | undefined,
+  values: CliValues,
+  options: MixedEvalOptions<S>,
+): Promise<string> {
+  if (worker) {
+    if (!originalRunDirectory) throw new Error('Voice worker is missing the parent run directory')
+    return originalRunDirectory
+  }
+  const root = resolve(values.output ?? options.output ?? '.adk/evals')
+  await mkdir(root, { recursive: true })
+  const directory = await mkdtemp(join(root, 'run-'))
+  process.env[RUN_DIRECTORY] = directory
+  return directory
+}
+
+function caseResultEntry(item: AnyEvalCaseResult, evidence: string) {
+  return omitUndefinedProperties({
+    name: item.name,
+    kind: 'events' in item ? 'text' : 'voice',
+    status: item.status,
+    metrics: item.metrics,
+    durationMs: item.durationMs,
+    usage: item.usage,
+    liveUsage: 'events' in item ? undefined : item.run.liveUsage,
+    judgeCost: caseJudgeCost(item),
+    attempts: item.attempts,
+    repeatIndex: item.repeatIndex,
+    repeatTotal: item.repeatTotal,
+    error: item.error,
+    evidence,
+  })
+}
+
 /** Runs a product-owned evaluation suite from process arguments and returns its exit code. */
 export async function evalCli<S extends StateSchema>(
   app: AdkApp<S>,
@@ -64,51 +151,17 @@ export async function evalCli<S extends StateSchema>(
       return 0
     }
     command = positionals[0] ?? ''
-    if (positionals.length !== 1 || (command !== 'list' && command !== 'run')) {
-      throw new Error('Expected list or run. Use --help for usage.')
-    }
-    if (!cases.length) throw new Error('The evaluation suite is empty')
-    const names = new Set<string>()
-    for (const item of cases) {
-      if (!item.name.trim() || names.has(item.name))
-        throw new Error(`Invalid or duplicate case name: ${item.name}`)
-      names.add(item.name)
-    }
+    assertKnownCommand(positionals, command)
+    assertUniqueCaseNames(cases)
     if (command === 'list') {
-      if (values.case !== undefined || values.repeat !== undefined || values.output !== undefined)
-        throw new Error('Run options cannot be used with list')
-      emit({
-        command,
-        source: resolve(process.argv[1]),
-        cases: cases.map((item) => ({
-          name: item.name,
-          ...(item.description === undefined ? {} : { description: item.description }),
-          kind: 'runnable' in item ? 'text' : 'voice',
-        })),
-      })
+      emit(caseListDocument(command, values, cases))
       return 0
     }
     const selected =
       values.case === undefined ? cases : cases.filter((item) => item.name === values.case)
     if (!selected.length) throw new Error(`Unknown case: ${values.case}`)
-    const repeat = values.repeat === undefined ? (options.repeat ?? 1) : Number(values.repeat)
-    if (!Number.isSafeInteger(repeat) || repeat < 1)
-      throw new Error('repeat must be a positive integer')
-    if (
-      options.concurrency !== undefined &&
-      (!Number.isSafeInteger(options.concurrency) || options.concurrency < 1)
-    ) {
-      throw new Error('concurrency must be a positive integer')
-    }
-    if (worker) {
-      directory = originalRunDirectory
-      if (!directory) throw new Error('Voice worker is missing the parent run directory')
-    } else {
-      const root = resolve(values.output ?? options.output ?? '.adk/evals')
-      await mkdir(root, { recursive: true })
-      directory = await mkdtemp(join(root, 'run-'))
-      process.env[RUN_DIRECTORY] = directory
-    }
+    const repeat = resolveRepeat(values, options)
+    directory = await prepareRunDirectory(worker, originalRunDirectory, values, options)
     const result = await app.evaluate(selected, {
       ...options,
       repeat,
@@ -122,23 +175,7 @@ export async function evalCli<S extends StateSchema>(
     for (const [index, item] of result.results.entries()) {
       const evidence = join(directory, `case-${index + 1}.json`)
       await writeFile(evidence, stringifyEvidence(caseEvidence(item)))
-      results.push(
-        omitUndefinedProperties({
-          name: item.name,
-          kind: 'events' in item ? 'text' : 'voice',
-          status: item.status,
-          metrics: item.metrics,
-          durationMs: item.durationMs,
-          usage: item.usage,
-          liveUsage: 'events' in item ? undefined : item.run.liveUsage,
-          judgeCost: caseJudgeCost(item),
-          attempts: item.attempts,
-          repeatIndex: item.repeatIndex,
-          repeatTotal: item.repeatTotal,
-          error: item.error,
-          evidence,
-        }),
-      )
+      results.push(caseResultEntry(item, evidence))
     }
     const report = join(directory, 'report.md')
     await writeFile(report, generateReport(result))

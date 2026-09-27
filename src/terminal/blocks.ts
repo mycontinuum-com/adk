@@ -179,91 +179,66 @@ function collapseBlockDeltas(block: InvocationBlock): void {
   }
 }
 
-function buildContextBlocksAndPreContext(
-  block: InvocationBlock,
+function openContextBlock(ctx: ModelStartEvent): ContextBlock {
+  const messageItems: ContextMessageItem[] = []
+  const toolItems: ContextToolItem[] = ctx.tools.map((tool, i) => ({
+    id: `${ctx.id}-tool-${i}`,
+    type: 'context_tool' as const,
+    parentContextId: ctx.id,
+    tool,
+    index: i,
+  }))
+  const schemaItem: ContextSchemaItem | undefined = ctx.outputSchema
+    ? {
+        id: `${ctx.id}-schema`,
+        type: 'context_schema' as const,
+        parentContextId: ctx.id,
+        schemaName: ctx.outputSchema,
+      }
+    : undefined
+
+  return {
+    contextEvent: ctx,
+    messageItems,
+    toolItems,
+    schemaItem,
+    producedEvents: [],
+    postEvents: [],
+  }
+}
+
+function recordModelResponse(
+  contextBlock: ContextBlock,
+  endEvent: ModelEndEvent,
   pricing: PricingCatalog | undefined,
 ): void {
-  const events = block.events
-  const contextBlocks: ContextBlock[] = []
-  const preContextEvents: DisplayEvent[] = []
-  const postChildEvents: DisplayEvent[] = []
-  let currentContextBlock: ContextBlock | null = null
-
-  for (const event of events) {
-    if (event.type === 'model_start') {
-      if (currentContextBlock) {
-        contextBlocks.push(currentContextBlock)
-      }
-      const ctx = event as ModelStartEvent
-      const messageItems: ContextMessageItem[] = []
-      const toolItems: ContextToolItem[] = ctx.tools.map((tool, i) => ({
-        id: `${ctx.id}-tool-${i}`,
-        type: 'context_tool' as const,
-        parentContextId: ctx.id,
-        tool,
-        index: i,
-      }))
-      const schemaItem: ContextSchemaItem | undefined = ctx.outputSchema
-        ? {
-            id: `${ctx.id}-schema`,
-            type: 'context_schema' as const,
-            parentContextId: ctx.id,
-            schemaName: ctx.outputSchema,
-          }
-        : undefined
-
-      currentContextBlock = {
-        contextEvent: ctx,
-        messageItems,
-        toolItems,
-        schemaItem,
-        producedEvents: [],
-        postEvents: [],
-      }
-    } else if (event.type === 'model_end') {
-      if (currentContextBlock) {
-        const endEvent = event as ModelEndEvent
-        currentContextBlock.responseEvent = endEvent
-        if (endEvent.error || endEvent.finishReason === 'error') {
-          currentContextBlock.hasError = true
-        }
-        if (endEvent.usage?.modelName) {
-          const estimate = calculateCost(endEvent.usage, pricing)
-          if (estimate !== null) {
-            currentContextBlock.cost = estimate.totalCost
-          }
-        }
-      }
-    } else if (INVOCATION_EVENT_TYPES.has(event.type)) {
-      continue
-    } else if (currentContextBlock) {
-      if (event.type === 'invocation_yield' || event.type === 'invocation_resume') {
-        currentContextBlock.postEvents.push(event)
-      } else if (event.type === 'user') {
-        // User messages don't belong inside a model context block — they're
-        // new input, not model output (e.g. realtime agents where user
-        // messages arrive between model calls).
-        currentContextBlock.postEvents.push(event)
-      } else {
-        currentContextBlock.producedEvents.push(event)
-      }
-    } else {
-      preContextEvents.push(event)
+  contextBlock.responseEvent = endEvent
+  if (endEvent.error || endEvent.finishReason === 'error') {
+    contextBlock.hasError = true
+  }
+  if (endEvent.usage?.modelName) {
+    const estimate = calculateCost(endEvent.usage, pricing)
+    if (estimate !== null) {
+      contextBlock.cost = estimate.totalCost
     }
   }
+}
 
-  if (currentContextBlock) {
-    contextBlocks.push(currentContextBlock)
+function addToContextBlock(contextBlock: ContextBlock, event: DisplayEvent): void {
+  if (event.type === 'invocation_yield' || event.type === 'invocation_resume') {
+    contextBlock.postEvents.push(event)
+  } else if (event.type === 'user') {
+    // User messages don't belong inside a model context block — they're
+    // new input, not model output (e.g. realtime agents where user
+    // messages arrive between model calls).
+    contextBlock.postEvents.push(event)
+  } else {
+    contextBlock.producedEvents.push(event)
   }
+}
 
-  block.contextBlocks = contextBlocks
-  block.preContextEvents = preContextEvents
-  block.postChildEvents = postChildEvents
-
-  for (const child of block.children) {
-    buildContextBlocksAndPreContext(child, pricing)
-  }
-
+/** Rolls context-block and child errors and costs up onto the invocation block. */
+function rollUpErrorsAndCost(block: InvocationBlock, contextBlocks: ContextBlock[]): void {
   const hasContextError = contextBlocks.some((ctx) => ctx.hasError)
   const hasChildError = block.children.some((child) => child.hasError)
   if (hasContextError || hasChildError) {
@@ -284,6 +259,50 @@ function buildContextBlocksAndPreContext(
   if (totalCost > 0) {
     block.cost = totalCost
   }
+}
+
+function buildContextBlocksAndPreContext(
+  block: InvocationBlock,
+  pricing: PricingCatalog | undefined,
+): void {
+  const events = block.events
+  const contextBlocks: ContextBlock[] = []
+  const preContextEvents: DisplayEvent[] = []
+  const postChildEvents: DisplayEvent[] = []
+  let currentContextBlock: ContextBlock | null = null
+
+  for (const event of events) {
+    if (event.type === 'model_start') {
+      if (currentContextBlock) {
+        contextBlocks.push(currentContextBlock)
+      }
+      currentContextBlock = openContextBlock(event as ModelStartEvent)
+    } else if (event.type === 'model_end') {
+      if (currentContextBlock) {
+        recordModelResponse(currentContextBlock, event as ModelEndEvent, pricing)
+      }
+    } else if (INVOCATION_EVENT_TYPES.has(event.type)) {
+      continue
+    } else if (currentContextBlock) {
+      addToContextBlock(currentContextBlock, event)
+    } else {
+      preContextEvents.push(event)
+    }
+  }
+
+  if (currentContextBlock) {
+    contextBlocks.push(currentContextBlock)
+  }
+
+  block.contextBlocks = contextBlocks
+  block.preContextEvents = preContextEvents
+  block.postChildEvents = postChildEvents
+
+  for (const child of block.children) {
+    buildContextBlocksAndPreContext(child, pricing)
+  }
+
+  rollUpErrorsAndCost(block, contextBlocks)
 }
 
 function linkDeltasToFinalEvents(block: InvocationBlock): void {
@@ -324,150 +343,148 @@ function linkDeltasToFinalEvents(block: InvocationBlock): void {
   }
 }
 
-/**
- * Group CLI events into the invocation tree the trace view renders.
- *
- * @param pricing - Catalog used to show each model call's estimated cost; omitted costs when
- *   absent.
- */
-export function buildInvocationBlocks(
-  events: readonly CLIEvent[],
-  pricing?: PricingCatalog,
-): InvocationBlock[] {
-  const blockMap = new Map<string, InvocationBlock>()
-  const seenEventIds = new Set<string>()
-  const roots: InvocationBlock[] = []
-  const preInvocationEvents: CLIEvent[] = []
-  const pendingTransferLinks: Array<{
-    block: InvocationBlock
-    sourceInvocationId: string
-  }> = []
-  let currentBlockId: string | null = null
+interface PendingTransferLink {
+  block: InvocationBlock
+  sourceInvocationId: string
+}
 
-  for (const event of events) {
-    const eventId = event.id
-    if (eventId && seenEventIds.has(eventId)) {
-      if (event.type === 'invocation_start') {
-        currentBlockId = event.invocationId
-      }
-      continue
-    }
-    if (eventId) {
-      seenEventIds.add(eventId)
-    }
+/** Mutable state threaded through one pass of `buildInvocationBlocks`. */
+interface BlockTreeBuilder {
+  blockMap: Map<string, InvocationBlock>
+  roots: InvocationBlock[]
+  preInvocationEvents: CLIEvent[]
+  pendingTransferLinks: PendingTransferLink[]
+  currentBlockId: string | null
+}
 
-    switch (event.type) {
-      case 'invocation_start': {
-        const block: InvocationBlock = {
-          invocationId: event.invocationId,
-          agentName: event.agentName,
-          kind: event.kind,
-          parentInvocationId: event.parentInvocationId,
-          startTime: event.createdAt,
-          state: 'running',
-          events: [event],
-          contextBlocks: [],
-          preContextEvents: [],
-          postChildEvents: [],
-          children: [],
-          handoffOrigin: event.handoffOrigin,
-          spawnedFromCallId:
-            event.handoffOrigin?.type === 'spawn' ? event.handoffOrigin.callId : undefined,
-        }
-        blockMap.set(event.invocationId, block)
-        currentBlockId = event.invocationId
-
-        if (event.parentInvocationId) {
-          const parent = blockMap.get(event.parentInvocationId)
-          if (parent) {
-            parent.events.push(event)
-            if (!parent.childMap) parent.childMap = new Map()
-            parent.childMap.set(event.invocationId, block)
-
-            if (parent.kind === 'loop') {
-              block.loopIteration = parent.children.length + 1
-            }
-            parent.children.push(block)
-          }
-        } else if (event.handoffOrigin?.type === 'transfer') {
-          pendingTransferLinks.push({
-            block,
-            sourceInvocationId: event.handoffOrigin.invocationId,
-          })
-        } else {
-          roots.push(block)
-        }
-        break
-      }
-      case 'invocation_end': {
-        const block = blockMap.get(event.invocationId)
-        if (block) {
-          block.endTime = event.createdAt
-          block.state = endReasonToState[event.reason] ?? 'completed'
-          if (block.startTime) {
-            block.duration = event.createdAt - block.startTime
-          }
-          if (event.handoffTarget) {
-            block.handoffTarget = event.handoffTarget
-          }
-          if (event.reason === 'error') {
-            block.hasError = true
-          }
-          block.events.push(event)
-        }
-        if (currentBlockId === event.invocationId) {
-          currentBlockId = event.parentInvocationId ?? null
-        }
-        break
-      }
-      case 'invocation_yield': {
-        const e = event as InvocationYieldEvent
-        const block = blockMap.get(e.invocationId)
-        if (block) {
-          block.state = 'yielded'
-          block.yieldedToolIds = e.yieldedToolIds
-          block.yieldIndex = e.yieldIndex
-          block.events.push(event)
-        }
-        break
-      }
-      case 'invocation_resume': {
-        const e = event as InvocationResumeEvent
-        const block = blockMap.get(e.invocationId)
-        if (block) {
-          block.state = 'running'
-          block.events.push(event)
-          currentBlockId = e.invocationId
-        }
-        break
-      }
-      default: {
-        const invocationId = (event as { invocationId?: string }).invocationId
-        if (invocationId) {
-          const block = blockMap.get(invocationId)
-          if (block) {
-            block.events.push(event as DisplayEvent)
-          } else if (currentBlockId) {
-            const currentBlock = blockMap.get(currentBlockId)
-            if (currentBlock) {
-              currentBlock.events.push(event as DisplayEvent)
-            }
-          } else {
-            preInvocationEvents.push(event)
-          }
-        } else if (currentBlockId) {
-          const block = blockMap.get(currentBlockId)
-          if (block) {
-            block.events.push(event as DisplayEvent)
-          }
-        } else {
-          preInvocationEvents.push(event)
-        }
-        break
-      }
-    }
+function startInvocationBlock(builder: BlockTreeBuilder, event: InvocationStartEvent): void {
+  const block: InvocationBlock = {
+    invocationId: event.invocationId,
+    agentName: event.agentName,
+    kind: event.kind,
+    parentInvocationId: event.parentInvocationId,
+    startTime: event.createdAt,
+    state: 'running',
+    events: [event],
+    contextBlocks: [],
+    preContextEvents: [],
+    postChildEvents: [],
+    children: [],
+    handoffOrigin: event.handoffOrigin,
+    spawnedFromCallId:
+      event.handoffOrigin?.type === 'spawn' ? event.handoffOrigin.callId : undefined,
   }
+  builder.blockMap.set(event.invocationId, block)
+  builder.currentBlockId = event.invocationId
 
+  if (event.parentInvocationId) {
+    const parent = builder.blockMap.get(event.parentInvocationId)
+    if (parent) {
+      parent.events.push(event)
+      if (!parent.childMap) parent.childMap = new Map()
+      parent.childMap.set(event.invocationId, block)
+
+      if (parent.kind === 'loop') {
+        block.loopIteration = parent.children.length + 1
+      }
+      parent.children.push(block)
+    }
+  } else if (event.handoffOrigin?.type === 'transfer') {
+    builder.pendingTransferLinks.push({
+      block,
+      sourceInvocationId: event.handoffOrigin.invocationId,
+    })
+  } else {
+    builder.roots.push(block)
+  }
+}
+
+function endInvocationBlock(
+  builder: BlockTreeBuilder,
+  event: Extract<CLIEvent, { type: 'invocation_end' }>,
+): void {
+  const block = builder.blockMap.get(event.invocationId)
+  if (block) {
+    block.endTime = event.createdAt
+    block.state = endReasonToState[event.reason] ?? 'completed'
+    if (block.startTime) {
+      block.duration = event.createdAt - block.startTime
+    }
+    if (event.handoffTarget) {
+      block.handoffTarget = event.handoffTarget
+    }
+    if (event.reason === 'error') {
+      block.hasError = true
+    }
+    block.events.push(event)
+  }
+  if (builder.currentBlockId === event.invocationId) {
+    builder.currentBlockId = event.parentInvocationId ?? null
+  }
+}
+
+/** Files an event under its own invocation, else the current one, else before any invocation. */
+function addEventToBlock(builder: BlockTreeBuilder, event: CLIEvent): void {
+  const { blockMap, currentBlockId } = builder
+  const invocationId = (event as { invocationId?: string }).invocationId
+  if (invocationId) {
+    const block = blockMap.get(invocationId)
+    if (block) {
+      block.events.push(event as DisplayEvent)
+    } else if (currentBlockId) {
+      const currentBlock = blockMap.get(currentBlockId)
+      if (currentBlock) {
+        currentBlock.events.push(event as DisplayEvent)
+      }
+    } else {
+      builder.preInvocationEvents.push(event)
+    }
+  } else if (currentBlockId) {
+    const block = blockMap.get(currentBlockId)
+    if (block) {
+      block.events.push(event as DisplayEvent)
+    }
+  } else {
+    builder.preInvocationEvents.push(event)
+  }
+}
+
+function addInvocationEvent(builder: BlockTreeBuilder, event: CLIEvent): void {
+  switch (event.type) {
+    case 'invocation_start':
+      startInvocationBlock(builder, event)
+      break
+    case 'invocation_end':
+      endInvocationBlock(builder, event)
+      break
+    case 'invocation_yield': {
+      const e = event as InvocationYieldEvent
+      const block = builder.blockMap.get(e.invocationId)
+      if (block) {
+        block.state = 'yielded'
+        block.yieldedToolIds = e.yieldedToolIds
+        block.yieldIndex = e.yieldIndex
+        block.events.push(event)
+      }
+      break
+    }
+    case 'invocation_resume': {
+      const e = event as InvocationResumeEvent
+      const block = builder.blockMap.get(e.invocationId)
+      if (block) {
+        block.state = 'running'
+        block.events.push(event)
+        builder.currentBlockId = e.invocationId
+      }
+      break
+    }
+    default:
+      addEventToBlock(builder, event)
+      break
+  }
+}
+
+function applyLoopBounds(blockMap: Map<string, InvocationBlock>): void {
   for (const block of blockMap.values()) {
     if (block.kind === 'loop' && block.children.length > 0) {
       block.loopMax = block.children.length
@@ -476,8 +493,11 @@ export function buildInvocationBlocks(
       }
     }
   }
+}
 
-  for (const { block, sourceInvocationId } of pendingTransferLinks) {
+function linkTransfers(builder: BlockTreeBuilder): void {
+  const { blockMap, roots } = builder
+  for (const { block, sourceInvocationId } of builder.pendingTransferLinks) {
     const sourceBlock = blockMap.get(sourceInvocationId)
     if (sourceBlock) {
       block.transferPredecessor = sourceBlock
@@ -492,7 +512,10 @@ export function buildInvocationBlocks(
       roots.push(block)
     }
   }
+}
 
+function attachPreInvocationEvents(builder: BlockTreeBuilder): void {
+  const { preInvocationEvents, roots } = builder
   if (preInvocationEvents.length > 0) {
     const collapsedPreEvents = collapseDeltaEvents(preInvocationEvents, 'pre')
     if (roots.length > 0) {
@@ -512,7 +535,47 @@ export function buildInvocationBlocks(
       roots.unshift(sessionBlock)
     }
   }
+}
 
+/**
+ * Group CLI events into the invocation tree the trace view renders.
+ *
+ * @param pricing - Catalog used to show each model call's estimated cost; omitted costs when
+ *   absent.
+ */
+export function buildInvocationBlocks(
+  events: readonly CLIEvent[],
+  pricing?: PricingCatalog,
+): InvocationBlock[] {
+  const seenEventIds = new Set<string>()
+  const builder: BlockTreeBuilder = {
+    blockMap: new Map<string, InvocationBlock>(),
+    roots: [],
+    preInvocationEvents: [],
+    pendingTransferLinks: [],
+    currentBlockId: null,
+  }
+
+  for (const event of events) {
+    const eventId = event.id
+    if (eventId && seenEventIds.has(eventId)) {
+      if (event.type === 'invocation_start') {
+        builder.currentBlockId = event.invocationId
+      }
+      continue
+    }
+    if (eventId) {
+      seenEventIds.add(eventId)
+    }
+
+    addInvocationEvent(builder, event)
+  }
+
+  applyLoopBounds(builder.blockMap)
+  linkTransfers(builder)
+  attachPreInvocationEvents(builder)
+
+  const roots = builder.roots
   for (const root of roots) {
     collapseBlockDeltas(root)
     buildContextBlocksAndPreContext(root, pricing)

@@ -60,6 +60,28 @@ function assertCollectionName(collection: string): void {
 const OVERFETCH_FACTOR = 10
 const OVERFETCH_MIN = 100
 
+/** Keeps each id's best-scoring row that matches the variant, filter and score floor. */
+function bestMatchPerId(
+  metaRows: Array<{ _rowid: number; id: string; variant: string; metadata: string }>,
+  distances: Map<number, number>,
+  variant: string | undefined,
+  options: Parameters<VectorIndex['search']>[2],
+): Map<string, VectorMatch> {
+  const bestPerId = new Map<string, VectorMatch>()
+  for (const row of metaRows) {
+    if (variant && row.variant !== variant) continue
+    const metadata = JSON.parse(row.metadata) as Record<string, unknown>
+    if (!matchesFilter(options?.filter, row.id, metadata)) continue
+    const score = 1 - distances.get(row._rowid)!
+    if (options?.minScore != null && score < options.minScore) continue
+    const previous = bestPerId.get(row.id)
+    if (!previous || score > previous.score) {
+      bestPerId.set(row.id, { id: row.id, score, metadata })
+    }
+  }
+  return bestPerId
+}
+
 /**
  * SQLite VectorIndex over the optional `better-sqlite3` + `sqlite-vec` peers — zero-infrastructure
  * durable vector memory for local development, CLIs, and single-process deployments. Vectors live
@@ -160,18 +182,7 @@ export async function createSqliteVecIndex(config: SqliteVecConfig): Promise<Vec
           metadata: string
         }>
 
-        const bestPerId = new Map<string, VectorMatch>()
-        for (const row of metaRows) {
-          if (variant && row.variant !== variant) continue
-          const metadata = JSON.parse(row.metadata) as Record<string, unknown>
-          if (!matchesFilter(options?.filter, row.id, metadata)) continue
-          const score = 1 - distances.get(row._rowid)!
-          if (options?.minScore != null && score < options.minScore) continue
-          const previous = bestPerId.get(row.id)
-          if (!previous || score > previous.score) {
-            bestPerId.set(row.id, { id: row.id, score, metadata })
-          }
-        }
+        const bestPerId = bestMatchPerId(metaRows, distances, variant, options)
 
         const exhausted = vecRows.length < limit
         const deepestScore = 1 - vecRows[vecRows.length - 1].distance

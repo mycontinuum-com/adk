@@ -16,6 +16,7 @@ import type {
   ModelUsage,
   ModelEndEvent,
   UserEvent,
+  MediaPart,
 } from '../types/events'
 import type {
   ModelStepResult,
@@ -192,12 +193,7 @@ export class OpenAIAdapter implements ModelAdapter {
         store: false,
         ...promptCacheOptions,
         ...(serializedToolChoice && { tool_choice: serializedToolChoice }),
-        // Active OpenAI reasoning rejects temperature. Explicit effort none
-        // allows sampling on models that support disabling reasoning.
-        // Do not infer reasoning settings from a sampling parameter.
-        ...(config.temperature != null &&
-          (!reasoning || reasoning.effort === 'none') && { temperature: config.temperature }),
-        ...(config.maxTokens != null && { max_output_tokens: config.maxTokens }),
+        ...samplingOptions(config, reasoning),
         ...(reasoning && {
           reasoning,
           include: ['reasoning.encrypted_content'],
@@ -215,6 +211,30 @@ export class OpenAIAdapter implements ModelAdapter {
       const accumulator = createStreamAccumulator()
       let terminalResponse: ProviderResponse | undefined
 
+      type OpenAIStreamEvent = typeof stream extends AsyncIterable<infer E> ? E : never
+      const deltaEventFor = (event: OpenAIStreamEvent): RawDeltaEvent | null => {
+        if (event.type === 'response.reasoning_summary_text.delta') {
+          return {
+            id: createEventId(),
+            type: 'thought_delta',
+            createdAt: Date.now(),
+            invocationId: ctx.invocationId,
+            agentName: ctx.agentName,
+            delta: event.delta,
+          }
+        } else if (event.type === 'response.output_text.delta') {
+          return {
+            id: createEventId(),
+            type: 'assistant_delta',
+            createdAt: Date.now(),
+            invocationId: ctx.invocationId,
+            agentName: ctx.agentName,
+            delta: event.delta,
+          }
+        }
+        return null
+      }
+
       try {
         for await (const event of stream) {
           if (signal?.aborted) {
@@ -228,27 +248,7 @@ export class OpenAIAdapter implements ModelAdapter {
           )
             terminalResponse = event.response
 
-          let rawEvent: RawDeltaEvent | null = null
-
-          if (event.type === 'response.reasoning_summary_text.delta') {
-            rawEvent = {
-              id: createEventId(),
-              type: 'thought_delta',
-              createdAt: Date.now(),
-              invocationId: ctx.invocationId,
-              agentName: ctx.agentName,
-              delta: event.delta,
-            }
-          } else if (event.type === 'response.output_text.delta') {
-            rawEvent = {
-              id: createEventId(),
-              type: 'assistant_delta',
-              createdAt: Date.now(),
-              invocationId: ctx.invocationId,
-              agentName: ctx.agentName,
-              delta: event.delta,
-            }
-          }
+          const rawEvent = deltaEventFor(event)
 
           if (rawEvent) {
             emitted = true
@@ -279,6 +279,17 @@ export class OpenAIAdapter implements ModelAdapter {
       },
       signal,
     })
+  }
+}
+
+// Active OpenAI reasoning rejects temperature. Explicit effort none
+// allows sampling on models that support disabling reasoning.
+// Do not infer reasoning settings from a sampling parameter.
+function samplingOptions(config: ProviderModelConfig, reasoning: { effort?: string } | undefined) {
+  return {
+    ...(config.temperature != null &&
+      (!reasoning || reasoning.effort === 'none') && { temperature: config.temperature }),
+    ...(config.maxTokens != null && { max_output_tokens: config.maxTokens }),
   }
 }
 
@@ -376,6 +387,105 @@ function toolOutput(callId: string, output: unknown): ResponseInputItem {
   } as ResponseInputItem
 }
 
+function serializeSystemItem(
+  event: Extract<Event, { type: 'system' }>,
+  promptCache: boolean | undefined,
+): ResponseInputItem {
+  const marked = Boolean(promptCache && isCacheableEvent(event))
+  return {
+    role: 'system',
+    content: marked
+      ? [
+          {
+            type: 'input_text',
+            text: event.text,
+            prompt_cache_breakpoint: { mode: 'explicit' },
+          },
+        ]
+      : event.text,
+  } as ResponseInputItem
+}
+
+/**
+ * Serializes the user event at `index`. A cacheable user message absorbs the following uncached
+ * user message; `consumed` says how many events were used.
+ */
+function serializeUserItem(
+  events: RenderContext['events'],
+  index: number,
+  event: UserEvent,
+  promptCache: boolean | undefined,
+): { item: ResponseInputItem; consumed: number } {
+  const marked = Boolean(promptCache && isCacheableEvent(event))
+  if (!marked) {
+    return {
+      item: {
+        role: 'user',
+        content: serializeUserEvent(event),
+      } as ResponseInputItem,
+      consumed: 1,
+    }
+  }
+
+  const content = asInputContentParts(serializeUserEvent(event, true))
+  const nextEvent = events[index + 1]
+  let consumed = 1
+  if (nextEvent?.type === 'user' && !isCacheableEvent(nextEvent)) {
+    content.push(...asInputContentParts(serializeUserEvent(nextEvent)))
+    consumed = 2
+  }
+  return { item: { role: 'user', content } as ResponseInputItem, consumed }
+}
+
+type ToolResultMediaPart = {
+  type: 'input_image' | 'input_file'
+  image_url?: string
+  detail?: 'auto'
+  file_data?: string
+  filename?: string
+}
+
+function toolResultMediaParts(media: MediaPart[]): ToolResultMediaPart[] {
+  const mediaParts: ToolResultMediaPart[] = []
+  for (const p of media) {
+    if (p.type === 'image') {
+      mediaParts.push({
+        type: 'input_image',
+        image_url:
+          p.source.type === 'url'
+            ? p.source.url
+            : `data:${p.source.mimeType};base64,${p.source.data}`,
+        detail: 'auto',
+      })
+    } else if (p.type === 'document') {
+      mediaParts.push({
+        type: 'input_file',
+        file_data:
+          p.source.type === 'url'
+            ? p.source.url
+            : `data:${p.source.mimeType};base64,${p.source.data}`,
+        filename: 'document.pdf',
+      })
+    }
+  }
+  return mediaParts
+}
+
+function serializeToolResultItem(
+  event: Extract<Event, { type: 'tool_result' }>,
+): ResponseInputItem {
+  const providerCtx = getOpenAIContext(event) as ResponseFunctionToolCall | undefined
+  const callId = providerCtx?.call_id ?? normalizeCallId(event.callId)
+  const textOutput = event.error ?? JSON.stringify(event.result)
+
+  if (event.media && event.media.length > 0) {
+    const mediaParts = toolResultMediaParts(event.media)
+    return toolOutput(callId, [{ type: 'input_text', text: textOutput }, ...mediaParts])
+  }
+
+  return toolOutput(callId, textOutput)
+}
+
 export function serializeContext(
   ctx: RenderContext,
   options?: { promptCache?: boolean },
@@ -388,39 +498,13 @@ export function serializeContext(
   for (let index = 0; index < ctx.events.length; index++) {
     const event = ctx.events[index]
     switch (event.type) {
-      case 'system': {
-        const marked = Boolean(options?.promptCache && isCacheableEvent(event))
-        items.push({
-          role: 'system',
-          content: marked
-            ? [
-                {
-                  type: 'input_text',
-                  text: event.text,
-                  prompt_cache_breakpoint: { mode: 'explicit' },
-                },
-              ]
-            : event.text,
-        } as ResponseInputItem)
+      case 'system':
+        items.push(serializeSystemItem(event, options?.promptCache))
         break
-      }
       case 'user': {
-        const marked = Boolean(options?.promptCache && isCacheableEvent(event))
-        if (!marked) {
-          items.push({
-            role: 'user',
-            content: serializeUserEvent(event),
-          } as ResponseInputItem)
-          break
-        }
-
-        const content = asInputContentParts(serializeUserEvent(event, true))
-        const nextEvent = ctx.events[index + 1]
-        if (nextEvent?.type === 'user' && !isCacheableEvent(nextEvent)) {
-          content.push(...asInputContentParts(serializeUserEvent(nextEvent)))
-          index++
-        }
-        items.push({ role: 'user', content } as ResponseInputItem)
+        const { item, consumed } = serializeUserItem(ctx.events, index, event, options?.promptCache)
+        index += consumed - 1
+        items.push(item)
         break
       }
       case 'assistant':
@@ -454,49 +538,9 @@ export function serializeContext(
         } as ResponseInputItem)
         break
       }
-      case 'tool_result': {
-        const providerCtx = getOpenAIContext(event) as ResponseFunctionToolCall | undefined
-        const callId = providerCtx?.call_id ?? normalizeCallId(event.callId)
-        const textOutput = event.error ?? JSON.stringify(event.result)
-
-        if (event.media && event.media.length > 0) {
-          const mediaParts: Array<{
-            type: 'input_image' | 'input_file'
-            image_url?: string
-            detail?: 'auto'
-            file_data?: string
-            filename?: string
-          }> = []
-
-          for (const p of event.media) {
-            if (p.type === 'image') {
-              mediaParts.push({
-                type: 'input_image',
-                image_url:
-                  p.source.type === 'url'
-                    ? p.source.url
-                    : `data:${p.source.mimeType};base64,${p.source.data}`,
-                detail: 'auto',
-              })
-            } else if (p.type === 'document') {
-              mediaParts.push({
-                type: 'input_file',
-                file_data:
-                  p.source.type === 'url'
-                    ? p.source.url
-                    : `data:${p.source.mimeType};base64,${p.source.data}`,
-                filename: 'document.pdf',
-              })
-            }
-          }
-
-          items.push(toolOutput(callId, [{ type: 'input_text', text: textOutput }, ...mediaParts]))
-          break
-        }
-
-        items.push(toolOutput(callId, textOutput))
+      case 'tool_result':
+        items.push(serializeToolResultItem(event))
         break
-      }
       default:
         break
     }

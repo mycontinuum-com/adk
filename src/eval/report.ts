@@ -308,6 +308,20 @@ function groupRepeatedCases(
   return { type: 'repeated', groups: sorted }
 }
 
+function repeatedFailureLine(r: RepeatedGroup['results'][number]): string {
+  const label = r.repeatIndex != null ? `run ${r.repeatIndex}` : r.name
+  const details: string[] = []
+  for (const [name, m] of Object.entries(r.metrics)) {
+    if (!m.passed && m.evidence?.length) {
+      details.push(`${name}: ${m.evidence.join(', ')}`)
+    }
+  }
+  if (r.error) details.push(`error: ${r.error.message}`)
+  if ('terminationReason' in r && r.terminationReason)
+    details.push(`terminated: ${r.terminationReason}`)
+  return `- ${label} (${r.status}): ${details.join('; ') || 'no details'}`
+}
+
 function formatRepeatedCases(groups: RepeatedGroup[], lines: string[]): void {
   for (const group of groups) {
     const { baseName, results } = group
@@ -341,17 +355,7 @@ function formatRepeatedCases(groups: RepeatedGroup[], lines: string[]): void {
       lines.push('')
       lines.push('**Failures:**')
       for (const r of failures) {
-        const label = r.repeatIndex != null ? `run ${r.repeatIndex}` : r.name
-        const details: string[] = []
-        for (const [name, m] of Object.entries(r.metrics)) {
-          if (!m.passed && m.evidence?.length) {
-            details.push(`${name}: ${m.evidence.join(', ')}`)
-          }
-        }
-        if (r.error) details.push(`error: ${r.error.message}`)
-        if ('terminationReason' in r && r.terminationReason)
-          details.push(`terminated: ${r.terminationReason}`)
-        lines.push(`- ${label} (${r.status}): ${details.join('; ') || 'no details'}`)
+        lines.push(repeatedFailureLine(r))
       }
     } else if (failures.length > 5) {
       lines.push('')

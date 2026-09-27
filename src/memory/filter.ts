@@ -37,6 +37,33 @@ export function normalizeFilter(input: FilterInput | undefined): VectorFilter | 
   return conditions.length > 0 ? { must: conditions } : undefined
 }
 
+type RangeCondition = NonNullable<VectorCondition['range']>
+
+function matchesRange(range: RangeCondition, value: unknown): boolean {
+  const firstBound = range.gt ?? range.gte ?? range.lt ?? range.lte
+  if (typeof firstBound === 'string') return matchesStringRange(range, value)
+  return matchesNumericRange(range, value)
+}
+
+function matchesStringRange(range: RangeCondition, value: unknown): boolean {
+  const str = String(value ?? '')
+  if (range.gt != null && !(str > range.gt)) return false
+  if (range.gte != null && !(str >= range.gte)) return false
+  if (range.lt != null && !(str < range.lt)) return false
+  if (range.lte != null && !(str <= range.lte)) return false
+  return true
+}
+
+function matchesNumericRange(range: RangeCondition, value: unknown): boolean {
+  const num = Number(value)
+  if (isNaN(num)) return false
+  if (range.gt != null && !(num > Number(range.gt))) return false
+  if (range.gte != null && !(num >= Number(range.gte))) return false
+  if (range.lt != null && !(num < Number(range.lt))) return false
+  if (range.lte != null && !(num <= Number(range.lte))) return false
+  return true
+}
+
 function evaluateCondition(cond: VectorCondition, meta: Record<string, unknown>): boolean {
   const value = meta[cond.key]
   if (cond.match) return value === cond.match.value
@@ -45,24 +72,7 @@ function evaluateCondition(cond: VectorCondition, meta: Record<string, unknown>)
     const lower = value.toLowerCase()
     return [cond.text.contains].flat().some((t) => lower.includes(t.toLowerCase()))
   }
-  if (cond.range) {
-    const firstBound = cond.range.gt ?? cond.range.gte ?? cond.range.lt ?? cond.range.lte
-    if (typeof firstBound === 'string') {
-      const str = String(value ?? '')
-      if (cond.range.gt != null && !(str > cond.range.gt)) return false
-      if (cond.range.gte != null && !(str >= cond.range.gte)) return false
-      if (cond.range.lt != null && !(str < cond.range.lt)) return false
-      if (cond.range.lte != null && !(str <= cond.range.lte)) return false
-      return true
-    }
-    const num = Number(value)
-    if (isNaN(num)) return false
-    if (cond.range.gt != null && !(num > Number(cond.range.gt))) return false
-    if (cond.range.gte != null && !(num >= Number(cond.range.gte))) return false
-    if (cond.range.lt != null && !(num < Number(cond.range.lt))) return false
-    if (cond.range.lte != null && !(num <= Number(cond.range.lte))) return false
-    return true
-  }
+  if (cond.range) return matchesRange(cond.range, value)
   return true
 }
 

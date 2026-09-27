@@ -30,6 +30,7 @@ import type {
   ModelUsage,
   ModelEndEvent,
   UserEvent,
+  MediaPart,
 } from '../types/events'
 import type {
   ModelStepResult,
@@ -159,8 +160,7 @@ Either:
           tools: serializeTools(ctx.functionTools),
           toolConfig: serializeToolConfig(toolChoice, ctx.allowedTools),
           thinkingConfig,
-          ...(config.temperature != null && { temperature: config.temperature }),
-          ...(config.maxTokens != null && { maxOutputTokens: config.maxTokens }),
+          ...samplingOptions(config),
           ...(useNativeStructuredOutput && {
             responseMimeType: 'application/json',
             responseJsonSchema: zodToGeminiSchema(ctx.outputSchema!),
@@ -184,27 +184,7 @@ Either:
         for (const part of parts) {
           allParts.push(part)
 
-          let rawEvent: RawDeltaEvent | null = null
-
-          if (part.thought && part.text) {
-            rawEvent = {
-              id: createEventId(),
-              type: 'thought_delta',
-              createdAt: Date.now(),
-              invocationId: ctx.invocationId,
-              agentName: ctx.agentName,
-              delta: normalizeText(part.text) + '\n',
-            }
-          } else if (part.text && !part.thought) {
-            rawEvent = {
-              id: createEventId(),
-              type: 'assistant_delta',
-              createdAt: Date.now(),
-              invocationId: ctx.invocationId,
-              agentName: ctx.agentName,
-              delta: normalizeText(part.text),
-            }
-          }
+          const rawEvent = partDeltaEvent(part, ctx)
 
           if (rawEvent) {
             yield accumulator.push(rawEvent)
@@ -220,6 +200,81 @@ Either:
       signal,
     })
   }
+}
+
+function samplingOptions(config: ProviderModelConfig) {
+  return {
+    ...(config.temperature != null && { temperature: config.temperature }),
+    ...(config.maxTokens != null && { maxOutputTokens: config.maxTokens }),
+  }
+}
+
+function partDeltaEvent(part: Part, ctx: RenderContext): RawDeltaEvent | null {
+  if (part.thought && part.text) {
+    return {
+      id: createEventId(),
+      type: 'thought_delta',
+      createdAt: Date.now(),
+      invocationId: ctx.invocationId,
+      agentName: ctx.agentName,
+      delta: normalizeText(part.text) + '\n',
+    }
+  } else if (part.text && !part.thought) {
+    return {
+      id: createEventId(),
+      type: 'assistant_delta',
+      createdAt: Date.now(),
+      invocationId: ctx.invocationId,
+      agentName: ctx.agentName,
+      delta: normalizeText(part.text),
+    }
+  }
+  return null
+}
+
+function thoughtPart(text: string, geminiCtx: Part | undefined): Part {
+  if (geminiCtx?.thoughtSignature) {
+    return {
+      thought: true,
+      text,
+      thoughtSignature: geminiCtx.thoughtSignature,
+    }
+  }
+  return { text }
+}
+
+function mediaSourcePart(source: MediaPart['source'], urlMimeType: string): Part {
+  if (source.type === 'url') {
+    return {
+      fileData: {
+        fileUri: source.url,
+        mimeType: urlMimeType,
+      },
+    }
+  }
+  return {
+    inlineData: {
+      mimeType: source.mimeType,
+      data: source.data,
+    },
+  }
+}
+
+/** Parts that follow a function response to carry the tool result's images and documents. */
+function toolResultMediaParts(event: { media?: MediaPart[] }): Part[] {
+  const parts: Part[] = []
+  if (event.media && event.media.length > 0) {
+    for (const part of event.media) {
+      if (part.type === 'image') {
+        parts.push({ text: '[Image from tool result:]' })
+        parts.push(mediaSourcePart(part.source, 'image/jpeg'))
+      } else if (part.type === 'document') {
+        parts.push({ text: '[Document from tool result:]' })
+        parts.push(mediaSourcePart(part.source, 'application/pdf'))
+      }
+    }
+  }
+  return parts
 }
 
 function getGeminiContext(event: Pick<Event, 'providerContext'>): Part | undefined {
@@ -311,15 +366,7 @@ export function serializeContext(ctx: RenderContext): {
 
       case 'thought': {
         if (!event.text) break
-        if (geminiCtx?.thoughtSignature) {
-          pushPart('model', {
-            thought: true,
-            text: event.text,
-            thoughtSignature: geminiCtx.thoughtSignature,
-          })
-        } else {
-          pushPart('model', { text: event.text })
-        }
+        pushPart('model', thoughtPart(event.text, geminiCtx))
         break
       }
 
@@ -345,44 +392,8 @@ export function serializeContext(ctx: RenderContext): {
             response: responseData,
           },
         })
-        if (event.media && event.media.length > 0) {
-          for (const part of event.media) {
-            if (part.type === 'image') {
-              pushPart('user', { text: '[Image from tool result:]' })
-              if (part.source.type === 'url') {
-                pushPart('user', {
-                  fileData: {
-                    fileUri: part.source.url,
-                    mimeType: 'image/jpeg',
-                  },
-                })
-              } else {
-                pushPart('user', {
-                  inlineData: {
-                    mimeType: part.source.mimeType,
-                    data: part.source.data,
-                  },
-                })
-              }
-            } else if (part.type === 'document') {
-              pushPart('user', { text: '[Document from tool result:]' })
-              if (part.source.type === 'url') {
-                pushPart('user', {
-                  fileData: {
-                    fileUri: part.source.url,
-                    mimeType: 'application/pdf',
-                  },
-                })
-              } else {
-                pushPart('user', {
-                  inlineData: {
-                    mimeType: part.source.mimeType,
-                    data: part.source.data,
-                  },
-                })
-              }
-            }
-          }
+        for (const part of toolResultMediaParts(event)) {
+          pushPart('user', part)
         }
         break
       }

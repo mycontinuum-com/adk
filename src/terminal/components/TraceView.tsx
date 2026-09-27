@@ -60,57 +60,27 @@ function wrapTextLines(text: string, maxWidth: number): string[] {
   return allWrapped
 }
 
-function calculateCleanModeVisualLines(line: FlattenedLine, terminalWidth: number): number {
-  if (line.type === 'block_start' || line.type === 'block_end') {
-    return 1
-  }
-  if (line.type !== 'event' || !line.event) {
-    return 1
-  }
-
-  const eventType = line.event.type
-  const isCleanModeType =
-    eventType === 'user' ||
-    eventType === 'assistant' ||
-    eventType === 'thought' ||
-    eventType === 'delta_batch' ||
-    eventType === 'tool_call' ||
-    eventType === 'tool_input'
-
-  if (!isCleanModeType) {
-    return 0
-  }
-
-  let rawText: string
+/** The text a clean-mode event line shows before wrapping. */
+function cleanModeRawText(event: DisplayEvent): string {
+  const eventType = event.type
   if (eventType === 'delta_batch') {
-    rawText = (line.event as { finalText: string }).finalText
-  } else if (eventType === 'tool_call') {
-    const toolCall = line.event as { name: string; args?: Record<string, unknown> }
+    return (event as { finalText: string }).finalText
+  }
+  if (eventType === 'tool_call') {
+    const toolCall = event as { name: string; args?: Record<string, unknown> }
     const argsStr = toolCall.args ? JSON.stringify(toolCall.args) : ''
-    rawText = argsStr ? `${toolCall.name} ${argsStr}` : toolCall.name
-  } else if (eventType === 'tool_input') {
-    const toolInput = line.event as { name: string; input: unknown }
+    return argsStr ? `${toolCall.name} ${argsStr}` : toolCall.name
+  }
+  if (eventType === 'tool_input') {
+    const toolInput = event as { name: string; input: unknown }
     const inputStr = toolInput.input ? JSON.stringify(toolInput.input) : ''
-    rawText = inputStr ? `${toolInput.name} ${inputStr}` : toolInput.name
-  } else {
-    rawText = (line.event as { text: string }).text
+    return inputStr ? `${toolInput.name} ${inputStr}` : toolInput.name
   }
+  return (event as { text: string }).text
+}
 
-  const isThoughtType =
-    eventType === 'thought' ||
-    (eventType === 'delta_batch' &&
-      (line.event as { deltaType?: string }).deltaType === 'thought_delta')
-  if (isThoughtType && (!rawText || rawText.trim() === '')) {
-    return 0
-  }
-
-  const isInsideModelContext = eventType !== 'user'
-  const depth = isInsideModelContext ? Math.max(0, line.depth - 1) : line.depth
-  const indentWidth = depth * INDENT_WIDTH
-  const labelWidth = LABEL_WIDTH
-  const prefixWidth = indentWidth + 1 + 3 + labelWidth + 1
-  const maxTextWidth = Math.max(MIN_TEXT_WIDTH, terminalWidth - prefixWidth - 2)
-
+/** Collapses short text to one line and expands long JSON, matching how the line renders. */
+function cleanModeDisplayText(rawText: string, isThoughtType: boolean, maxTextWidth: number) {
   let text = rawText
   const isJson = rawText.trimStart().startsWith('{') || rawText.trimStart().startsWith('[')
 
@@ -139,6 +109,48 @@ function calculateCleanModeVisualLines(line: FlattenedLine, terminalWidth: numbe
       text = singleLine
     }
   }
+  return text
+}
+
+function calculateCleanModeVisualLines(line: FlattenedLine, terminalWidth: number): number {
+  if (line.type === 'block_start' || line.type === 'block_end') {
+    return 1
+  }
+  if (line.type !== 'event' || !line.event) {
+    return 1
+  }
+
+  const eventType = line.event.type
+  const isCleanModeType =
+    eventType === 'user' ||
+    eventType === 'assistant' ||
+    eventType === 'thought' ||
+    eventType === 'delta_batch' ||
+    eventType === 'tool_call' ||
+    eventType === 'tool_input'
+
+  if (!isCleanModeType) {
+    return 0
+  }
+
+  const rawText = cleanModeRawText(line.event)
+
+  const isThoughtType =
+    eventType === 'thought' ||
+    (eventType === 'delta_batch' &&
+      (line.event as { deltaType?: string }).deltaType === 'thought_delta')
+  if (isThoughtType && (!rawText || rawText.trim() === '')) {
+    return 0
+  }
+
+  const isInsideModelContext = eventType !== 'user'
+  const depth = isInsideModelContext ? Math.max(0, line.depth - 1) : line.depth
+  const indentWidth = depth * INDENT_WIDTH
+  const labelWidth = LABEL_WIDTH
+  const prefixWidth = indentWidth + 1 + 3 + labelWidth + 1
+  const maxTextWidth = Math.max(MIN_TEXT_WIDTH, terminalWidth - prefixWidth - 2)
+
+  const text = cleanModeDisplayText(rawText, isThoughtType, maxTextWidth)
 
   const lineCount = wrapTextLines(text, maxTextWidth).length
   return Math.min(lineCount, MAX_VISUAL_LINES_PER_EVENT)
@@ -234,6 +246,63 @@ function flattenBlocks(
     })
   }
 
+  function addExpandedContextItems(contextBlock: ContextBlock, ctxId: string, d: number): void {
+    for (const toolItem of contextBlock.toolItems) {
+      lines.push({
+        key: `ctx-child-${toolItem.id}`,
+        type: 'context_child',
+        event: toolItem,
+        depth: d + 1,
+        eventIndex: getSelectableIndex(toolItem.id),
+      })
+    }
+
+    if (contextBlock.schemaItem) {
+      lines.push({
+        key: `ctx-child-${contextBlock.schemaItem.id}`,
+        type: 'context_child',
+        event: contextBlock.schemaItem,
+        depth: d + 1,
+        eventIndex: getSelectableIndex(contextBlock.schemaItem.id),
+      })
+    }
+
+    for (const msgItem of contextBlock.messageItems) {
+      lines.push({
+        key: `ctx-child-${msgItem.id}`,
+        type: 'context_child',
+        event: msgItem,
+        depth: d + 1,
+        eventIndex: getSelectableIndex(msgItem.id),
+      })
+    }
+
+    if (contextBlock.producedEvents.length > 0) {
+      lines.push({ key: `ctx-sep-${ctxId}`, type: 'context_separator', depth: d })
+    }
+  }
+
+  function addProducedEvents(contextBlock: ContextBlock, d: number): void {
+    const hasAssistantEvent = contextBlock.producedEvents.some((e) => e.type === 'assistant')
+    const hasThoughtEvent = contextBlock.producedEvents.some((e) => e.type === 'thought')
+    for (const event of contextBlock.producedEvents) {
+      if (isHiddenEvent(event)) continue
+      if (event.type === 'delta_batch') {
+        const batch = event as { deltaType: string }
+        if (batch.deltaType === 'assistant_delta' && hasAssistantEvent) continue
+        if (batch.deltaType === 'thought_delta' && hasThoughtEvent) continue
+      }
+      const eventId = (event as { id?: string }).id
+      lines.push({
+        key: `event-${eventId ?? lines.length}`,
+        type: 'event',
+        event,
+        depth: d + 1,
+        eventIndex: getSelectableIndex(eventId),
+      })
+    }
+  }
+
   function addContextBlocks(contextBlocks: ContextBlock[], d: number): void {
     for (const contextBlock of contextBlocks) {
       const ctx = contextBlock.contextEvent
@@ -249,59 +318,10 @@ function flattenBlocks(
       })
 
       if (isExpanded && ctx) {
-        for (const toolItem of contextBlock.toolItems) {
-          lines.push({
-            key: `ctx-child-${toolItem.id}`,
-            type: 'context_child',
-            event: toolItem,
-            depth: d + 1,
-            eventIndex: getSelectableIndex(toolItem.id),
-          })
-        }
-
-        if (contextBlock.schemaItem) {
-          lines.push({
-            key: `ctx-child-${contextBlock.schemaItem.id}`,
-            type: 'context_child',
-            event: contextBlock.schemaItem,
-            depth: d + 1,
-            eventIndex: getSelectableIndex(contextBlock.schemaItem.id),
-          })
-        }
-
-        for (const msgItem of contextBlock.messageItems) {
-          lines.push({
-            key: `ctx-child-${msgItem.id}`,
-            type: 'context_child',
-            event: msgItem,
-            depth: d + 1,
-            eventIndex: getSelectableIndex(msgItem.id),
-          })
-        }
-
-        if (contextBlock.producedEvents.length > 0) {
-          lines.push({ key: `ctx-sep-${ctxId}`, type: 'context_separator', depth: d })
-        }
+        addExpandedContextItems(contextBlock, ctxId, d)
       }
 
-      const hasAssistantEvent = contextBlock.producedEvents.some((e) => e.type === 'assistant')
-      const hasThoughtEvent = contextBlock.producedEvents.some((e) => e.type === 'thought')
-      for (const event of contextBlock.producedEvents) {
-        if (isHiddenEvent(event)) continue
-        if (event.type === 'delta_batch') {
-          const batch = event as { deltaType: string }
-          if (batch.deltaType === 'assistant_delta' && hasAssistantEvent) continue
-          if (batch.deltaType === 'thought_delta' && hasThoughtEvent) continue
-        }
-        const eventId = (event as { id?: string }).id
-        lines.push({
-          key: `event-${eventId ?? lines.length}`,
-          type: 'event',
-          event,
-          depth: d + 1,
-          eventIndex: getSelectableIndex(eventId),
-        })
-      }
+      addProducedEvents(contextBlock, d)
 
       const responseId = contextBlock.responseEvent?.id
       const pendingCtxEndId = contextBlock.contextEvent
@@ -601,6 +621,30 @@ export function getLineIndexForEvent(
   return 0
 }
 
+/** Event index of the first line after (`step` 1) or before (`step` -1) `from` that matches. */
+function scanForEventIndex(
+  lines: FlattenedLine[],
+  from: number,
+  step: 1 | -1,
+  matches: (line: FlattenedLine) => boolean,
+): number | undefined {
+  for (let i = from + step; i >= 0 && i < lines.length; i += step) {
+    const line = lines[i]
+    if (matches(line) && line.eventIndex !== undefined) {
+      return line.eventIndex
+    }
+  }
+  return undefined
+}
+
+function isBlockOrContextEnd(line: FlattenedLine): boolean {
+  return line.type === 'block_end' || line.type === 'context_end'
+}
+
+function isBlockOrContextStart(line: FlattenedLine): boolean {
+  return line.type === 'block_start' || line.type === 'context_start'
+}
+
 export function findBlockEndEventIndex(
   lines: FlattenedLine[],
   currentLineIndex: number,
@@ -612,70 +656,33 @@ export function findBlockEndEventIndex(
   const currentLine = lines[currentLineIndex]
   const currentDepth = currentLine.depth
 
-  if (currentLine.type === 'block_end' || currentLine.type === 'context_end') {
-    for (let i = currentLineIndex + 1; i < lines.length; i++) {
-      const line = lines[i]
-      if (line.depth < currentDepth) {
-        if (
-          (line.type === 'block_end' || line.type === 'context_end') &&
-          line.eventIndex !== undefined
-        ) {
-          return line.eventIndex
-        }
-      }
-      if (
-        (line.type === 'block_end' || line.type === 'context_end') &&
-        line.depth === currentDepth &&
-        line.eventIndex !== undefined
-      ) {
-        return line.eventIndex
-      }
-    }
-    return undefined
-  }
-
   if (currentLine.type === 'block_start' && currentLine.block) {
     const invocationId = currentLine.block.invocationId
-    for (let i = currentLineIndex + 1; i < lines.length; i++) {
-      const line = lines[i]
-      if (
-        line.type === 'block_end' &&
-        line.block?.invocationId === invocationId &&
-        line.eventIndex !== undefined
-      ) {
-        return line.eventIndex
-      }
-    }
-    return undefined
+    return scanForEventIndex(
+      lines,
+      currentLineIndex,
+      1,
+      (line) => line.type === 'block_end' && line.block?.invocationId === invocationId,
+    )
   }
 
   if (currentLine.type === 'context_start' && currentLine.contextBlock) {
     const contextId = currentLine.contextBlock.contextEvent?.id
-    for (let i = currentLineIndex + 1; i < lines.length; i++) {
-      const line = lines[i]
-      if (
-        line.type === 'context_end' &&
-        line.contextBlock?.contextEvent?.id === contextId &&
-        line.eventIndex !== undefined
-      ) {
-        return line.eventIndex
-      }
-    }
-    return undefined
+    return scanForEventIndex(
+      lines,
+      currentLineIndex,
+      1,
+      (line) => line.type === 'context_end' && line.contextBlock?.contextEvent?.id === contextId,
+    )
   }
 
-  for (let i = currentLineIndex + 1; i < lines.length; i++) {
-    const line = lines[i]
-    if (
-      (line.type === 'block_end' || line.type === 'context_end') &&
-      line.depth <= currentDepth &&
-      line.eventIndex !== undefined
-    ) {
-      return line.eventIndex
-    }
-  }
-
-  return undefined
+  // From an end line or any other line: the next end at the same or a shallower depth.
+  return scanForEventIndex(
+    lines,
+    currentLineIndex,
+    1,
+    (line) => isBlockOrContextEnd(line) && line.depth <= currentDepth,
+  )
 }
 
 export function findBlockStartEventIndex(
@@ -689,68 +696,31 @@ export function findBlockStartEventIndex(
   const currentLine = lines[currentLineIndex]
   const currentDepth = currentLine.depth
 
-  if (currentLine.type === 'block_start' || currentLine.type === 'context_start') {
-    for (let i = currentLineIndex - 1; i >= 0; i--) {
-      const line = lines[i]
-      if (line.depth < currentDepth) {
-        if (
-          (line.type === 'block_start' || line.type === 'context_start') &&
-          line.eventIndex !== undefined
-        ) {
-          return line.eventIndex
-        }
-      }
-      if (
-        (line.type === 'block_start' || line.type === 'context_start') &&
-        line.depth === currentDepth &&
-        line.eventIndex !== undefined
-      ) {
-        return line.eventIndex
-      }
-    }
-    return undefined
-  }
-
   if (currentLine.type === 'block_end' && currentLine.block) {
     const invocationId = currentLine.block.invocationId
-    for (let i = currentLineIndex - 1; i >= 0; i--) {
-      const line = lines[i]
-      if (
-        line.type === 'block_start' &&
-        line.block?.invocationId === invocationId &&
-        line.eventIndex !== undefined
-      ) {
-        return line.eventIndex
-      }
-    }
-    return undefined
+    return scanForEventIndex(
+      lines,
+      currentLineIndex,
+      -1,
+      (line) => line.type === 'block_start' && line.block?.invocationId === invocationId,
+    )
   }
 
   if (currentLine.type === 'context_end' && currentLine.contextBlock) {
     const contextId = currentLine.contextBlock.contextEvent?.id
-    for (let i = currentLineIndex - 1; i >= 0; i--) {
-      const line = lines[i]
-      if (
-        line.type === 'context_start' &&
-        line.contextBlock?.contextEvent?.id === contextId &&
-        line.eventIndex !== undefined
-      ) {
-        return line.eventIndex
-      }
-    }
-    return undefined
+    return scanForEventIndex(
+      lines,
+      currentLineIndex,
+      -1,
+      (line) => line.type === 'context_start' && line.contextBlock?.contextEvent?.id === contextId,
+    )
   }
 
-  for (let i = currentLineIndex - 1; i >= 0; i--) {
-    const line = lines[i]
-    if (
-      (line.type === 'block_start' || line.type === 'context_start') &&
-      line.depth <= currentDepth &&
-      line.eventIndex !== undefined
-    ) {
-      return line.eventIndex
-    }
-  }
-
-  return undefined
+  // From a start line or any other line: the previous start at the same or a shallower depth.
+  return scanForEventIndex(
+    lines,
+    currentLineIndex,
+    -1,
+    (line) => isBlockOrContextStart(line) && line.depth <= currentDepth,
+  )
 }

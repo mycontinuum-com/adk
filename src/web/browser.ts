@@ -215,6 +215,35 @@ export interface ScreenshotOptions extends BrowserOptions {
 
 const MAX_SCREENSHOT_DIMENSION = 1280
 
+function screenshotSettings(options: ScreenshotOptions | undefined) {
+  return {
+    timeout: options?.timeout ?? 30000,
+    fullPage: options?.fullPage ?? true,
+    maxWidth: Math.min(options?.maxWidth ?? MAX_SCREENSHOT_DIMENSION, MAX_SCREENSHOT_DIMENSION),
+    maxHeight: Math.min(options?.maxHeight ?? MAX_SCREENSHOT_DIMENSION, MAX_SCREENSHOT_DIMENSION),
+  }
+}
+
+/** Screenshots the selected element when it is visible, otherwise the page. */
+async function capturePageScreenshot(
+  page: Page,
+  selector: string | undefined,
+  fullPage: boolean,
+): Promise<Buffer> {
+  if (selector) {
+    const element = page.locator(selector).first()
+    const isVisible = await element.isVisible().catch(() => false)
+    if (isVisible) {
+      return await element.screenshot({ type: 'png' })
+    }
+  }
+  return await page.screenshot({
+    type: 'png',
+    fullPage,
+    clip: fullPage ? undefined : { x: 0, y: 0, width: VIEWPORT.width, height: VIEWPORT.height },
+  })
+}
+
 export async function screenshotPage(
   url: string,
   options?: ScreenshotOptions,
@@ -226,16 +255,7 @@ export async function screenshotPage(
     const context = await createStealthContext(browser)
     const page = await context.newPage()
 
-    const timeout = options?.timeout ?? 30000
-    const fullPage = options?.fullPage ?? true
-    const maxWidth = Math.min(
-      options?.maxWidth ?? MAX_SCREENSHOT_DIMENSION,
-      MAX_SCREENSHOT_DIMENSION,
-    )
-    const maxHeight = Math.min(
-      options?.maxHeight ?? MAX_SCREENSHOT_DIMENSION,
-      MAX_SCREENSHOT_DIMENSION,
-    )
+    const { timeout, fullPage, maxWidth, maxHeight } = screenshotSettings(options)
 
     const downloadExtensions = ['.pdf', '.zip', '.tar', '.gz', '.exe', '.dmg', '.pkg', '.msi']
     const urlLower = url.toLowerCase()
@@ -264,30 +284,7 @@ export async function screenshotPage(
       const title = await page.title()
       const finalUrl = page.url()
 
-      let screenshotBuffer: Buffer
-      if (options?.selector) {
-        const element = page.locator(options.selector).first()
-        const isVisible = await element.isVisible().catch(() => false)
-        if (isVisible) {
-          screenshotBuffer = await element.screenshot({ type: 'png' })
-        } else {
-          screenshotBuffer = await page.screenshot({
-            type: 'png',
-            fullPage,
-            clip: fullPage
-              ? undefined
-              : { x: 0, y: 0, width: VIEWPORT.width, height: VIEWPORT.height },
-          })
-        }
-      } else {
-        screenshotBuffer = await page.screenshot({
-          type: 'png',
-          fullPage,
-          clip: fullPage
-            ? undefined
-            : { x: 0, y: 0, width: VIEWPORT.width, height: VIEWPORT.height },
-        })
-      }
+      let screenshotBuffer = await capturePageScreenshot(page, options?.selector, fullPage)
 
       // react-doctor-disable-next-line react-doctor/no-dynamic-import-path -- sharp is an optional peer dependency kept out of bundling and type resolution
       const sharpModule = await import('sharp' as string)

@@ -58,35 +58,61 @@ export class InvocationTreeError extends Error {
   }
 }
 
+function addInvocationNode(
+  event: Extract<Event, { type: 'invocation_start' }>,
+  nodeMap: Map<string, InvocationNode>,
+  roots: InvocationNode[],
+): void {
+  const node: InvocationNode = {
+    invocationId: event.invocationId,
+    agentName: event.agentName,
+    parentInvocationId: event.parentInvocationId,
+    state: 'running',
+    children: [],
+    toolCalls: new Map(),
+  }
+  nodeMap.set(event.invocationId, node)
+  if (event.parentInvocationId) {
+    const parent = nodeMap.get(event.parentInvocationId)
+    if (!parent) {
+      throw new InvocationTreeError(
+        `Child invocation '${event.invocationId}' references parent '${event.parentInvocationId}' that does not exist. Events may be out of order.`,
+      )
+    }
+    parent.children.push(node)
+  } else {
+    roots.push(node)
+  }
+}
+
+function findToolEntry(
+  nodeMap: Map<string, InvocationNode>,
+  invocationId: string | undefined,
+  callId: string,
+): ToolEntry | undefined {
+  if (!invocationId) return undefined
+  return nodeMap.get(invocationId)?.toolCalls.get(callId)
+}
+
+function attachToolInput(nodeMap: Map<string, InvocationNode>, event: ToolInputEvent): void {
+  for (const node of nodeMap.values()) {
+    const toolEntry = node.toolCalls.get(event.callId)
+    if (toolEntry) {
+      toolEntry.input = event
+      break
+    }
+  }
+}
+
 export function buildInvocationTree(events: readonly Event[]): InvocationNode[] {
   const nodeMap = new Map<string, InvocationNode>()
   const roots: InvocationNode[] = []
 
   for (const event of events) {
     switch (event.type) {
-      case 'invocation_start': {
-        const node: InvocationNode = {
-          invocationId: event.invocationId,
-          agentName: event.agentName,
-          parentInvocationId: event.parentInvocationId,
-          state: 'running',
-          children: [],
-          toolCalls: new Map(),
-        }
-        nodeMap.set(event.invocationId, node)
-        if (event.parentInvocationId) {
-          const parent = nodeMap.get(event.parentInvocationId)
-          if (!parent) {
-            throw new InvocationTreeError(
-              `Child invocation '${event.invocationId}' references parent '${event.parentInvocationId}' that does not exist. Events may be out of order.`,
-            )
-          }
-          parent.children.push(node)
-        } else {
-          roots.push(node)
-        }
+      case 'invocation_start':
+        addInvocationNode(event, nodeMap, roots)
         break
-      }
       case 'invocation_end': {
         const node = nodeMap.get(event.invocationId)
         if (node) node.state = endReasonToState[event.reason] ?? 'completed'
@@ -117,27 +143,16 @@ export function buildInvocationTree(events: readonly Event[]): InvocationNode[] 
         break
       }
       case 'tool_yield': {
-        if (event.invocationId) {
-          const toolEntry = nodeMap.get(event.invocationId)?.toolCalls.get(event.callId)
-          if (toolEntry) toolEntry.yield = event
-        }
+        const toolEntry = findToolEntry(nodeMap, event.invocationId, event.callId)
+        if (toolEntry) toolEntry.yield = event
         break
       }
-      case 'tool_input': {
-        for (const node of nodeMap.values()) {
-          const toolEntry = node.toolCalls.get(event.callId)
-          if (toolEntry) {
-            toolEntry.input = event
-            break
-          }
-        }
+      case 'tool_input':
+        attachToolInput(nodeMap, event)
         break
-      }
       case 'tool_result': {
-        if (event.invocationId) {
-          const toolEntry = nodeMap.get(event.invocationId)?.toolCalls.get(event.callId)
-          if (toolEntry) toolEntry.result = event
-        }
+        const toolEntry = findToolEntry(nodeMap, event.invocationId, event.callId)
+        if (toolEntry) toolEntry.result = event
         break
       }
     }

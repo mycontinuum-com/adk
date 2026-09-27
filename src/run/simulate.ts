@@ -66,8 +66,7 @@ export async function runSimulateLoop(
   const stateMatches = options.stateMatches
   const startTime = Date.now()
 
-  const prepareInput = options.transform?.prepareInput ?? defaultPrepareInput
-  const processOutput = options.transform?.processOutput ?? defaultProcessOutput
+  const { prepareInput, processOutput } = resolveTransforms(options)
 
   const userAgentSession = options.userAgent
     ? new BaseSession('user-agent', { id: `user-agent-${Date.now()}` })
@@ -102,10 +101,7 @@ export async function runSimulateLoop(
 
   let iteration = 0
 
-  while (
-    (result.status === 'yielded_tool' || result.status === 'yielded_message') &&
-    iteration < maxTurns
-  ) {
+  while (isYieldedResult(result) && iteration < maxTurns) {
     iteration++
 
     const yieldCtx = buildSimulateYieldContext(result, iteration)
@@ -187,10 +183,7 @@ export async function runSimulateLoop(
     }
   }
 
-  if (
-    iteration >= maxTurns &&
-    (result.status === 'yielded_tool' || result.status === 'yielded_message')
-  ) {
+  if (iteration >= maxTurns && isYieldedResult(result)) {
     return {
       runnable: result.runnable,
       session: result.session,
@@ -204,6 +197,17 @@ export async function runSimulateLoop(
   }
 
   return result
+}
+
+function resolveTransforms(options: SimulateOptions) {
+  return {
+    prepareInput: options.transform?.prepareInput ?? defaultPrepareInput,
+    processOutput: options.transform?.processOutput ?? defaultProcessOutput,
+  }
+}
+
+function isYieldedResult(result: RunResult): boolean {
+  return result.status === 'yielded_tool' || result.status === 'yielded_message'
 }
 
 function checkTermination(

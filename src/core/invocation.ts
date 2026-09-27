@@ -41,6 +41,62 @@ export interface ResumeContext {
   yieldIndex: number
 }
 
+/** The invocation_resume event for a resumed yield, otherwise the invocation_start event. */
+function createOpeningEvent<T>(
+  runnable: Runnable,
+  invocationId: string,
+  parentInvocationId: string | undefined,
+  session: Session,
+  options: InvocationBoundaryOptions<T> | undefined,
+  resumeContext: ResumeContext | undefined,
+): InvocationResumeEvent | InvocationStartEvent {
+  if (resumeContext && resumeContext.yieldIndex >= 0) {
+    return {
+      id: createEventId(),
+      type: 'invocation_resume',
+      createdAt: Date.now(),
+      invocationId: resumeContext.invocationId,
+      agentName: runnable.name,
+      parentInvocationId,
+      yieldIndex: resumeContext.yieldIndex,
+    }
+  }
+  const isRootInvocation = !parentInvocationId
+  return {
+    id: createEventId(),
+    type: 'invocation_start',
+    createdAt: Date.now(),
+    invocationId: resumeContext?.invocationId ?? invocationId,
+    agentName: runnable.name,
+    parentInvocationId,
+    kind: runnable.kind,
+    handoffOrigin: options?.handoffOrigin,
+    fingerprint: isRootInvocation ? options?.fingerprint : undefined,
+    version: isRootInvocation ? session.version : undefined,
+  }
+}
+
+/** Yield details when the result yielded and the caller can describe the yield. */
+function yieldInfoFor<T>(
+  result: T,
+  options: InvocationBoundaryOptions<T> | undefined,
+): YieldInfo | undefined {
+  const isYielded = options?.isYielded?.(result) ?? false
+  if (isYielded && options?.getYieldInfo) {
+    return options.getYieldInfo(result)
+  }
+  return undefined
+}
+
+function completedEndState<T>(
+  result: T,
+  options: InvocationBoundaryOptions<T> | undefined,
+): { endReason: InvocationEndReason; endError: string | undefined } {
+  const endReason = options?.getEndReason?.(result) ?? 'completed'
+  const endError = options?.getError?.(result)
+  return { endReason, endError }
+}
+
 export async function* withInvocationBoundary<T>(
   runnable: Runnable,
   invocationId: string,
@@ -106,43 +162,23 @@ export async function* withInvocationBoundary<T>(
       ;(session as BaseSession).tagTrailingEvents(tagId)
     }
 
-    if (resumeContext && resumeContext.yieldIndex >= 0) {
-      const resumeEvent: InvocationResumeEvent = {
-        id: createEventId(),
-        type: 'invocation_resume',
-        createdAt: Date.now(),
-        invocationId: resumeContext.invocationId,
-        agentName: runnable.name,
-        parentInvocationId,
-        yieldIndex: resumeContext.yieldIndex,
-      }
-      await sessionService.appendEvent(session, resumeEvent)
-      yield resumeEvent
-    } else {
-      const isRootInvocation = !parentInvocationId
-      const startEvent: InvocationStartEvent = {
-        id: createEventId(),
-        type: 'invocation_start',
-        createdAt: Date.now(),
-        invocationId: resumeContext?.invocationId ?? invocationId,
-        agentName: runnable.name,
-        parentInvocationId,
-        kind: runnable.kind,
-        handoffOrigin: options?.handoffOrigin,
-        fingerprint: isRootInvocation ? options?.fingerprint : undefined,
-        version: isRootInvocation ? session.version : undefined,
-      }
-      await sessionService.appendEvent(session, startEvent)
-      yield startEvent
-    }
+    const openingEvent = createOpeningEvent(
+      runnable,
+      invocationId,
+      parentInvocationId,
+      session,
+      options,
+      resumeContext,
+    )
+    await sessionService.appendEvent(session, openingEvent)
+    yield openingEvent
 
     result = yield* generator
-    const isYielded = options?.isYielded?.(result) ?? false
-    if (isYielded && options?.getYieldInfo) {
-      yield* emitYieldEvent(options.getYieldInfo(result))
+    const yieldInfo = yieldInfoFor(result, options)
+    if (yieldInfo) {
+      yield* emitYieldEvent(yieldInfo)
     } else {
-      endReason = options?.getEndReason?.(result) ?? 'completed'
-      endError = options?.getError?.(result)
+      ;({ endReason, endError } = completedEndState(result, options))
       yield* emitEndEvent()
     }
   } catch (error) {

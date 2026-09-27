@@ -99,6 +99,49 @@ export function computeUsageSummary(
   )
 }
 
+interface ModelUsageTally {
+  calls: number
+  inputTokens: number
+  outputTokens: number
+  cachedTokens: number
+  cacheWriteTokens: number
+  reasoningTokens: number
+  audioInputTokens: number
+  audioOutputTokens: number
+  inputCost: number
+  outputCost: number
+  knownCostCalls: number
+  reportedCostCalls: number
+  reportedCostUSD: number
+  modelName: string
+  provider?: Provider
+}
+
+function modelUsageEntry(e: ModelUsageTally, completeUsage: boolean): ModelUsageEntry {
+  return {
+    modelName: e.modelName,
+    ...(e.provider && { provider: e.provider }),
+    ...(e.reportedCostCalls === e.calls && completeUsage && { reportedCostUSD: e.reportedCostUSD }),
+    calls: e.calls,
+    inputTokens: e.inputTokens,
+    outputTokens: e.outputTokens,
+    cachedTokens: e.cachedTokens,
+    cacheWriteTokens: e.cacheWriteTokens,
+    reasoningTokens: e.reasoningTokens,
+    audioInputTokens: e.audioInputTokens,
+    audioOutputTokens: e.audioOutputTokens,
+    ...(e.knownCostCalls === e.calls &&
+      completeUsage && {
+        cost: {
+          inputCost: e.inputCost,
+          outputCost: e.outputCost,
+          totalCost: e.inputCost + e.outputCost,
+          currency: 'USD' as const,
+        },
+      }),
+  }
+}
+
 /**
  * Summarizes one entry per model call; `undefined` marks a call whose usage is unknown.
  *
@@ -110,26 +153,7 @@ export function summarizeModelUsage(
 ): UsageSummary | undefined {
   if (calls.length === 0) return undefined
 
-  const byModel = new Map<
-    string,
-    {
-      calls: number
-      inputTokens: number
-      outputTokens: number
-      cachedTokens: number
-      cacheWriteTokens: number
-      reasoningTokens: number
-      audioInputTokens: number
-      audioOutputTokens: number
-      inputCost: number
-      outputCost: number
-      knownCostCalls: number
-      reportedCostCalls: number
-      reportedCostUSD: number
-      modelName: string
-      provider?: Provider
-    }
-  >()
+  const byModel = new Map<string, ModelUsageTally>()
 
   let totalInputTokens = 0
   let totalOutputTokens = 0
@@ -216,29 +240,7 @@ export function summarizeModelUsage(
   const completeUsage = calls.every((usage) => usage !== undefined)
   const models: ModelUsageEntry[] = []
   for (const e of byModel.values()) {
-    models.push({
-      modelName: e.modelName,
-      ...(e.provider && { provider: e.provider }),
-      ...(e.reportedCostCalls === e.calls &&
-        completeUsage && { reportedCostUSD: e.reportedCostUSD }),
-      calls: e.calls,
-      inputTokens: e.inputTokens,
-      outputTokens: e.outputTokens,
-      cachedTokens: e.cachedTokens,
-      cacheWriteTokens: e.cacheWriteTokens,
-      reasoningTokens: e.reasoningTokens,
-      audioInputTokens: e.audioInputTokens,
-      audioOutputTokens: e.audioOutputTokens,
-      ...(e.knownCostCalls === e.calls &&
-        completeUsage && {
-          cost: {
-            inputCost: e.inputCost,
-            outputCost: e.outputCost,
-            totalCost: e.inputCost + e.outputCost,
-            currency: 'USD' as const,
-          },
-        }),
-    })
+    models.push(modelUsageEntry(e, completeUsage))
   }
 
   const totalCost = totalInputCost + totalOutputCost

@@ -248,6 +248,73 @@ Either:
 
       const response = await createWithFallback()
 
+      type ClaudeStreamEvent = typeof response extends AsyncIterable<infer E> ? E : never
+      type ContentBlockStart = Extract<ClaudeStreamEvent, { type: 'content_block_start' }>
+      type ContentBlockDelta = Extract<ClaudeStreamEvent, { type: 'content_block_delta' }>
+
+      const startContentBlock = (block: ContentBlockStart['content_block']) => {
+        if (block.type === 'text') {
+          contentBlocks.push({ type: 'text', text: '' })
+        } else if (block.type === 'thinking') {
+          contentBlocks.push({
+            type: 'thinking',
+            thinking: '',
+            signature: '',
+          })
+        } else if (block.type === 'redacted_thinking') {
+          contentBlocks.push({ type: 'redacted_thinking', data: block.data })
+        } else if (block.type === 'tool_use') {
+          contentBlocks.push({
+            type: 'tool_use',
+            id: block.id,
+            name: block.name,
+            inputJson: '',
+          })
+        }
+      }
+
+      /** Applies a delta to the open block; returns the raw event to stream, if any. */
+      const applyContentDelta = (
+        lastBlock: ParsedContentBlock,
+        delta: ContentBlockDelta['delta'],
+      ): RawDeltaEvent | undefined => {
+        let rawEvent: RawDeltaEvent | undefined
+
+        if (delta.type === 'text_delta' && lastBlock.type === 'text') {
+          lastBlock.text += delta.text
+          rawEvent = {
+            id: createEventId(),
+            type: 'assistant_delta',
+            createdAt: Date.now(),
+            invocationId: ctx.invocationId,
+            agentName: ctx.agentName,
+            delta: delta.text,
+          }
+        }
+
+        if (delta.type === 'thinking_delta' && lastBlock.type === 'thinking') {
+          lastBlock.thinking += delta.thinking
+          rawEvent = {
+            id: createEventId(),
+            type: 'thought_delta',
+            createdAt: Date.now(),
+            invocationId: ctx.invocationId,
+            agentName: ctx.agentName,
+            delta: delta.thinking,
+          }
+        }
+
+        if (delta.type === 'input_json_delta' && lastBlock.type === 'tool_use') {
+          lastBlock.inputJson += delta.partial_json || ''
+        }
+
+        if (delta.type === 'signature_delta' && lastBlock.type === 'thinking') {
+          lastBlock.signature += delta.signature || ''
+        }
+
+        return rawEvent
+      }
+
       for await (const event of response) {
         if (signal?.aborted) {
           throw new Error('Aborted')
@@ -263,64 +330,15 @@ Either:
         }
 
         if (event.type === 'content_block_start') {
-          const block = event.content_block
-          if (block.type === 'text') {
-            contentBlocks.push({ type: 'text', text: '' })
-          } else if (block.type === 'thinking') {
-            contentBlocks.push({
-              type: 'thinking',
-              thinking: '',
-              signature: '',
-            })
-          } else if (block.type === 'redacted_thinking') {
-            contentBlocks.push({ type: 'redacted_thinking', data: block.data })
-          } else if (block.type === 'tool_use') {
-            contentBlocks.push({
-              type: 'tool_use',
-              id: block.id,
-              name: block.name,
-              inputJson: '',
-            })
-          }
+          startContentBlock(event.content_block)
         }
 
         if (event.type === 'content_block_delta') {
           const lastBlock = contentBlocks[contentBlocks.length - 1]
           if (!lastBlock) continue
-          const { delta } = event
-
-          if (delta.type === 'text_delta' && lastBlock.type === 'text') {
-            lastBlock.text += delta.text
-            const rawEvent: RawDeltaEvent = {
-              id: createEventId(),
-              type: 'assistant_delta',
-              createdAt: Date.now(),
-              invocationId: ctx.invocationId,
-              agentName: ctx.agentName,
-              delta: delta.text,
-            }
+          const rawEvent = applyContentDelta(lastBlock, event.delta)
+          if (rawEvent) {
             yield accumulator.push(rawEvent)
-          }
-
-          if (delta.type === 'thinking_delta' && lastBlock.type === 'thinking') {
-            lastBlock.thinking += delta.thinking
-            const rawEvent: RawDeltaEvent = {
-              id: createEventId(),
-              type: 'thought_delta',
-              createdAt: Date.now(),
-              invocationId: ctx.invocationId,
-              agentName: ctx.agentName,
-              delta: delta.thinking,
-            }
-            yield accumulator.push(rawEvent)
-          }
-
-          if (delta.type === 'input_json_delta' && lastBlock.type === 'tool_use') {
-            lastBlock.inputJson += delta.partial_json || ''
-          }
-
-          if (delta.type === 'signature_delta' && lastBlock.type === 'thinking') {
-            lastBlock.signature += delta.signature || ''
           }
         }
       }
@@ -366,6 +384,89 @@ function isPromptCachingUnsupportedError(error: unknown): boolean {
   return /prompt caching|explicit caching|cache_control|cache control/i.test(message)
 }
 
+type SystemPart = {
+  text: string
+  cacheable: boolean
+}
+
+type ToolResultEvent = Extract<Event, { type: 'tool_result' }>
+type MediaSource = { type: 'url'; url: string } | { type: 'base64'; mimeType: string; data: string }
+
+function isCacheableSystemEvent(
+  event: Extract<Event, { type: 'system' }>,
+  promptCache: PromptCacheConfig | undefined,
+): boolean {
+  return Boolean(
+    promptCache?.enabled &&
+    (promptCache.system === 'all' ||
+      (event.providerContext?.provider === 'adk' &&
+        (event.providerContext.data as { cacheable?: boolean })?.cacheable)),
+  )
+}
+
+function serializeThought(event: Extract<Event, { type: 'thought' }>): ContentBlockParam {
+  const thinkingCtx = getClaudeContext(event)
+  if (thinkingCtx?.redacted) {
+    return {
+      type: 'redacted_thinking',
+      data: thinkingCtx.data as string,
+    }
+  }
+  return {
+    type: 'thinking',
+    thinking: event.text,
+    signature: thinkingCtx?.signature ?? '',
+  }
+}
+
+function serializeMediaSource(source: MediaSource): ImageBlockParam['source'] {
+  return source.type === 'url'
+    ? { type: 'url' as const, url: source.url }
+    : {
+        type: 'base64' as const,
+        media_type: source.mimeType,
+        data: source.data,
+      }
+}
+
+function serializeToolResultContent(
+  event: ToolResultEvent,
+  textContent: string,
+): ToolResultContent {
+  if (!(event.media && event.media.length > 0)) {
+    return textContent
+  }
+  const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [
+    { type: 'text', text: textContent },
+  ]
+  for (const part of event.media) {
+    if (part.type === 'image') {
+      contentBlocks.push({ type: 'image', source: serializeMediaSource(part.source) })
+    } else if (part.type === 'document') {
+      contentBlocks.push({ type: 'document', source: serializeMediaSource(part.source) })
+    }
+  }
+  return contentBlocks
+}
+
+function serializeSystem(
+  systemParts: SystemPart[],
+  promptCache: PromptCacheConfig | undefined,
+): string | TextBlockParam[] | undefined {
+  if (systemParts.length === 0) return undefined
+  if (!promptCache?.enabled) return systemParts.map((p) => p.text).join('\n\n')
+  return systemParts.map((p) => ({
+    type: 'text' as const,
+    text: p.text,
+    ...(p.cacheable && {
+      cache_control: {
+        type: 'ephemeral' as const,
+        ttl: promptCache.ttl,
+      },
+    }),
+  }))
+}
+
 export function serializeContext(
   ctx: RenderContext,
   options?: { promptCache?: PromptCacheConfig },
@@ -374,10 +475,7 @@ export function serializeContext(
   system: string | TextBlockParam[] | undefined
 } {
   const messages: MessageParam[] = []
-  const systemParts: Array<{
-    text: string
-    cacheable: boolean
-  }> = []
+  const systemParts: SystemPart[] = []
   const toolUseIdMap = new Map<string, string>()
 
   type ClaudeRole = 'user' | 'assistant'
@@ -430,12 +528,7 @@ export function serializeContext(
       case 'system':
         systemParts.push({
           text: event.text,
-          cacheable: Boolean(
-            options?.promptCache?.enabled &&
-            (options.promptCache.system === 'all' ||
-              (event.providerContext?.provider === 'adk' &&
-                (event.providerContext.data as { cacheable?: boolean })?.cacheable)),
-          ),
+          cacheable: isCacheableSystemEvent(event, options?.promptCache),
         })
         break
 
@@ -449,22 +542,9 @@ export function serializeContext(
         pushContent('assistant', { type: 'text', text: event.text })
         break
 
-      case 'thought': {
-        const thinkingCtx = getClaudeContext(event)
-        if (thinkingCtx?.redacted) {
-          pushContent('assistant', {
-            type: 'redacted_thinking',
-            data: thinkingCtx.data as string,
-          })
-        } else {
-          pushContent('assistant', {
-            type: 'thinking',
-            thinking: event.text,
-            signature: thinkingCtx?.signature ?? '',
-          })
-        }
+      case 'thought':
+        pushContent('assistant', serializeThought(event))
         break
-      }
 
       case 'tool_call': {
         const providerCtx = getClaudeContext(event)
@@ -482,54 +562,12 @@ export function serializeContext(
       case 'tool_result': {
         const toolUseId = toolUseIdMap.get(event.callId) ?? event.callId
         const textContent = event.error ?? JSON.stringify(event.result)
-
-        if (event.media && event.media.length > 0) {
-          const contentBlocks: Array<TextBlockParam | ImageBlockParam | DocumentBlockParam> = [
-            { type: 'text', text: textContent },
-          ]
-          for (const part of event.media) {
-            if (part.type === 'image') {
-              const source = part.source
-              contentBlocks.push({
-                type: 'image',
-                source:
-                  source.type === 'url'
-                    ? { type: 'url' as const, url: source.url }
-                    : {
-                        type: 'base64' as const,
-                        media_type: source.mimeType,
-                        data: source.data,
-                      },
-              })
-            } else if (part.type === 'document') {
-              const source = part.source
-              contentBlocks.push({
-                type: 'document',
-                source:
-                  source.type === 'url'
-                    ? { type: 'url' as const, url: source.url }
-                    : {
-                        type: 'base64' as const,
-                        media_type: source.mimeType,
-                        data: source.data,
-                      },
-              })
-            }
-          }
-          pushContent('user', {
-            type: 'tool_result',
-            tool_use_id: toolUseId,
-            content: contentBlocks,
-            ...(event.error && { is_error: true }),
-          })
-        } else {
-          pushContent('user', {
-            type: 'tool_result',
-            tool_use_id: toolUseId,
-            content: textContent,
-            ...(event.error && { is_error: true }),
-          })
-        }
+        pushContent('user', {
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: serializeToolResultContent(event, textContent),
+          ...(event.error && { is_error: true }),
+        })
         break
       }
     }
@@ -539,24 +577,9 @@ export function serializeContext(
 
   return {
     messages,
-    system:
-      systemParts.length === 0
-        ? undefined
-        : options?.promptCache?.enabled
-          ? systemParts.map((p) => ({
-              type: 'text' as const,
-              text: p.text,
-              ...(p.cacheable && {
-                cache_control: {
-                  type: 'ephemeral' as const,
-                  ttl: options.promptCache!.ttl,
-                },
-              }),
-            }))
-          : systemParts.map((p) => p.text).join('\n\n'),
+    system: serializeSystem(systemParts, options?.promptCache),
   }
 }
-
 function getClaudeContext(event: Pick<Event, 'providerContext'>):
   | {
       id?: string

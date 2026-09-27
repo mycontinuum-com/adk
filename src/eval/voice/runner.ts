@@ -80,6 +80,73 @@ function getVoiceReplyPlayout(reply: unknown): Promise<void> | undefined {
 // Minimal session service for wireEventListeners
 // ---------------------------------------------------------------------------
 
+type SpeechTimingLookup = (role: 'agent' | 'user') => { startMs?: number; endMs?: number }
+
+/** The case-log line for a spoken turn, or undefined when nothing should be written. */
+function speechLine(
+  event: Extract<Event, { type: 'user' | 'assistant' }>,
+  ts: number,
+  startMs: number,
+  getSpeechTiming: SpeechTimingLookup | undefined,
+): string | undefined {
+  // Skip agent-STT user transcripts — the user agent's own transcript
+  // is written directly from the userLkSession listener instead.
+  if (event.type === 'user' && 'source' in event && event.source === 'transcript') {
+    return undefined
+  }
+  const text = 'text' in event ? (event.text ?? '') : ''
+  if (!text) return undefined
+  const role = event.type === 'assistant' ? 'agent' : 'user'
+  const timing = getSpeechTiming?.(role)
+  const startTs = timing?.startMs != null ? ((timing.startMs - startMs) / 1000).toFixed(1) : null
+  const endTs = timing?.endMs != null ? ((timing.endMs - startMs) / 1000).toFixed(1) : ts.toFixed(1)
+  const prefix = startTs ? `${startTs}s–${endTs}s` : `${endTs}s`
+  return `${prefix} **${role}**: ${text}`
+}
+
+function toolResultLine(
+  event: Extract<Event, { type: 'tool_result' }>,
+  call: { name: string; args: Record<string, unknown>; ms: number } | undefined,
+  ts: number,
+): string {
+  const name = call?.name ?? event.name
+  const argsStr = call ? JSON.stringify(call.args) : ''
+  const resultStr = event.error ? `error: ${event.error}` : JSON.stringify(event.result ?? null)
+  const callTs = call?.ms ?? ts
+  return `${callTs.toFixed(1)}s \`${name}(${argsStr})\` → \`${resultStr}\``
+}
+
+async function usageParts(u: NonNullable<Extract<Event, { type: 'model_end' }>['usage']>) {
+  const parts: string[] = []
+  const uncachedText = Math.max(0, u.inputTokens - (u.cachedTokens ?? 0))
+  parts.push(`${uncachedText} text in`)
+  if (u.cachedTokens) parts.push(`${u.cachedTokens} text cached`)
+  parts.push(`${u.outputTokens} text out`)
+  if (u.audioInputTokens || u.audioCachedTokens) {
+    const uncachedAudio = Math.max(0, (u.audioInputTokens ?? 0) - (u.audioCachedTokens ?? 0))
+    parts.push(`${uncachedAudio} audio in`)
+    if (u.audioCachedTokens) parts.push(`${u.audioCachedTokens} audio cached`)
+  }
+  if (u.audioOutputTokens) parts.push(`${u.audioOutputTokens} audio out`)
+  if (u.reasoningTokens) parts.push(`${u.reasoningTokens} reasoning`)
+  const cost = isPriceable(u) ? calculateCost(u, await loadPricing()) : null
+  if (cost) parts.push(formatCost(cost.totalCost))
+  return parts
+}
+
+async function modelEndLine(
+  event: Extract<Event, { type: 'model_end' }>,
+  ts: number,
+): Promise<string> {
+  const dur = event.durationMs ? `${(event.durationMs / 1000).toFixed(1)}s` : '?'
+  const u = event.usage
+  if (u) {
+    const parts = await usageParts(u)
+    return `${ts.toFixed(1)}s model (${dur}, ${parts.join(', ')})`
+  }
+  return `${ts.toFixed(1)}s model (${dur})`
+}
+
 function createEvalSessionService(
   session: BaseSession,
   startMs: number,
@@ -102,22 +169,8 @@ function createEvalSessionService(
       const ts = ((event.createdAt ?? Date.now()) - startMs) / 1000
 
       if (event.type === 'user' || event.type === 'assistant') {
-        // Skip agent-STT user transcripts — the user agent's own transcript
-        // is written directly from the userLkSession listener instead.
-        if (event.type === 'user' && 'source' in event && event.source === 'transcript') {
-          return
-        }
-        const text = 'text' in event ? (event.text ?? '') : ''
-        if (text) {
-          const role = event.type === 'assistant' ? 'agent' : 'user'
-          const timing = getSpeechTiming?.(role)
-          const startTs =
-            timing?.startMs != null ? ((timing.startMs - startMs) / 1000).toFixed(1) : null
-          const endTs =
-            timing?.endMs != null ? ((timing.endMs - startMs) / 1000).toFixed(1) : ts.toFixed(1)
-          const prefix = startTs ? `${startTs}s–${endTs}s` : `${endTs}s`
-          writer.appendLine(`${prefix} **${role}**: ${text}`)
-        }
+        const line = speechLine(event, ts, startMs, getSpeechTiming)
+        if (line) writer.appendLine(line)
       } else if (event.type === 'tool_call') {
         pendingToolCalls.set(event.callId, {
           name: event.name,
@@ -127,38 +180,9 @@ function createEvalSessionService(
       } else if (event.type === 'tool_result') {
         const call = pendingToolCalls.get(event.callId)
         pendingToolCalls.delete(event.callId)
-        const name = call?.name ?? event.name
-        const argsStr = call ? JSON.stringify(call.args) : ''
-        const resultStr = event.error
-          ? `error: ${event.error}`
-          : JSON.stringify(event.result ?? null)
-        const callTs = call?.ms ?? ts
-        writer.appendLine(`${callTs.toFixed(1)}s \`${name}(${argsStr})\` → \`${resultStr}\``)
+        writer.appendLine(toolResultLine(event, call, ts))
       } else if (event.type === 'model_end') {
-        const dur = event.durationMs ? `${(event.durationMs / 1000).toFixed(1)}s` : '?'
-        const u = event.usage
-        if (u) {
-          const parts: string[] = []
-          const uncachedText = Math.max(0, u.inputTokens - (u.cachedTokens ?? 0))
-          parts.push(`${uncachedText} text in`)
-          if (u.cachedTokens) parts.push(`${u.cachedTokens} text cached`)
-          parts.push(`${u.outputTokens} text out`)
-          if (u.audioInputTokens || u.audioCachedTokens) {
-            const uncachedAudio = Math.max(
-              0,
-              (u.audioInputTokens ?? 0) - (u.audioCachedTokens ?? 0),
-            )
-            parts.push(`${uncachedAudio} audio in`)
-            if (u.audioCachedTokens) parts.push(`${u.audioCachedTokens} audio cached`)
-          }
-          if (u.audioOutputTokens) parts.push(`${u.audioOutputTokens} audio out`)
-          if (u.reasoningTokens) parts.push(`${u.reasoningTokens} reasoning`)
-          const cost = isPriceable(u) ? calculateCost(u, await loadPricing()) : null
-          if (cost) parts.push(formatCost(cost.totalCost))
-          writer.appendLine(`${ts.toFixed(1)}s model (${dur}, ${parts.join(', ')})`)
-        } else {
-          writer.appendLine(`${ts.toFixed(1)}s model (${dur})`)
-        }
+        writer.appendLine(await modelEndLine(event, ts))
       }
     },
     createSession: async () => session as Session,
@@ -230,6 +254,174 @@ function wireSessionResponseTracker(lkSession: any): SessionResponseTracker {
   }
 }
 
+function assertRealtimeAgents(evalCase: { agent: Agent; userAgent: Agent }): void {
+  if (!isRealtimeConfig(evalCase.agent.model)) {
+    throw new Error(
+      `[adk/voice-eval] Agent "${evalCase.agent.name}" must have a realtime model config`,
+    )
+  }
+  if (!isRealtimeConfig(evalCase.userAgent.model)) {
+    throw new Error(
+      `[adk/voice-eval] User agent "${evalCase.userAgent.name}" must have a realtime model config`,
+    )
+  }
+}
+
+function composeEvalHooks(agent: Agent, optionHooks: VoiceEvalOptions<any>['hooks']) {
+  const composedHook = composeHooks([...(agent.hooks ?? []), ...(optionHooks ?? [])])
+  const allHooks = [
+    ...((agent.hooks ?? []) as VoiceHook[]),
+    ...((optionHooks ?? []) as VoiceHook[]),
+  ]
+  return { composedHook, allHooks }
+}
+
+async function closeVoiceSessions(lkSession: any, userLkSession: any): Promise<void> {
+  try {
+    await withTimeout(lkSession.close(), 5000)
+  } catch {
+    /* ignore — WritableStream may already be closed */
+  }
+  try {
+    await withTimeout(userLkSession.close(), 5000)
+  } catch {
+    /* ignore */
+  }
+}
+
+function mergeSessionTiming(
+  roomTiming: ReturnType<RecorderHandle['tracker']['finalize']>,
+  sessionTracker: SessionResponseTracker,
+) {
+  return {
+    ...roomTiming,
+    responseTimes: sessionTracker.getResponseTimes(),
+    timeToFirstSpeechMs: sessionTracker.getTimeToFirstSpeech() ?? roomTiming.timeToFirstSpeechMs,
+  }
+}
+
+async function summarizeVoiceUsage(
+  usage: NonNullable<ReturnType<ReturnType<typeof wireEventListeners>['getUsage']>>,
+  agent: Agent,
+): Promise<UsageSummary> {
+  const modelName = getModelName(agent.model) ?? usage.modelName ?? 'unknown'
+  const cost =
+    calculateCost(
+      {
+        provider: getModelProvider(agent.model),
+        modelName,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cachedTokens: usage.cachedTokens,
+        reasoningTokens: usage.reasoningTokens,
+        audioInputTokens: usage.audioInputTokens,
+        audioOutputTokens: usage.audioOutputTokens,
+        audioCachedTokens: usage.audioCachedTokens,
+      },
+      await loadPricing(),
+    ) ?? undefined
+  return {
+    models: [
+      {
+        modelName,
+        calls: usage.modelCalls,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        cachedTokens: usage.cachedTokens,
+        reasoningTokens: usage.reasoningTokens,
+        audioInputTokens: usage.audioInputTokens,
+        audioOutputTokens: usage.audioOutputTokens,
+        cost,
+      },
+    ],
+    totalInputTokens: usage.inputTokens,
+    totalOutputTokens: usage.outputTokens,
+    totalCachedTokens: usage.cachedTokens,
+    totalReasoningTokens: usage.reasoningTokens,
+    totalAudioInputTokens: usage.audioInputTokens,
+    totalAudioOutputTokens: usage.audioOutputTokens,
+    modelCalls: usage.modelCalls,
+    cost,
+  }
+}
+
+/** Stops the recorder after a failed run; keeps the previous path when stopping fails. */
+async function stopRecorderAfterFailure(
+  recorder: RecorderHandle,
+  recordingPath: string,
+): Promise<string> {
+  try {
+    return await withTimeout(recorder.stop(), 5000)
+  } catch {
+    /* ignore */
+    return recordingPath
+  }
+}
+
+async function teardownVoiceRooms(
+  recorder: RecorderHandle | undefined,
+  agentRoom: any,
+  userRoom: any,
+  deleteRoom: () => Promise<unknown>,
+): Promise<void> {
+  if (recorder) {
+    try {
+      await withTimeout(recorder.disconnect(), 5000)
+    } catch {
+      /* ignore */
+    }
+  }
+  if (agentRoom) {
+    try {
+      await withTimeout(agentRoom.disconnect(), 5000)
+    } catch {
+      /* ignore */
+    }
+  }
+  if (userRoom) {
+    try {
+      await withTimeout(userRoom.disconnect(), 5000)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Delete room — best-effort with timeout
+  try {
+    await withTimeout(deleteRoom(), 5000)
+  } catch {
+    /* best-effort — departureTimeout is the safety net */
+  }
+}
+
+function describeRunError(err: unknown): { message: string; stack?: string } {
+  return {
+    message: err instanceof Error ? err.message : String(err),
+    stack: err instanceof Error ? err.stack : undefined,
+  }
+}
+
+function expiryTimeoutMs(timeouts: Agent['timeouts']): number | undefined {
+  return timeouts?.expiry ?? timeouts?.maxDuration
+}
+
+function clearCaseTimers(
+  timeoutTimer: ReturnType<typeof setTimeout>,
+  inactivity: InactivityTimer | undefined,
+  expiryTimer: ReturnType<typeof setTimeout> | undefined,
+): void {
+  clearTimeout(timeoutTimer)
+  inactivity?.stop()
+  if (expiryTimer) clearTimeout(expiryTimer)
+}
+
+function agentWithToolMocks<S extends StateSchema>(
+  agent: Agent,
+  toolMocks: Parameters<typeof interceptTools<S>>[1] | undefined,
+): Agent {
+  return toolMocks ? (interceptTools(agent, toolMocks) as Agent) : agent
+}
+
 // ---------------------------------------------------------------------------
 // Main case runner
 // ---------------------------------------------------------------------------
@@ -248,16 +440,7 @@ export async function runVoiceCase<S extends StateSchema>(
   }
   const startMs = Date.now()
 
-  if (!isRealtimeConfig(evalCase.agent.model)) {
-    throw new Error(
-      `[adk/voice-eval] Agent "${evalCase.agent.name}" must have a realtime model config`,
-    )
-  }
-  if (!isRealtimeConfig(evalCase.userAgent.model)) {
-    throw new Error(
-      `[adk/voice-eval] User agent "${evalCase.userAgent.name}" must have a realtime model config`,
-    )
-  }
+  assertRealtimeAgents(evalCase)
 
   const { serverSdk, lk, rtc } = requireLiveKit()
 
@@ -334,9 +517,7 @@ export async function runVoiceCase<S extends StateSchema>(
     ])
 
     // --- Build main agent ---
-    const agent = evalCase.toolMocks
-      ? (interceptTools(evalCase.agent, evalCase.toolMocks) as Agent)
-      : evalCase.agent
+    const agent = agentWithToolMocks(evalCase.agent, evalCase.toolMocks)
 
     const invocationId = `inv_voice_eval_${createEventId()}`
     const renderCtx = await buildContextAsync(session as Session, agent, invocationId)
@@ -605,11 +786,7 @@ export async function runVoiceCase<S extends StateSchema>(
     })
 
     // --- Wire event listeners on main agent ---
-    const composedHook = composeHooks([...(agent.hooks ?? []), ...(options.hooks ?? [])])
-    const allHooks = [
-      ...((agent.hooks ?? []) as VoiceHook[]),
-      ...((options.hooks ?? []) as VoiceHook[]),
-    ]
+    const { composedHook, allHooks } = composeEvalHooks(agent, options.hooks)
     voiceEventHooks = allHooks.map((h) => h.onVoiceEvent).filter((fn) => fn != null)
     const transcriptFns = allHooks.map((h) => h.onTranscript).filter((fn) => fn != null)
     const fireTranscriptHooks =
@@ -822,7 +999,7 @@ export async function runVoiceCase<S extends StateSchema>(
       lkSession.on('speech_created', () => timer.agentReplyCreated())
     }
 
-    const expiryMs = agentTimeouts?.expiry ?? agentTimeouts?.maxDuration
+    const expiryMs = expiryTimeoutMs(agentTimeouts)
     if (expiryMs) {
       expiryTimer = setTimeout(() => {
         if (lifecycle.state !== 'active') return
@@ -864,9 +1041,7 @@ export async function runVoiceCase<S extends StateSchema>(
     await terminationPromise
 
     // Cleanup timers
-    clearTimeout(timeoutTimer)
-    inactivity?.stop()
-    if (expiryTimer) clearTimeout(expiryTimer)
+    clearCaseTimers(timeoutTimer, inactivity, expiryTimer)
 
     // Flush pending events
     await withTimeout(tracker.flush(), 5000)
@@ -874,28 +1049,13 @@ export async function runVoiceCase<S extends StateSchema>(
     // Shutdown voice sessions. When the eval intentionally disconnects a participant, LiveKit may
     // already have torn down RoomIO streams; final room disconnect/delete below owns cleanup.
     if (!roomDisconnectedDuringEval) {
-      try {
-        await withTimeout(lkSession.close(), 5000)
-      } catch {
-        /* ignore — WritableStream may already be closed */
-      }
-      try {
-        await withTimeout(userLkSession.close(), 5000)
-      } catch {
-        /* ignore */
-      }
+      await closeVoiceSessions(lkSession, userLkSession)
     }
 
     // --- Collect results ---
     if (recorder) {
       recordingPath = await withTimeout(recorder.stop(), 5000)
-      const roomTiming = recorder.tracker.finalize()
-      timing = {
-        ...roomTiming,
-        responseTimes: sessionTracker.getResponseTimes(),
-        timeToFirstSpeechMs:
-          sessionTracker.getTimeToFirstSpeech() ?? roomTiming.timeToFirstSpeechMs,
-      }
+      timing = mergeSessionTiming(recorder.tracker.finalize(), sessionTracker)
     } else {
       timing = {
         ...emptyTiming(),
@@ -906,90 +1066,18 @@ export async function runVoiceCase<S extends StateSchema>(
 
     const usage = tracker.getUsage()
     if (usage) {
-      const modelName = getModelName(agent.model) ?? usage.modelName ?? 'unknown'
-      const cost =
-        calculateCost(
-          {
-            provider: getModelProvider(agent.model),
-            modelName,
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            cachedTokens: usage.cachedTokens,
-            reasoningTokens: usage.reasoningTokens,
-            audioInputTokens: usage.audioInputTokens,
-            audioOutputTokens: usage.audioOutputTokens,
-            audioCachedTokens: usage.audioCachedTokens,
-          },
-          await loadPricing(),
-        ) ?? undefined
-      usageSummary = {
-        models: [
-          {
-            modelName,
-            calls: usage.modelCalls,
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            cachedTokens: usage.cachedTokens,
-            reasoningTokens: usage.reasoningTokens,
-            audioInputTokens: usage.audioInputTokens,
-            audioOutputTokens: usage.audioOutputTokens,
-            cost,
-          },
-        ],
-        totalInputTokens: usage.inputTokens,
-        totalOutputTokens: usage.outputTokens,
-        totalCachedTokens: usage.cachedTokens,
-        totalReasoningTokens: usage.reasoningTokens,
-        totalAudioInputTokens: usage.audioInputTokens,
-        totalAudioOutputTokens: usage.audioOutputTokens,
-        modelCalls: usage.modelCalls,
-        cost,
-      }
+      usageSummary = await summarizeVoiceUsage(usage, agent)
     }
   } catch (err) {
     status = 'error'
-    error = {
-      message: err instanceof Error ? err.message : String(err),
-      stack: err instanceof Error ? err.stack : undefined,
-    }
+    error = describeRunError(err)
     if (recorder) {
-      try {
-        recordingPath = await withTimeout(recorder.stop(), 5000)
-      } catch {
-        /* ignore */
-      }
+      recordingPath = await stopRecorderAfterFailure(recorder, recordingPath)
     }
   } finally {
     // --- Teardown ---
     unbindEvalControl?.()
-    if (recorder) {
-      try {
-        await withTimeout(recorder.disconnect(), 5000)
-      } catch {
-        /* ignore */
-      }
-    }
-    if (agentRoom) {
-      try {
-        await withTimeout(agentRoom.disconnect(), 5000)
-      } catch {
-        /* ignore */
-      }
-    }
-    if (userRoom) {
-      try {
-        await withTimeout(userRoom.disconnect(), 5000)
-      } catch {
-        /* ignore */
-      }
-    }
-
-    // Delete room — best-effort with timeout
-    try {
-      await withTimeout(svc.deleteRoom(roomName), 5000)
-    } catch {
-      /* best-effort — departureTimeout is the safety net */
-    }
+    await teardownVoiceRooms(recorder, agentRoom, userRoom, () => svc.deleteRoom(roomName))
   }
 
   return {
@@ -1010,6 +1098,48 @@ export async function runVoiceCase<S extends StateSchema>(
 // ---------------------------------------------------------------------------
 // Transcript builder — from session events
 // ---------------------------------------------------------------------------
+
+type TranscriptSourceEntry = TranscriptSource & { role: 'assistant' | 'user' }
+
+function fallbackTranscriptEntries(
+  fallbackEvents: readonly Event[],
+  includeAgent: boolean,
+  includeUser: boolean,
+): TranscriptSourceEntry[] {
+  const entries: TranscriptSourceEntry[] = []
+  for (const event of fallbackEvents) {
+    if (event.type === 'assistant' && includeAgent) {
+      const text = 'text' in event ? (event.text ?? '') : ''
+      if (text)
+        entries.push({
+          role: 'assistant',
+          text,
+          createdAt: event.createdAt ?? 0,
+        })
+    } else if (event.type === 'user' && includeUser) {
+      const text = 'text' in event ? (event.text ?? '') : ''
+      if (text) entries.push({ role: 'user', text, createdAt: event.createdAt ?? 0 })
+    }
+  }
+  return entries
+}
+
+function transcriptEntryFor(
+  entry: TranscriptSourceEntry,
+  roomStartMs: number,
+  turnIndex: number,
+): TranscriptEntry {
+  return {
+    role: entry.role,
+    text: entry.text,
+    startMs: entry.speechStartMs != null ? entry.speechStartMs - roomStartMs : undefined,
+    endMs:
+      (entry.speechEndMs ?? entry.createdAt)
+        ? (entry.speechEndMs ?? entry.createdAt) - roomStartMs
+        : undefined,
+    turnIndex,
+  }
+}
 
 function buildTranscript(
   roomStartMs: number,
@@ -1038,20 +1168,9 @@ function buildTranscript(
 
   // Fall back to session events when transcript sources are empty
   if (!agentEntries.length || !userEntries.length) {
-    for (const event of fallbackEvents) {
-      if (event.type === 'assistant' && !agentEntries.length) {
-        const text = 'text' in event ? (event.text ?? '') : ''
-        if (text)
-          entries.push({
-            role: 'assistant',
-            text,
-            createdAt: event.createdAt ?? 0,
-          })
-      } else if (event.type === 'user' && !userEntries.length) {
-        const text = 'text' in event ? (event.text ?? '') : ''
-        if (text) entries.push({ role: 'user', text, createdAt: event.createdAt ?? 0 })
-      }
-    }
+    entries.push(
+      ...fallbackTranscriptEntries(fallbackEvents, !agentEntries.length, !userEntries.length),
+    )
   }
 
   entries.sort((a, b) => (a.speechStartMs ?? a.createdAt) - (b.speechStartMs ?? b.createdAt))
@@ -1063,16 +1182,7 @@ function buildTranscript(
   for (const entry of entries) {
     if (lastRole && entry.role !== lastRole) turnIndex++
     lastRole = entry.role
-    transcript.push({
-      role: entry.role,
-      text: entry.text,
-      startMs: entry.speechStartMs != null ? entry.speechStartMs - roomStartMs : undefined,
-      endMs:
-        (entry.speechEndMs ?? entry.createdAt)
-          ? (entry.speechEndMs ?? entry.createdAt) - roomStartMs
-          : undefined,
-      turnIndex,
-    })
+    transcript.push(transcriptEntryFor(entry, roomStartMs, turnIndex))
   }
 
   return transcript

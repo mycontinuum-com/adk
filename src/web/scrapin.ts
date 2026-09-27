@@ -95,6 +95,79 @@ function formatDate(date: { month?: number; year: number } | null): string {
   return `${month}${date.year}`
 }
 
+type ScrapinPerson = NonNullable<ScrapinPersonResponse['person']>
+type ScrapinCompany = NonNullable<ScrapinPersonResponse['company']>
+
+function pushExperience(lines: string[], person: ScrapinPerson): void {
+  if (person.positions?.positionHistory?.length) {
+    lines.push('## Experience')
+    lines.push('')
+    for (const pos of person.positions.positionHistory) {
+      const dates = `${formatDate(pos.startEndDate.start)} - ${formatDate(pos.startEndDate.end)}`
+      const companyLink = pos.linkedInUrl
+        ? `[${pos.companyName}](${pos.linkedInUrl})`
+        : pos.companyName
+      lines.push(`### ${pos.title} at ${companyLink}`)
+      lines.push(`*${dates}*`)
+      if (pos.companyLocation) lines.push(`${pos.companyLocation}`)
+      if (pos.description) {
+        lines.push('')
+        lines.push(pos.description)
+      }
+      lines.push('')
+    }
+  }
+}
+
+function pushEducation(lines: string[], person: ScrapinPerson): void {
+  if (person.schools?.educationHistory?.length) {
+    lines.push('## Education')
+    lines.push('')
+    for (const edu of person.schools.educationHistory) {
+      lines.push(`### ${edu.schoolName}`)
+      if (edu.degreeName) lines.push(`${edu.degreeName}`)
+      if (edu.fieldOfStudy) lines.push(`Field: ${edu.fieldOfStudy}`)
+      if (edu.startEndDate) {
+        const startYear = edu.startEndDate.start?.year ?? ''
+        const endYear = edu.startEndDate.end?.year ?? 'Present'
+        if (startYear || endYear !== 'Present') {
+          lines.push(`*${startYear} - ${endYear}*`)
+        }
+      }
+      lines.push('')
+    }
+  }
+}
+
+function pushCertifications(lines: string[], person: ScrapinPerson): void {
+  if (person.certifications?.certificationHistory?.length) {
+    lines.push('## Certifications')
+    lines.push('')
+    for (const cert of person.certifications.certificationHistory) {
+      lines.push(`- **${cert.name}**`)
+      if (cert.organizationName) lines.push(`  ${cert.organizationName}`)
+      if (cert.issuedDate) lines.push(`  ${cert.issuedDate}`)
+    }
+    lines.push('')
+  }
+}
+
+function pushCompany(lines: string[], company: ScrapinCompany): void {
+  lines.push('## Current Company')
+  lines.push('')
+  const companyLink = company.linkedInUrl
+    ? `[${company.name}](${company.linkedInUrl})`
+    : company.name
+  lines.push(`**${companyLink}**`)
+  if (company.industry) lines.push(`Industry: ${company.industry}`)
+  if (company.employeeCount) lines.push(`Employees: ~${company.employeeCount}`)
+  if (company.description) {
+    lines.push('')
+    lines.push(company.description)
+  }
+  lines.push('')
+}
+
 function personToMarkdown(data: ScrapinPersonResponse): string {
   const { person, company } = data
   if (!person) return ''
@@ -120,42 +193,9 @@ function personToMarkdown(data: ScrapinPersonResponse): string {
     lines.push('')
   }
 
-  if (person.positions?.positionHistory?.length) {
-    lines.push('## Experience')
-    lines.push('')
-    for (const pos of person.positions.positionHistory) {
-      const dates = `${formatDate(pos.startEndDate.start)} - ${formatDate(pos.startEndDate.end)}`
-      const companyLink = pos.linkedInUrl
-        ? `[${pos.companyName}](${pos.linkedInUrl})`
-        : pos.companyName
-      lines.push(`### ${pos.title} at ${companyLink}`)
-      lines.push(`*${dates}*`)
-      if (pos.companyLocation) lines.push(`${pos.companyLocation}`)
-      if (pos.description) {
-        lines.push('')
-        lines.push(pos.description)
-      }
-      lines.push('')
-    }
-  }
+  pushExperience(lines, person)
 
-  if (person.schools?.educationHistory?.length) {
-    lines.push('## Education')
-    lines.push('')
-    for (const edu of person.schools.educationHistory) {
-      lines.push(`### ${edu.schoolName}`)
-      if (edu.degreeName) lines.push(`${edu.degreeName}`)
-      if (edu.fieldOfStudy) lines.push(`Field: ${edu.fieldOfStudy}`)
-      if (edu.startEndDate) {
-        const startYear = edu.startEndDate.start?.year ?? ''
-        const endYear = edu.startEndDate.end?.year ?? 'Present'
-        if (startYear || endYear !== 'Present') {
-          lines.push(`*${startYear} - ${endYear}*`)
-        }
-      }
-      lines.push('')
-    }
-  }
+  pushEducation(lines, person)
 
   if (person.skills?.length) {
     lines.push('## Skills')
@@ -164,16 +204,7 @@ function personToMarkdown(data: ScrapinPersonResponse): string {
     lines.push('')
   }
 
-  if (person.certifications?.certificationHistory?.length) {
-    lines.push('## Certifications')
-    lines.push('')
-    for (const cert of person.certifications.certificationHistory) {
-      lines.push(`- **${cert.name}**`)
-      if (cert.organizationName) lines.push(`  ${cert.organizationName}`)
-      if (cert.issuedDate) lines.push(`  ${cert.issuedDate}`)
-    }
-    lines.push('')
-  }
+  pushCertifications(lines, person)
 
   if (person.languages?.length) {
     lines.push('## Languages')
@@ -183,19 +214,7 @@ function personToMarkdown(data: ScrapinPersonResponse): string {
   }
 
   if (company) {
-    lines.push('## Current Company')
-    lines.push('')
-    const companyLink = company.linkedInUrl
-      ? `[${company.name}](${company.linkedInUrl})`
-      : company.name
-    lines.push(`**${companyLink}**`)
-    if (company.industry) lines.push(`Industry: ${company.industry}`)
-    if (company.employeeCount) lines.push(`Employees: ~${company.employeeCount}`)
-    if (company.description) {
-      lines.push('')
-      lines.push(company.description)
-    }
-    lines.push('')
+    pushCompany(lines, company)
   }
 
   return lines.join('\n')

@@ -34,26 +34,14 @@ interface TraceBlockStartLineProps {
   showIds: boolean
 }
 
-function TraceBlockStartLine({
-  block,
-  indent,
-  isSelected,
-  contentMode,
-  showIds,
-}: TraceBlockStartLineProps): React.ReactElement {
-  const handoffType = block.handoffOrigin?.type
-  const isSpawn = handoffType === 'spawn'
-  const isDispatch = handoffType === 'dispatch'
-  const isTransfer = handoffType === 'transfer'
-  const isRunning = block.state === 'running'
-  const isYielded = block.state === 'yielded'
-  const hasError = block.hasError
-  const loopLabel =
-    block.loopIteration !== undefined && block.loopMax !== undefined
-      ? ` ${block.loopIteration}/${block.loopMax}`
-      : null
+function loopLabelFor(block: InvocationBlock): string | null {
+  return block.loopIteration !== undefined && block.loopMax !== undefined
+    ? ` ${block.loopIteration}/${block.loopMax}`
+    : null
+}
 
-  const kindIndicator =
+function kindIndicatorFor(kind: InvocationBlock['kind']): React.ReactElement | null {
+  return (
     {
       agent: (
         <Text color="gray" dimColor>
@@ -85,31 +73,58 @@ function TraceBlockStartLine({
           ○ loop
         </Text>
       ),
-    }[block.kind] ?? null
+    }[kind] ?? null
+  )
+}
 
-  let edgeIndicator: React.ReactNode = null
-  if (isSpawn) {
-    edgeIndicator = (
+function edgeIndicatorFor(
+  handoffType: NonNullable<InvocationBlock['handoffOrigin']>['type'] | undefined,
+): React.ReactNode {
+  if (handoffType === 'spawn') {
+    return (
       <Text color="gray" dimColor>
         :spawn
       </Text>
     )
-  } else if (isDispatch) {
-    edgeIndicator = (
+  } else if (handoffType === 'dispatch') {
+    return (
       <Text color="gray" dimColor>
         :dispatch
       </Text>
     )
-  } else if (isTransfer) {
-    edgeIndicator = (
+  } else if (handoffType === 'transfer') {
+    return (
       <Text color="gray" dimColor>
         :transfer
       </Text>
     )
   }
+  return null
+}
+
+function blockStartColor(hasError: boolean | undefined, isActive: boolean): string {
+  return hasError ? 'redBright' : isActive ? 'yellowBright' : 'cyanBright'
+}
+
+function TraceBlockStartLine({
+  block,
+  indent,
+  isSelected,
+  contentMode,
+  showIds,
+}: TraceBlockStartLineProps): React.ReactElement {
+  const handoffType = block.handoffOrigin?.type
+  const isSpawn = handoffType === 'spawn'
+  const isDispatch = handoffType === 'dispatch'
+  const isRunning = block.state === 'running'
+  const isYielded = block.state === 'yielded'
+  const hasError = block.hasError
+  const loopLabel = loopLabelFor(block)
+  const kindIndicator = kindIndicatorFor(block.kind)
+  const edgeIndicator = edgeIndicatorFor(handoffType)
 
   const startChar = isSpawn || isDispatch ? '╠═' : '┌─'
-  const startColor = hasError ? 'redBright' : isRunning || isYielded ? 'yellowBright' : 'cyanBright'
+  const startColor = blockStartColor(hasError, isRunning || isYielded)
 
   const blockActive = isBlockActive(block)
   const eventCount = blockActive ? countBlockEvents(block) : 0
@@ -166,66 +181,63 @@ interface TraceCleanEventLineProps {
   yieldedToolIds?: Set<string>
 }
 
-function TraceCleanEventLine({
-  line,
-  event,
-  indent,
-  isSelected,
-  skipTopLines,
-  terminalWidth,
-  yieldedToolIds,
-}: TraceCleanEventLineProps): React.ReactElement | null {
-  const eventType = event.type
-  let rawText: string
-  let displayLabel: string
-  let displayColor: string
-  let isPendingYield = false
+interface CleanEventDisplay {
+  rawText: string
+  displayLabel: string
+  displayColor: string
+  isPendingYield: boolean
+}
 
+/** Text, label and colour for a clean-mode event line; null for events it does not show. */
+function cleanEventDisplay(
+  event: DisplayEvent,
+  yieldedToolIds: Set<string> | undefined,
+): CleanEventDisplay | null {
   if (event.type === 'delta_batch') {
-    rawText = event.finalText
     const isThoughtDelta = event.deltaType === 'thought_delta'
-    displayLabel = isThoughtDelta ? 'think' : 'output'
-    displayColor = isThoughtDelta ? 'gray' : 'greenBright'
-  } else if (event.type === 'tool_call') {
+    return {
+      rawText: event.finalText,
+      displayLabel: isThoughtDelta ? 'think' : 'output',
+      displayColor: isThoughtDelta ? 'gray' : 'greenBright',
+      isPendingYield: false,
+    }
+  }
+  if (event.type === 'tool_call') {
     const argsStr = event.args ? JSON.stringify(event.args) : ''
-    rawText = argsStr ? `${event.name} ${argsStr}` : event.name
-    displayLabel = 'call'
-    isPendingYield = !!(event.yields && yieldedToolIds?.has(event.callId))
-    displayColor = isPendingYield ? 'yellowBright' : 'cyanBright'
-  } else if (event.type === 'tool_input') {
+    const isPendingYield = !!(event.yields && yieldedToolIds?.has(event.callId))
+    return {
+      rawText: argsStr ? `${event.name} ${argsStr}` : event.name,
+      displayLabel: 'call',
+      displayColor: isPendingYield ? 'yellowBright' : 'cyanBright',
+      isPendingYield,
+    }
+  }
+  if (event.type === 'tool_input') {
     const inputStr = event.input ? JSON.stringify(event.input) : ''
-    rawText = inputStr ? `${event.name} ${inputStr}` : event.name
-    displayLabel = 'input'
-    displayColor = 'yellowBright'
-  } else if ('text' in event) {
-    rawText = event.text
+    return {
+      rawText: inputStr ? `${event.name} ${inputStr}` : event.name,
+      displayLabel: 'input',
+      displayColor: 'yellowBright',
+      isPendingYield: false,
+    }
+  }
+  if ('text' in event) {
     const config = getEventConfig(event)
-    displayLabel = config.label
-    displayColor = config.color
-  } else {
-    return null
+    return {
+      rawText: event.text,
+      displayLabel: config.label,
+      displayColor: config.color,
+      isPendingYield: false,
+    }
   }
+  return null
+}
 
-  const isThoughtType =
-    event.type === 'thought' ||
-    (event.type === 'delta_batch' && event.deltaType === 'thought_delta')
-  if (isThoughtType && (!rawText || rawText.trim() === '')) {
-    return null
-  }
-
-  const isStreaming = eventType === 'delta_batch'
-  const showSpinner = isStreaming || isPendingYield
-  const spinnerWidth = showSpinner ? 2 : 0
-  const isInsideModelContext = eventType !== 'user'
-  const contentModeIndent = isInsideModelContext ? getIndent(Math.max(0, line.depth - 1)) : indent
-  const selectionIndicator = isSelected ? '▸' : ' '
-  const labelWidth = LABEL_WIDTH
-  const labelPadding = ' '.repeat(Math.max(0, labelWidth - displayLabel.length - spinnerWidth))
-  const continuationPadding = ' '.repeat(labelWidth + 1)
-  const indentWidth = contentModeIndent.length
-  const prefixWidth = indentWidth + 1 + 3 + labelWidth + 1
-  const maxTextWidth = Math.max(MIN_TEXT_WIDTH, terminalWidth - prefixWidth - 2)
-
+function formatCleanEventText(
+  rawText: string,
+  isThoughtType: boolean,
+  maxTextWidth: number,
+): string {
   let text = rawText
   const isJson = rawText.trimStart().startsWith('{') || rawText.trimStart().startsWith('[')
 
@@ -254,7 +266,13 @@ function TraceCleanEventLine({
       text = singleLine
     }
   }
+  return text
+}
 
+function wrapCleanEventText(
+  text: string,
+  maxTextWidth: number,
+): { text: string; isFirst: boolean; isFirstOfSource: boolean }[] {
   const wrapLine = (sourceLine: string): string[] => {
     if (sourceLine.length <= maxTextWidth) return [sourceLine]
 
@@ -291,6 +309,55 @@ function TraceCleanEventLine({
       })
     })
   })
+  return allLines
+}
+
+/** Lines shown for an event, reserving one for the truncation notice when it overflows. */
+function cappedVisualLineCount(lineCount: number, skipTopLines: number): number {
+  const willTruncate = lineCount > MAX_VISUAL_LINES_PER_EVENT && skipTopLines === 0
+  return willTruncate
+    ? MAX_VISUAL_LINES_PER_EVENT - 1
+    : Math.min(lineCount, MAX_VISUAL_LINES_PER_EVENT)
+}
+
+function TraceCleanEventLine({
+  line,
+  event,
+  indent,
+  isSelected,
+  skipTopLines,
+  terminalWidth,
+  yieldedToolIds,
+}: TraceCleanEventLineProps): React.ReactElement | null {
+  const eventType = event.type
+  const display = cleanEventDisplay(event, yieldedToolIds)
+  if (!display) {
+    return null
+  }
+  const { rawText, displayLabel, displayColor, isPendingYield } = display
+
+  const isThoughtType =
+    event.type === 'thought' ||
+    (event.type === 'delta_batch' && event.deltaType === 'thought_delta')
+  if (isThoughtType && (!rawText || rawText.trim() === '')) {
+    return null
+  }
+
+  const isStreaming = eventType === 'delta_batch'
+  const showSpinner = isStreaming || isPendingYield
+  const spinnerWidth = showSpinner ? 2 : 0
+  const isInsideModelContext = eventType !== 'user'
+  const contentModeIndent = isInsideModelContext ? getIndent(Math.max(0, line.depth - 1)) : indent
+  const selectionIndicator = isSelected ? '▸' : ' '
+  const labelWidth = LABEL_WIDTH
+  const labelPadding = ' '.repeat(Math.max(0, labelWidth - displayLabel.length - spinnerWidth))
+  const continuationPadding = ' '.repeat(labelWidth + 1)
+  const indentWidth = contentModeIndent.length
+  const prefixWidth = indentWidth + 1 + 3 + labelWidth + 1
+  const maxTextWidth = Math.max(MIN_TEXT_WIDTH, terminalWidth - prefixWidth - 2)
+
+  const text = formatCleanEventText(rawText, isThoughtType, maxTextWidth)
+  const allLines = wrapCleanEventText(text, maxTextWidth)
 
   const isAssistantType =
     event.type === 'assistant' ||
@@ -299,10 +366,7 @@ function TraceCleanEventLine({
   const jsonKeyColor = isAssistantType ? 'greenBright' : isToolCallType ? displayColor : null
   const isDimmedLabel = (isThoughtType || isToolCallType) && !isPendingYield && !isStreaming
 
-  const willTruncate = allLines.length > MAX_VISUAL_LINES_PER_EVENT && skipTopLines === 0
-  const cappedTotalLines = willTruncate
-    ? MAX_VISUAL_LINES_PER_EVENT - 1
-    : Math.min(allLines.length, MAX_VISUAL_LINES_PER_EVENT)
+  const cappedTotalLines = cappedVisualLineCount(allLines.length, skipTopLines)
   const remainingLines = Math.max(0, cappedTotalLines - skipTopLines)
   const linesToRender = allLines.slice(skipTopLines, skipTopLines + remainingLines)
   const isTopPartial = skipTopLines > 0
@@ -418,37 +482,17 @@ interface TraceBlockEndLineProps {
   terminalWidth: number
 }
 
-function TraceBlockEndLine({
-  block,
-  indent,
-  isSelected,
-  contentMode,
-  showDurations,
-  terminalWidth,
-}: TraceBlockEndLineProps): React.ReactElement {
+/** Cost, duration or handoff target shown after a finished or running block. */
+function blockEndStatus(
+  block: InvocationBlock,
+  showDurations: boolean,
+  costStr: string,
+): React.ReactNode {
   const isRunning = block.state === 'running'
   const isYielded = block.state === 'yielded'
-  const hasError = block.hasError
-  const isSpawnOrDispatch =
-    block.handoffOrigin?.type === 'spawn' || block.handoffOrigin?.type === 'dispatch'
   const isTransferred = block.state === 'transferred'
-  const endChar = isSpawnOrDispatch ? '╚═' : '└─'
-  const endColor = hasError ? 'redBright' : isRunning || isYielded ? 'yellowBright' : 'cyanBright'
-
-  const endEvent = block.events.find((e) => e.type === 'invocation_end') as
-    | { error?: string }
-    | undefined
-  const errorMsg = endEvent?.error
-  const childHasError =
-    block.children.some((c) => c.hasError) || block.contextBlocks.some((c) => c.hasError)
-  const showError = Boolean(errorMsg) && !childHasError
-  const costStr = block.cost !== undefined ? formatCost(block.cost) : ''
-
-  let statusContent: React.ReactNode
-  if (contentMode) {
-    statusContent = null
-  } else if (isRunning || isYielded) {
-    statusContent = costStr ? (
+  if (isRunning || isYielded) {
+    return costStr ? (
       <Text color="gray" dimColor>
         {costStr}
       </Text>
@@ -456,7 +500,7 @@ function TraceBlockEndLine({
   } else if (isTransferred && block.handoffTarget) {
     const durationStr =
       showDurations && block.duration !== undefined ? formatDuration(block.duration) : ''
-    statusContent = (
+    return (
       <>
         <Text color="yellowBright" dimColor>
           {block.handoffTarget.agentName}
@@ -476,7 +520,7 @@ function TraceBlockEndLine({
       </>
     )
   } else if (showDurations && block.duration !== undefined) {
-    statusContent = (
+    return (
       <>
         <Text color="gray" dimColor>
           {formatDuration(block.duration)}
@@ -490,7 +534,7 @@ function TraceBlockEndLine({
       </>
     )
   } else {
-    statusContent = (
+    return (
       <>
         <Text color="gray" dimColor>
           {block.state}
@@ -504,6 +548,34 @@ function TraceBlockEndLine({
       </>
     )
   }
+}
+
+function TraceBlockEndLine({
+  block,
+  indent,
+  isSelected,
+  contentMode,
+  showDurations,
+  terminalWidth,
+}: TraceBlockEndLineProps): React.ReactElement {
+  const isRunning = block.state === 'running'
+  const isYielded = block.state === 'yielded'
+  const hasError = block.hasError
+  const isSpawnOrDispatch =
+    block.handoffOrigin?.type === 'spawn' || block.handoffOrigin?.type === 'dispatch'
+  const endChar = isSpawnOrDispatch ? '╚═' : '└─'
+  const endColor = hasError ? 'redBright' : isRunning || isYielded ? 'yellowBright' : 'cyanBright'
+
+  const endEvent = block.events.find((e) => e.type === 'invocation_end') as
+    | { error?: string }
+    | undefined
+  const errorMsg = endEvent?.error
+  const childHasError =
+    block.children.some((c) => c.hasError) || block.contextBlocks.some((c) => c.hasError)
+  const showError = Boolean(errorMsg) && !childHasError
+  const costStr = block.cost !== undefined ? formatCost(block.cost) : ''
+
+  const statusContent = contentMode ? null : blockEndStatus(block, showDurations, costStr)
 
   return (
     <Box>
@@ -691,6 +763,113 @@ interface TraceLineRowProps {
   executingCallIds?: Set<string>
 }
 
+type EventRowOptions = Pick<
+  TraceLineRowProps,
+  | 'selectedIndex'
+  | 'skipTopLines'
+  | 'contentMode'
+  | 'terminalWidth'
+  | 'yieldedToolIds'
+  | 'executingCallIds'
+>
+
+function renderEventRow(
+  line: FlattenedLine,
+  event: DisplayEvent,
+  indent: string,
+  {
+    selectedIndex,
+    skipTopLines,
+    contentMode,
+    terminalWidth,
+    yieldedToolIds,
+    executingCallIds,
+  }: EventRowOptions,
+): React.ReactElement | null {
+  const isSelected = line.eventIndex === selectedIndex
+  const eventType = event.type
+  const isCleanModeType =
+    eventType === 'user' ||
+    eventType === 'assistant' ||
+    eventType === 'thought' ||
+    eventType === 'delta_batch' ||
+    eventType === 'tool_call' ||
+    eventType === 'tool_input'
+  const useCleanModeRendering =
+    eventType === 'user' ||
+    eventType === 'assistant' ||
+    eventType === 'thought' ||
+    eventType === 'delta_batch' ||
+    eventType === 'tool_call' ||
+    eventType === 'tool_input'
+
+  if (contentMode && !isCleanModeType) {
+    return null
+  }
+
+  if (contentMode && useCleanModeRendering) {
+    return (
+      <TraceCleanEventLine
+        line={line}
+        event={event}
+        indent={indent}
+        isSelected={isSelected}
+        skipTopLines={skipTopLines}
+        terminalWidth={terminalWidth}
+        yieldedToolIds={yieldedToolIds}
+      />
+    )
+  }
+
+  const isInsideModelContext = eventType !== 'user'
+  const eventIndent =
+    contentMode && isInsideModelContext ? getIndent(Math.max(0, line.depth - 1)) : indent
+  const eventDepth = contentMode && isInsideModelContext ? Math.max(0, line.depth - 1) : line.depth
+  const skipHighlight = event.type === 'tool_result'
+  return (
+    <Box>
+      <Text>
+        {RESET}
+        {eventIndent}
+      </Text>
+      <EventLine
+        event={event}
+        isSelected={isSelected}
+        yieldedToolIds={yieldedToolIds}
+        executingCallIds={executingCallIds}
+        depth={eventDepth}
+        skipHighlighting={skipHighlight}
+      />
+    </Box>
+  )
+}
+
+function renderContextStartRow(
+  contextBlock: ContextBlock,
+  indent: string,
+  isSelected: boolean,
+): React.ReactElement {
+  const isPending = !contextBlock.responseEvent
+  const hasError = contextBlock.hasError
+  const bracketColor = hasError ? 'redBright' : isPending ? 'yellowBright' : 'magentaBright'
+  return (
+    <Box>
+      <Text>
+        {RESET}
+        {indent}
+        {isSelected ? '▸' : ' '}
+        <Text color={bracketColor}>┌─</Text> <Text color="magentaBright">model</Text>
+        {isPending && !hasError && (
+          <>
+            <Text> </Text>
+            <SyncedSpinner color="magentaBright" />
+          </>
+        )}
+      </Text>
+    </Box>
+  )
+}
+
 export function TraceLineRow({
   line,
   selectedIndex,
@@ -717,87 +896,19 @@ export function TraceLineRow({
   }
 
   if (line.type === 'event' && line.event) {
-    const isSelected = line.eventIndex === selectedIndex
-    const eventType = line.event.type
-    const isCleanModeType =
-      eventType === 'user' ||
-      eventType === 'assistant' ||
-      eventType === 'thought' ||
-      eventType === 'delta_batch' ||
-      eventType === 'tool_call' ||
-      eventType === 'tool_input'
-    const useCleanModeRendering =
-      eventType === 'user' ||
-      eventType === 'assistant' ||
-      eventType === 'thought' ||
-      eventType === 'delta_batch' ||
-      eventType === 'tool_call' ||
-      eventType === 'tool_input'
-
-    if (contentMode && !isCleanModeType) {
-      return null
-    }
-
-    if (contentMode && useCleanModeRendering) {
-      return (
-        <TraceCleanEventLine
-          line={line}
-          event={line.event}
-          indent={indent}
-          isSelected={isSelected}
-          skipTopLines={skipTopLines}
-          terminalWidth={terminalWidth}
-          yieldedToolIds={yieldedToolIds}
-        />
-      )
-    }
-
-    const isInsideModelContext = eventType !== 'user'
-    const eventIndent =
-      contentMode && isInsideModelContext ? getIndent(Math.max(0, line.depth - 1)) : indent
-    const eventDepth =
-      contentMode && isInsideModelContext ? Math.max(0, line.depth - 1) : line.depth
-    const skipHighlight = line.event.type === 'tool_result'
-    return (
-      <Box>
-        <Text>
-          {RESET}
-          {eventIndent}
-        </Text>
-        <EventLine
-          event={line.event}
-          isSelected={isSelected}
-          yieldedToolIds={yieldedToolIds}
-          executingCallIds={executingCallIds}
-          depth={eventDepth}
-          skipHighlighting={skipHighlight}
-        />
-      </Box>
-    )
+    return renderEventRow(line, line.event, indent, {
+      selectedIndex,
+      skipTopLines,
+      contentMode,
+      terminalWidth,
+      yieldedToolIds,
+      executingCallIds,
+    })
   }
 
   if (line.type === 'context_start' && line.contextBlock) {
     if (contentMode) return null
-    const isSelected = line.eventIndex === selectedIndex
-    const isPending = !line.contextBlock.responseEvent
-    const hasError = line.contextBlock.hasError
-    const bracketColor = hasError ? 'redBright' : isPending ? 'yellowBright' : 'magentaBright'
-    return (
-      <Box>
-        <Text>
-          {RESET}
-          {indent}
-          {isSelected ? '▸' : ' '}
-          <Text color={bracketColor}>┌─</Text> <Text color="magentaBright">model</Text>
-          {isPending && !hasError && (
-            <>
-              <Text> </Text>
-              <SyncedSpinner color="magentaBright" />
-            </>
-          )}
-        </Text>
-      </Box>
-    )
+    return renderContextStartRow(line.contextBlock, indent, line.eventIndex === selectedIndex)
   }
 
   if (line.type === 'context_child' && line.event) {

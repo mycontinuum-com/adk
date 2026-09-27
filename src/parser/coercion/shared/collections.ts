@@ -126,6 +126,24 @@ function findKeyInsensitive(
   return undefined
 }
 
+function applyExtraKeys(
+  inputObj: Record<string, unknown>,
+  usedInputKeys: Set<string>,
+  passthrough: boolean,
+  result: Record<string, unknown>,
+  ctx: CoercionContext,
+): void {
+  for (const [inputKey, val] of Object.entries(inputObj)) {
+    if (!usedInputKeys.has(inputKey)) {
+      if (passthrough) {
+        result[inputKey] = val
+      } else {
+        addCorrection(ctx, inputKey, undefined, `Extra key "${inputKey}" ignored`, 'extraKey')
+      }
+    }
+  }
+}
+
 export function coerceObject<Schema extends CoercibleSchema>(
   value: unknown,
   shape: Record<string, Schema>,
@@ -183,15 +201,7 @@ export function coerceObject<Schema extends CoercibleSchema>(
     }
   }
 
-  for (const [inputKey, val] of Object.entries(inputObj)) {
-    if (!usedInputKeys.has(inputKey)) {
-      if (passthrough) {
-        result[inputKey] = val
-      } else {
-        addCorrection(ctx, inputKey, undefined, `Extra key "${inputKey}" ignored`, 'extraKey')
-      }
-    }
-  }
+  applyExtraKeys(inputObj, usedInputKeys, passthrough, result, ctx)
 
   if (Object.keys(result).length === 0 && Object.keys(shape).length > 0) {
     addCorrection(ctx, value, result, 'Object had no matching fields', 'noFields')

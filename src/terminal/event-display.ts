@@ -211,6 +211,173 @@ export interface EventSummary {
   dimmed?: boolean
 }
 
+type EventOfType<T extends DisplayEvent['type']> = Extract<DisplayEvent, { type: T }>
+
+function thoughtSummary(event: EventOfType<'thought'>, config: EventDisplayConfig): EventSummary {
+  const fallback = !event.text ? getThoughtFallback(event) : null
+  if (fallback) return { ...config, text: truncate(fallback), textColor: 'gray' }
+  return { ...config, text: event.text ? truncate(event.text) : undefined }
+}
+
+function deltaBatchSummary(e: DeltaBatchEvent): EventSummary {
+  const isThought = e.deltaType === 'thought_delta'
+  const displayText = isThought ? extractCurrentThoughtBlock(e.finalText) : e.finalText
+  return {
+    label: isThought ? 'think' : 'output',
+    color: isThought ? 'gray' : 'greenBright',
+    dimmed: true,
+    text: truncate(displayText),
+  }
+}
+
+function toolCallSummary(
+  event: EventOfType<'tool_call'>,
+  config: EventDisplayConfig,
+): EventSummary {
+  const argsStr = formatJson(event.args)
+  return {
+    ...config,
+    color: event.yields ? 'yellowBright' : config.color,
+    text: argsStr ? `${event.name} ${truncate(argsStr)}` : event.name,
+  }
+}
+
+function toolResultSummary(
+  event: EventOfType<'tool_result'>,
+  config: EventDisplayConfig,
+): EventSummary {
+  if (event.error) {
+    return {
+      ...config,
+      color: 'redBright',
+      text: `${event.name} error: ${truncate(event.error)}`,
+    }
+  }
+  const resultStr =
+    event.result === undefined ? 'void' : formatJson(event.result) || String(event.result)
+  return {
+    ...config,
+    text: `${event.name} ${truncate(resultStr)}`,
+    dimmed: true,
+  }
+}
+
+function invocationEndSummary(
+  event: EventOfType<'invocation_end'>,
+  config: EventDisplayConfig,
+): EventSummary {
+  const color: EventColor =
+    event.reason === 'completed'
+      ? 'greenBright'
+      : event.reason === 'error'
+        ? 'redBright'
+        : 'yellowBright'
+  const iterStr = event.iterations !== undefined ? ` (${event.iterations} steps)` : ''
+  return {
+    ...config,
+    label: `end:${event.reason}`,
+    color,
+    text: `${event.agentName}${iterStr}`,
+  }
+}
+
+function invocationYieldSummary(
+  event: EventOfType<'invocation_yield'>,
+  config: EventDisplayConfig,
+): EventSummary {
+  const count = event.yieldedToolIds.length
+  const text = count > 0 ? `awaiting ${count} ${count === 1 ? 'call' : 'calls'}` : 'awaiting input'
+  return { ...config, text }
+}
+
+function modelEndSummary(
+  event: EventOfType<'model_end'>,
+  config: EventDisplayConfig,
+): EventSummary {
+  if (event.error) {
+    return {
+      ...config,
+      color: 'redBright',
+      text: `error: ${truncate(event.error)}`,
+    }
+  }
+  const parts: string[] = []
+  if (event.usage) {
+    parts.push(`${event.usage.inputTokens}→${event.usage.outputTokens} tokens`)
+  }
+  parts.push(`${event.durationMs}ms`)
+  return {
+    ...config,
+    text: parts.join(' • '),
+  }
+}
+
+const CONTEXT_ROLE_COLORS: Record<string, EventColor> = {
+  system: 'white',
+  user: 'blueBright',
+  assistant: 'greenBright',
+  thought: 'white',
+  tool_call: 'cyanBright',
+  tool_result: 'cyanBright',
+}
+
+const CONTEXT_ROLE_LABELS: Record<string, string> = {
+  tool_call: 'call',
+  tool_result: 'result',
+  assistant: 'output',
+  thought: 'think',
+}
+
+function contextMessageSummary(
+  event: EventOfType<'context_message'>,
+  config: EventDisplayConfig,
+): EventSummary {
+  const isEmptyThought = event.message.role === 'thought' && !event.message.content
+  return {
+    ...config,
+    label: CONTEXT_ROLE_LABELS[event.message.role] ?? event.message.role,
+    color: CONTEXT_ROLE_COLORS[event.message.role] ?? 'white',
+    text: isEmptyThought ? '(encrypted)' : event.message.content,
+    textColor: isEmptyThought ? 'gray' : undefined,
+    dimmed: true,
+  }
+}
+
+/** Summaries for invocation lifecycle, model and context events. */
+function getLifecycleEventSummary(event: DisplayEvent, config: EventDisplayConfig): EventSummary {
+  switch (event.type) {
+    case 'invocation_start':
+      return { ...config, text: event.agentName }
+    case 'invocation_end':
+      return invocationEndSummary(event, config)
+    case 'invocation_yield':
+      return invocationYieldSummary(event, config)
+    case 'invocation_resume':
+      return { ...config, text: '' }
+    case 'model_start':
+      return {
+        ...config,
+        text: `${event.messageCount} msgs • ${event.tools.length} tools`,
+      }
+    case 'model_end':
+      return modelEndSummary(event, config)
+    case 'context_message':
+      return contextMessageSummary(event, config)
+    case 'context_tool':
+      return {
+        ...config,
+        text: `${event.tool.name}: ${event.tool.description}`,
+      }
+    case 'context_schema':
+      return {
+        ...config,
+        text: event.schemaName,
+      }
+    default:
+      return { ...config, text: (event as { type: string }).type }
+  }
+}
+
 export function getEventSummary(event: DisplayEvent): EventSummary {
   const config = getEventConfig(event)
 
@@ -219,48 +386,16 @@ export function getEventSummary(event: DisplayEvent): EventSummary {
       return { ...config, text: truncate(event.text) }
     case 'user':
       return { ...config, text: truncate(event.text) }
-    case 'thought': {
-      const fallback = !event.text ? getThoughtFallback(event) : null
-      if (fallback) return { ...config, text: truncate(fallback), textColor: 'gray' }
-      return { ...config, text: event.text ? truncate(event.text) : undefined }
-    }
+    case 'thought':
+      return thoughtSummary(event, config)
     case 'assistant':
       return { ...config, text: truncate(event.text) }
-    case 'delta_batch': {
-      const e = event as DeltaBatchEvent
-      const isThought = e.deltaType === 'thought_delta'
-      const displayText = isThought ? extractCurrentThoughtBlock(e.finalText) : e.finalText
-      return {
-        label: isThought ? 'think' : 'output',
-        color: isThought ? 'gray' : 'greenBright',
-        dimmed: true,
-        text: truncate(displayText),
-      }
-    }
-    case 'tool_call': {
-      const argsStr = formatJson(event.args)
-      return {
-        ...config,
-        color: event.yields ? 'yellowBright' : config.color,
-        text: argsStr ? `${event.name} ${truncate(argsStr)}` : event.name,
-      }
-    }
-    case 'tool_result': {
-      if (event.error) {
-        return {
-          ...config,
-          color: 'redBright',
-          text: `${event.name} error: ${truncate(event.error)}`,
-        }
-      }
-      const resultStr =
-        event.result === undefined ? 'void' : formatJson(event.result) || String(event.result)
-      return {
-        ...config,
-        text: `${event.name} ${truncate(resultStr)}`,
-        dimmed: true,
-      }
-    }
+    case 'delta_batch':
+      return deltaBatchSummary(event as DeltaBatchEvent)
+    case 'tool_call':
+      return toolCallSummary(event, config)
+    case 'tool_result':
+      return toolResultSummary(event, config)
     case 'tool_yield': {
       const argsStr = formatJson(event.args)
       return {
@@ -279,91 +414,8 @@ export function getEventSummary(event: DisplayEvent): EventSummary {
       const keys = event.changes.map((c) => `${event.scope}.${c.key}`).join(', ')
       return { ...config, text: truncate(keys) }
     }
-    case 'invocation_start':
-      return { ...config, text: event.agentName }
-    case 'invocation_end': {
-      const color: EventColor =
-        event.reason === 'completed'
-          ? 'greenBright'
-          : event.reason === 'error'
-            ? 'redBright'
-            : 'yellowBright'
-      const iterStr = event.iterations !== undefined ? ` (${event.iterations} steps)` : ''
-      return {
-        ...config,
-        label: `end:${event.reason}`,
-        color,
-        text: `${event.agentName}${iterStr}`,
-      }
-    }
-    case 'invocation_yield': {
-      const count = event.yieldedToolIds.length
-      const text =
-        count > 0 ? `awaiting ${count} ${count === 1 ? 'call' : 'calls'}` : 'awaiting input'
-      return { ...config, text }
-    }
-    case 'invocation_resume':
-      return { ...config, text: '' }
-    case 'model_start':
-      return {
-        ...config,
-        text: `${event.messageCount} msgs • ${event.tools.length} tools`,
-      }
-    case 'model_end': {
-      if (event.error) {
-        return {
-          ...config,
-          color: 'redBright',
-          text: `error: ${truncate(event.error)}`,
-        }
-      }
-      const parts: string[] = []
-      if (event.usage) {
-        parts.push(`${event.usage.inputTokens}→${event.usage.outputTokens} tokens`)
-      }
-      parts.push(`${event.durationMs}ms`)
-      return {
-        ...config,
-        text: parts.join(' • '),
-      }
-    }
-    case 'context_message': {
-      const roleColors: Record<string, EventColor> = {
-        system: 'white',
-        user: 'blueBright',
-        assistant: 'greenBright',
-        thought: 'white',
-        tool_call: 'cyanBright',
-        tool_result: 'cyanBright',
-      }
-      const roleLabels: Record<string, string> = {
-        tool_call: 'call',
-        tool_result: 'result',
-        assistant: 'output',
-        thought: 'think',
-      }
-      const isEmptyThought = event.message.role === 'thought' && !event.message.content
-      return {
-        ...config,
-        label: roleLabels[event.message.role] ?? event.message.role,
-        color: roleColors[event.message.role] ?? 'white',
-        text: isEmptyThought ? '(encrypted)' : event.message.content,
-        textColor: isEmptyThought ? 'gray' : undefined,
-        dimmed: true,
-      }
-    }
-    case 'context_tool':
-      return {
-        ...config,
-        text: `${event.tool.name}: ${event.tool.description}`,
-      }
-    case 'context_schema':
-      return {
-        ...config,
-        text: event.schemaName,
-      }
     default:
-      return { ...config, text: (event as { type: string }).type }
+      return getLifecycleEventSummary(event, config)
   }
 }
 
@@ -384,76 +436,84 @@ function getRawEventData(event: DisplayEvent): unknown {
   }
 }
 
-export function getEventDetail(
-  event: DisplayEvent,
-  mode: DetailViewMode = 'clean',
-  streaming?: StreamingMetadata,
-): string {
-  if (mode === 'raw') {
-    const rawData = getRawEventData(event)
-    if (event.type === 'delta_batch') {
-      const events = rawData as DeltaBatchEvent['events']
-      return events
-        .map(
-          (delta, idx) =>
-            `--- Delta ${idx + 1}/${events.length} ---\n${JSON.stringify(delta, null, 2)}`,
-        )
-        .join('\n\n')
-    }
-    const eventJson = JSON.stringify(rawData, null, 2)
-    if (streaming) {
-      const deltasJson = JSON.stringify(streaming.deltaEvents, null, 2)
-      return `${eventJson}\n\n---\n\n${deltasJson}`
-    }
-    return eventJson
+function rawEventDetail(event: DisplayEvent, streaming: StreamingMetadata | undefined): string {
+  const rawData = getRawEventData(event)
+  if (event.type === 'delta_batch') {
+    const events = rawData as DeltaBatchEvent['events']
+    return events
+      .map(
+        (delta, idx) =>
+          `--- Delta ${idx + 1}/${events.length} ---\n${JSON.stringify(delta, null, 2)}`,
+      )
+      .join('\n\n')
   }
+  const eventJson = JSON.stringify(rawData, null, 2)
+  if (streaming) {
+    const deltasJson = JSON.stringify(streaming.deltaEvents, null, 2)
+    return `${eventJson}\n\n---\n\n${deltasJson}`
+  }
+  return eventJson
+}
 
+function streamHeaderFor(streaming: StreamingMetadata | undefined): string {
+  return streaming ? `[Streamed in ${streaming.chunkCount} chunks]\n\n` : ''
+}
+
+function assistantDetail(
+  event: EventOfType<'assistant'>,
+  streaming: StreamingMetadata | undefined,
+): string {
+  const streamHeader = streamHeaderFor(streaming)
+  try {
+    const parsed = JSON.parse(event.text)
+    return streamHeader + JSON.stringify(parsed, null, 2)
+  } catch {
+    return streamHeader + event.text
+  }
+}
+
+function toolResultDetail(event: EventOfType<'tool_result'>): string {
+  if (event.error) {
+    return `${event.name} error: ${event.error}`
+  }
+  const meta: string[] = []
+  if (event.durationMs !== undefined) meta.push(`${event.durationMs}ms`)
+  if (event.retryCount) meta.push(`${event.retryCount} retries`)
+  if (event.timedOut) meta.push('timed out')
+  const metaStr = meta.length > 0 ? ` (${meta.join(', ')})` : ''
+  const resultStr =
+    typeof event.result === 'string' ? event.result : JSON.stringify(event.result, null, 2)
+  return `${event.name}${metaStr} →\n${resultStr}`
+}
+
+function modelStartDetail(event: EventOfType<'model_start'>): string {
+  const lines: string[] = []
+  lines.push(`step ${event.stepIndex} • ${event.messageCount} msgs • ${event.tools.length} tools`)
+  if (event.outputSchema) lines.push(`schema: ${event.outputSchema}`)
+  if (event.tools.length > 0) {
+    lines.push('')
+    for (const tool of event.tools) {
+      lines.push(`${tool.name}: ${tool.description}`)
+    }
+  }
+  return lines.join('\n')
+}
+
+function modelEndDetail(event: EventOfType<'model_end'>): string {
+  const parts: string[] = [`${event.durationMs}ms`]
+  if (event.usage) {
+    parts.push(`${event.usage.inputTokens}→${event.usage.outputTokens} tokens`)
+    if (event.usage.cachedTokens) parts.push(`${event.usage.cachedTokens} cached`)
+    if (event.usage.reasoningTokens) parts.push(`${event.usage.reasoningTokens} reasoning`)
+  }
+  if (event.finishReason && event.finishReason !== 'stop') parts.push(event.finishReason)
+  if (event.error) parts.push(`error: ${event.error}`)
+  return `step ${event.stepIndex} • ${parts.join(' • ')}`
+}
+
+/** Details for invocation lifecycle, model and context events. */
+function getLifecycleEventDetail(event: DisplayEvent): string {
   switch (event.type) {
-    case 'system':
-      return event.text
-    case 'user':
-      return event.text
-    case 'thought': {
-      const streamHeader = streaming ? `[Streamed in ${streaming.chunkCount} chunks]\n\n` : ''
-      const displayText = event.text || getThoughtFallback(event) || '(no content)'
-      return streamHeader + displayText
-    }
-    case 'assistant': {
-      const streamHeader = streaming ? `[Streamed in ${streaming.chunkCount} chunks]\n\n` : ''
-      try {
-        const parsed = JSON.parse(event.text)
-        return streamHeader + JSON.stringify(parsed, null, 2)
-      } catch {
-        return streamHeader + event.text
-      }
-    }
-    case 'tool_call':
-      return `${event.name}(${JSON.stringify(event.args, null, 2)})`
-    case 'tool_result': {
-      if (event.error) {
-        return `${event.name} error: ${event.error}`
-      }
-      const meta: string[] = []
-      if (event.durationMs !== undefined) meta.push(`${event.durationMs}ms`)
-      if (event.retryCount) meta.push(`${event.retryCount} retries`)
-      if (event.timedOut) meta.push('timed out')
-      const metaStr = meta.length > 0 ? ` (${meta.join(', ')})` : ''
-      const resultStr =
-        typeof event.result === 'string' ? event.result : JSON.stringify(event.result, null, 2)
-      return `${event.name}${metaStr} →\n${resultStr}`
-    }
-    case 'tool_yield':
-      return `${event.name} yielded\nargs: ${JSON.stringify(event.args, null, 2)}`
-    case 'tool_input':
-      return `input: ${JSON.stringify(event.input, null, 2)}`
-    case 'state_change': {
-      const changes = event.changes.map((c) => {
-        const old = JSON.stringify(c.oldValue)
-        const val = JSON.stringify(c.newValue)
-        return `${c.key}: ${old} → ${val}`
-      })
-      return `${event.scope} (${event.source})\n${changes.join('\n')}`
-    }
     case 'invocation_start': {
       const parent = event.parentInvocationId ? `\nparent: ${event.parentInvocationId}` : ''
       return `${event.agentName}\nid: ${event.invocationId}${parent}`
@@ -468,37 +528,10 @@ export function getEventDetail(
       return `${event.agentName} yielded\nawaiting: ${event.yieldedToolIds.join(', ')}`
     case 'invocation_resume':
       return `${event.agentName} resumed`
-    case 'delta_batch': {
-      if (event.deltaType === 'thought_delta') {
-        return extractCurrentThoughtBlock(event.finalText)
-      }
-      return event.finalText
-    }
-    case 'model_start': {
-      const lines: string[] = []
-      lines.push(
-        `step ${event.stepIndex} • ${event.messageCount} msgs • ${event.tools.length} tools`,
-      )
-      if (event.outputSchema) lines.push(`schema: ${event.outputSchema}`)
-      if (event.tools.length > 0) {
-        lines.push('')
-        for (const tool of event.tools) {
-          lines.push(`${tool.name}: ${tool.description}`)
-        }
-      }
-      return lines.join('\n')
-    }
-    case 'model_end': {
-      const parts: string[] = [`${event.durationMs}ms`]
-      if (event.usage) {
-        parts.push(`${event.usage.inputTokens}→${event.usage.outputTokens} tokens`)
-        if (event.usage.cachedTokens) parts.push(`${event.usage.cachedTokens} cached`)
-        if (event.usage.reasoningTokens) parts.push(`${event.usage.reasoningTokens} reasoning`)
-      }
-      if (event.finishReason && event.finishReason !== 'stop') parts.push(event.finishReason)
-      if (event.error) parts.push(`error: ${event.error}`)
-      return `step ${event.stepIndex} • ${parts.join(' • ')}`
-    }
+    case 'model_start':
+      return modelStartDetail(event)
+    case 'model_end':
+      return modelEndDetail(event)
     case 'context_message':
       return event.message.content
     case 'context_tool':
@@ -507,5 +540,52 @@ export function getEventDetail(
       return event.schemaName
     default:
       return JSON.stringify(event, null, 2)
+  }
+}
+
+export function getEventDetail(
+  event: DisplayEvent,
+  mode: DetailViewMode = 'clean',
+  streaming?: StreamingMetadata,
+): string {
+  if (mode === 'raw') {
+    return rawEventDetail(event, streaming)
+  }
+
+  switch (event.type) {
+    case 'system':
+      return event.text
+    case 'user':
+      return event.text
+    case 'thought': {
+      const displayText = event.text || getThoughtFallback(event) || '(no content)'
+      return streamHeaderFor(streaming) + displayText
+    }
+    case 'assistant':
+      return assistantDetail(event, streaming)
+    case 'tool_call':
+      return `${event.name}(${JSON.stringify(event.args, null, 2)})`
+    case 'tool_result':
+      return toolResultDetail(event)
+    case 'tool_yield':
+      return `${event.name} yielded\nargs: ${JSON.stringify(event.args, null, 2)}`
+    case 'tool_input':
+      return `input: ${JSON.stringify(event.input, null, 2)}`
+    case 'state_change': {
+      const changes = event.changes.map((c) => {
+        const old = JSON.stringify(c.oldValue)
+        const val = JSON.stringify(c.newValue)
+        return `${c.key}: ${old} → ${val}`
+      })
+      return `${event.scope} (${event.source})\n${changes.join('\n')}`
+    }
+    case 'delta_batch': {
+      if (event.deltaType === 'thought_delta') {
+        return extractCurrentThoughtBlock(event.finalText)
+      }
+      return event.finalText
+    }
+    default:
+      return getLifecycleEventDetail(event)
   }
 }

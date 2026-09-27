@@ -206,6 +206,17 @@ function isEnrichmentPrompt<T extends StateSchema>(
   return typeof input === 'object' && 'render' in input
 }
 
+function isTargetAgentMessage(
+  options: TransformUserMessagesOptions | undefined,
+  currentAgentName: string | undefined,
+): boolean {
+  return options?.targetAgent === undefined
+    ? true
+    : options.targetAgent === null
+      ? currentAgentName === undefined
+      : currentAgentName === options.targetAgent
+}
+
 export function transformUserMessages<T extends StateSchema = StateSchema>(
   transform: ((message: string) => string) | EnrichmentPrompt<T>,
   options?: TransformUserMessagesOptions,
@@ -236,13 +247,7 @@ export function transformUserMessages<T extends StateSchema = StateSchema>(
         continue
       }
 
-      const shouldTransform =
-        options?.targetAgent === undefined
-          ? true
-          : options.targetAgent === null
-            ? currentAgentName === undefined
-            : currentAgentName === options.targetAgent
-      if (!shouldTransform) {
+      if (!isTargetAgentMessage(options, currentAgentName)) {
         result.push(event)
         continue
       }

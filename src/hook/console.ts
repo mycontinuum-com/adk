@@ -127,6 +127,19 @@ function formatLabel(label: string, width: number, colorName: ColorName): string
   return color(bracketed, colorName) + padding
 }
 
+function renderAssistantDelta(delta: string): string {
+  const isJson = delta.trimStart().startsWith('{') || delta.trimStart().startsWith('[')
+  return isJson ? renderJsonKeys(delta, 'greenBright', false) : delta
+}
+
+function renderToolCallText(name: string, args: unknown, dimToolOutput: boolean): string {
+  const argsStr = formatJson(args)
+  const compactArgs = argsStr ? stripJsonNewlines(argsStr) : ''
+  return compactArgs
+    ? dim(name + ' ') + renderJsonKeys(compactArgs, 'cyanBright', dimToolOutput)
+    : dim(name)
+}
+
 export function consoleHook<S extends StateSchema = StateSchema>(
   options: ConsoleHookOptions = {},
 ): Hook<S> {
@@ -208,10 +221,7 @@ export function consoleHook<S extends StateSchema = StateSchema>(
             if (!finalizeStreaming()) process.stdout.write('\n')
             writeLabel('output', 'greenBright')
           }
-          const isJson =
-            event.delta.trimStart().startsWith('{') || event.delta.trimStart().startsWith('[')
-          const content = isJson ? renderJsonKeys(event.delta, 'greenBright', false) : event.delta
-          process.stdout.write(content)
+          process.stdout.write(renderAssistantDelta(event.delta))
           wasStreaming = true
           break
         }
@@ -229,12 +239,7 @@ export function consoleHook<S extends StateSchema = StateSchema>(
           if (!finalizeStreaming()) process.stdout.write('\n')
           const labelColor: ColorName = event.yields ? 'yellowBright' : 'cyanBright'
           writeLabel('call', labelColor)
-          const argsStr = formatJson(event.args)
-          const compactArgs = argsStr ? stripJsonNewlines(argsStr) : ''
-          const text = compactArgs
-            ? dim(event.name + ' ') + renderJsonKeys(compactArgs, 'cyanBright', dimToolOutput)
-            : dim(event.name)
-          process.stdout.write(text + '\n')
+          process.stdout.write(renderToolCallText(event.name, event.args, dimToolOutput) + '\n')
           break
         }
 

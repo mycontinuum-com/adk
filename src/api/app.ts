@@ -507,6 +507,41 @@ function identityContextFn<S extends StateSchema>(
   return render
 }
 
+// Guard: v2 options (resume, background, runId) are not implemented in v1.
+// Reject immediately with a descriptive error — do NOT silently accept-and-ignore.
+function rejectDeferredRunOptions(inputOrConfig: string | RunOptions): void {
+  if (typeof inputOrConfig === 'object' && inputOrConfig !== null) {
+    const v2Keys = ['resume', 'background', 'runId'] as const
+    for (const key of v2Keys) {
+      if (key in inputOrConfig) {
+        throw new Error(
+          `[adk] app.run: '${key}' is deferred to v2 (durable resume / background execution on the process-runtime gateway). Remove this option or wait for v2.`,
+        )
+      }
+    }
+  }
+}
+
+function forwardAbort(signal: AbortSignal | undefined, stream: { abort(): void }): void {
+  if (signal) {
+    if (signal.aborted) {
+      stream.abort()
+    } else {
+      signal.addEventListener('abort', () => stream.abort(), { once: true })
+    }
+  }
+}
+
+// We check both instanceof (direct throw path) and e.name === 'OutputParseError'
+// (channel-deserialized path where the class is reconstructed as a plain Error).
+function isOutputParseError(e: unknown): boolean {
+  return e instanceof OutputParseError || (e instanceof Error && e.name === 'OutputParseError')
+}
+
+function askRetryBudget(opts: { retries?: number; schema?: unknown } | undefined): number {
+  return opts?.retries ?? (opts?.schema ? 2 : 0)
+}
+
 export function adk(): AdkApp<StateSchema>
 export function adk<S extends StateSchema>(config: AdkConfig<S>): AdkApp<S>
 export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
@@ -592,18 +627,7 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
     runnable: Runnable<ErasedStateSchema>,
     inputOrConfig: string | RunOptions,
   ): StreamResult => {
-    // Guard: v2 options (resume, background, runId) are not implemented in v1.
-    // Reject immediately with a descriptive error — do NOT silently accept-and-ignore.
-    if (typeof inputOrConfig === 'object' && inputOrConfig !== null) {
-      const v2Keys = ['resume', 'background', 'runId'] as const
-      for (const key of v2Keys) {
-        if (key in inputOrConfig) {
-          throw new Error(
-            `[adk] app.run: '${key}' is deferred to v2 (durable resume / background execution on the process-runtime gateway). Remove this option or wait for v2.`,
-          )
-        }
-      }
-    }
+    rejectDeferredRunOptions(inputOrConfig)
 
     const runner = new BaseRunner({
       sessionService: appSessionService,
@@ -736,7 +760,7 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
     })
 
     // Retry budget: opts.retries ?? (opts.schema ? 2 : 0)
-    const budget = opts?.retries ?? (opts?.schema ? 2 : 0)
+    const budget = askRetryBudget(opts)
     const spent: (ModelUsage | undefined)[] = []
 
     for (let attempt = 0; attempt <= budget; attempt++) {
@@ -749,13 +773,7 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
         })
 
         // Thread the abort signal into the inner stream
-        if (opts?.signal) {
-          if (opts.signal.aborted) {
-            stream.abort()
-          } else {
-            opts.signal.addEventListener('abort', () => stream.abort(), { once: true })
-          }
-        }
+        forwardAbort(opts?.signal, stream)
 
         const result = await stream
         const value = (opts?.schema ? result.output.value : (result.output.text ?? '')) as T
@@ -763,10 +781,7 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
         return { ok: true, value, usage: await priced([...spent, ...modelCalls(session)]) }
       } catch (e) {
         // Only OutputParseError is retried; provider/transport errors surface immediately.
-        // We check both instanceof (direct throw path) and e.name === 'OutputParseError'
-        // (channel-deserialized path where the class is reconstructed as a plain Error).
-        const isParseError =
-          e instanceof OutputParseError || (e instanceof Error && e.name === 'OutputParseError')
+        const isParseError = isOutputParseError(e)
         spent.push(...modelCalls(session))
         if (isParseError && attempt < budget) continue
         return { ok: false, error: e, usage: await priced(spent) }

@@ -6,6 +6,16 @@ const FENCE_END_REGEX = /^[ \t]*```(?:\n|$)/gm
 const PRIMITIVE_REGEX =
   /(?:^|\s)(null|true|false|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|"(?:[^"\\]|\\.)*")(?:\s|$)/
 
+/** Pops the opener matching a closing bracket; returns whether one was popped. */
+function popMatchingBracket(stack: string[], closer: string): boolean {
+  const expected = closer === '}' ? '{' : '['
+  if (stack.length > 0 && stack[stack.length - 1] === expected) {
+    stack.pop()
+    return true
+  }
+  return false
+}
+
 export function extractBalancedJsonObjects(str: string): string[] {
   const results: string[] = []
   const stack: string[] = []
@@ -39,13 +49,9 @@ export function extractBalancedJsonObjects(str: string): string[] {
       }
       stack.push(char)
     } else if (char === '}' || char === ']') {
-      const expected = char === '}' ? '{' : '['
-      if (stack.length > 0 && stack[stack.length - 1] === expected) {
-        stack.pop()
-        if (stack.length === 0 && jsonStart !== null) {
-          results.push(str.slice(jsonStart, i + 1))
-          jsonStart = null
-        }
+      if (popMatchingBracket(stack, char) && stack.length === 0 && jsonStart !== null) {
+        results.push(str.slice(jsonStart, i + 1))
+        jsonStart = null
       }
     }
   }

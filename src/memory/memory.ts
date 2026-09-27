@@ -219,6 +219,152 @@ export function collectionSpec(config: {
   }
 }
 
+/** Where `sample` reads candidate points from. */
+interface SampleSource {
+  vectorIndex: VectorIndex
+  collection: string
+  vectorName: string
+}
+
+/** Candidate points for representative sampling, by whichever route gathered them. */
+interface SampleCandidates {
+  pairs: DistanceMatrixPair[]
+  vectorMap?: Map<string, number[]>
+  weights?: Map<string, number>
+  candidateIds?: string[]
+}
+
+function embeddingsById(points: ScrollResult['points']): Map<string, number[]> {
+  const vectorMap = new Map<string, number[]>()
+  for (const p of points) {
+    if (p.embedding) vectorMap.set(p.id, p.embedding)
+  }
+  return vectorMap
+}
+
+async function queryCandidates(
+  source: SampleSource,
+  embedding: number[],
+  pool: number,
+  filter: VectorFilter | undefined,
+  gravity: number | undefined,
+  useLocalDiversity: boolean,
+): Promise<SampleCandidates> {
+  const { vectorIndex, collection, vectorName } = source
+  const searchMatches = await vectorIndex.search(collection, embedding, {
+    topK: pool,
+    filter,
+    variant: vectorName,
+  })
+  const candidateIds = searchMatches.map((m) => m.id)
+  const weights = new Map(searchMatches.map((m) => [m.id, Math.pow(m.score, gravity ?? 1)]))
+
+  if (useLocalDiversity) {
+    const scrollResult = await vectorIndex.scroll(collection, {
+      filter: {
+        must: [{ has_id: candidateIds }, ...(filter?.must ?? [])],
+      },
+      variant: vectorName,
+      limit: candidateIds.length,
+      includeVectors: true,
+    })
+    return {
+      pairs: [],
+      vectorMap: embeddingsById(scrollResult.points),
+      weights,
+      candidateIds,
+    }
+  }
+  const matrixResult = await vectorIndex.distanceMatrix(collection, {
+    filter: {
+      must: [{ has_id: candidateIds }, ...(filter?.must ?? [])],
+    },
+    sample: candidateIds.length,
+    limit: Math.max(0, candidateIds.length - 1),
+    variant: vectorName,
+  })
+  return { pairs: matrixResult.pairs, weights, candidateIds }
+}
+
+async function scrolledCandidates(
+  source: SampleSource,
+  pool: number,
+  filter: VectorFilter | undefined,
+): Promise<SampleCandidates> {
+  const { vectorIndex, collection, vectorName } = source
+  let scrolled: ScrollResult['points'] = []
+  let offset: string | undefined
+  const batchSize = Math.min(pool, 1000)
+  while (scrolled.length < pool) {
+    const result = await vectorIndex.scroll(collection, {
+      filter,
+      variant: vectorName,
+      limit: Math.min(batchSize, pool - scrolled.length),
+      offset,
+      includeVectors: true,
+    })
+    scrolled = scrolled.concat(result.points)
+    if (!result.nextOffset || result.points.length === 0) break
+    offset = result.nextOffset
+  }
+  return {
+    pairs: [],
+    vectorMap: embeddingsById(scrolled),
+    candidateIds: scrolled.map((p) => p.id),
+  }
+}
+
+async function matrixCandidates(
+  source: SampleSource,
+  pool: number,
+  filter: VectorFilter | undefined,
+): Promise<SampleCandidates> {
+  const { vectorIndex, collection, vectorName } = source
+  const matrixResult = await vectorIndex.distanceMatrix(collection, {
+    sample: pool,
+    limit: pool - 1,
+    filter,
+    variant: vectorName,
+  })
+  return { pairs: matrixResult.pairs }
+}
+
+function availableSampleIds(candidates: SampleCandidates): Set<string> {
+  const { vectorMap, candidateIds, pairs } = candidates
+  const available = new Set<string>()
+  if (vectorMap) {
+    vectorMap.forEach((_, id) => available.add(id))
+  } else if (candidateIds) {
+    for (const id of candidateIds) available.add(id)
+  }
+  for (const p of pairs) {
+    available.add(p.a)
+    available.add(p.b)
+  }
+  return available
+}
+
+function selectSampleIds(
+  candidates: SampleCandidates,
+  available: Set<string>,
+  n: number,
+): string[] {
+  const { vectorMap, pairs, candidateIds, weights } = candidates
+  if (vectorMap && vectorMap.size > 0) {
+    return representativeSampleFromVectors(vectorMap, n, weights ? { weights } : undefined)
+  }
+  if (pairs.length > 0) {
+    return representativeSample(pairs, n, weights ? { weights } : undefined)
+  }
+  const ids = candidateIds ?? Array.from(available)
+  return weights
+    ? ids
+        .slice()
+        .toSorted((a, b) => (weights.get(b) ?? 1) - (weights.get(a) ?? 1))
+        .slice(0, n)
+    : ids.slice(0, n)
+}
+
 function createVariant<TMetadata extends Record<string, unknown>>(opts: {
   embedder: Embedder | { index: Embedder; query: Embedder }
   vectorIndex: VectorIndex
@@ -462,125 +608,48 @@ function createVariant<TMetadata extends Record<string, unknown>>(opts: {
         }
       }
 
-      let pairs: DistanceMatrixPair[] = []
-      let vectorMap: Map<string, number[]> | undefined
-      let weights: Map<string, number> | undefined
-      let embedding: number[] | undefined
-      let candidateIds: string[] | undefined
-
       const useLocalDiversity = pool > MATRIX_THRESHOLD * 5
+      const source: SampleSource = { vectorIndex, collection, vectorName }
 
+      let embedding: number[] | undefined
+      let candidates: SampleCandidates
       if (options?.query) {
         const embedResult = await queryEmbedder.embed([options.query], {
           inputType: 'query',
         })
         embedding = validateEmbeddings(embedResult.embeddings, 1, 'sample')[0]
-        const searchMatches = await vectorIndex.search(collection, embedding, {
-          topK: pool,
-          filter: normalizedFilter,
-          variant: vectorName,
-        })
-        candidateIds = searchMatches.map((m) => m.id)
-        weights = new Map(searchMatches.map((m) => [m.id, Math.pow(m.score, options.gravity ?? 1)]))
-
-        if (useLocalDiversity) {
-          const scrollResult = await vectorIndex.scroll(collection, {
-            filter: {
-              must: [{ has_id: candidateIds }, ...(normalizedFilter?.must ?? [])],
-            },
-            variant: vectorName,
-            limit: candidateIds.length,
-            includeVectors: true,
-          })
-          vectorMap = new Map<string, number[]>()
-          for (const p of scrollResult.points) {
-            if (p.embedding) vectorMap.set(p.id, p.embedding)
-          }
-        } else {
-          const matrixResult = await vectorIndex.distanceMatrix(collection, {
-            filter: {
-              must: [{ has_id: candidateIds }, ...(normalizedFilter?.must ?? [])],
-            },
-            sample: candidateIds.length,
-            limit: Math.max(0, candidateIds.length - 1),
-            variant: vectorName,
-          })
-          pairs = matrixResult.pairs
-        }
+        candidates = await queryCandidates(
+          source,
+          embedding,
+          pool,
+          normalizedFilter,
+          options.gravity,
+          useLocalDiversity,
+        )
       } else if (useLocalDiversity) {
-        let scrolled: ScrollResult['points'] = []
-        let offset: string | undefined
-        const batchSize = Math.min(pool, 1000)
-        while (scrolled.length < pool) {
-          const result = await vectorIndex.scroll(collection, {
-            filter: normalizedFilter,
-            variant: vectorName,
-            limit: Math.min(batchSize, pool - scrolled.length),
-            offset,
-            includeVectors: true,
-          })
-          scrolled = scrolled.concat(result.points)
-          if (!result.nextOffset || result.points.length === 0) break
-          offset = result.nextOffset
-        }
-        vectorMap = new Map<string, number[]>()
-        for (const p of scrolled) {
-          if (p.embedding) vectorMap.set(p.id, p.embedding)
-        }
-        candidateIds = scrolled.map((p) => p.id)
+        candidates = await scrolledCandidates(source, pool, normalizedFilter)
       } else {
-        const matrixResult = await vectorIndex.distanceMatrix(collection, {
-          sample: pool,
-          limit: pool - 1,
-          filter: normalizedFilter,
-          variant: vectorName,
-        })
-        pairs = matrixResult.pairs
+        candidates = await matrixCandidates(source, pool, normalizedFilter)
       }
 
-      if (pairs.length === 0 && !vectorMap && !candidateIds) {
+      if (candidates.pairs.length === 0 && !candidates.vectorMap && !candidates.candidateIds) {
         const fallback = await vectorIndex.scroll(collection, {
           filter: normalizedFilter,
           variant: vectorName,
           limit: pool,
         })
-        candidateIds = fallback.points.map((p) => p.id)
+        candidates.candidateIds = fallback.points.map((p) => p.id)
       }
 
-      const available = new Set<string>()
-      if (vectorMap) {
-        vectorMap.forEach((_, id) => available.add(id))
-      } else if (candidateIds) {
-        for (const id of candidateIds) available.add(id)
-      }
-      for (const p of pairs) {
-        available.add(p.a)
-        available.add(p.b)
-      }
+      const available = availableSampleIds(candidates)
       if (n > available.size) {
         throw new Error(
           `Cannot sample ${n}: only ${available.size} points available in "${collection}" (requested pool: ${pool})`,
         )
       }
 
-      let selectedIds: string[]
-      if (vectorMap && vectorMap.size > 0) {
-        selectedIds = representativeSampleFromVectors(
-          vectorMap,
-          n,
-          weights ? { weights } : undefined,
-        )
-      } else if (pairs.length > 0) {
-        selectedIds = representativeSample(pairs, n, weights ? { weights } : undefined)
-      } else {
-        const ids = candidateIds ?? Array.from(available)
-        selectedIds = weights
-          ? ids
-              .slice()
-              .toSorted((a, b) => (weights!.get(b) ?? 1) - (weights!.get(a) ?? 1))
-              .slice(0, n)
-          : ids.slice(0, n)
-      }
+      const selectedIds = selectSampleIds(candidates, available, n)
+      const { weights } = candidates
 
       const points = await vectorIndex.get(collection, selectedIds, {
         variant: vectorName,

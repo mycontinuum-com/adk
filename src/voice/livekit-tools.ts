@@ -74,6 +74,245 @@ export function convertTools(
   return result
 }
 
+/** One tool call's identity and context, shared by the steps that report its result. */
+interface VoiceToolCallScope {
+  bridgeCtx: ToolBridgeContext
+  tool: ADKFunctionTool
+  callId: string
+  toolCallEvent: ToolCallEvent
+  ctx: ToolContext
+  startMs: number
+}
+
+/** Wraps a value the executor returns early, which may itself be undefined. */
+type EarlyReturn = { value: unknown }
+
+type ForcedToolInterception = NonNullable<Awaited<ReturnType<ForcedToolGate['interceptToolCall']>>>
+
+async function replayForcedInterception(
+  bridgeCtx: ToolBridgeContext,
+  toolCallEvent: ToolCallEvent,
+  interception: ForcedToolInterception,
+): Promise<unknown> {
+  await appendEvents(bridgeCtx, [toolCallEvent, interception.result])
+  if (interception.afterResult) {
+    setTimeout(interception.afterResult, 0)
+  }
+  return interception.result.error ?? serializeResult(interception.result.result)
+}
+
+function initialToolArgs(
+  parseResult: ReturnType<typeof safeParseToolArgs> | undefined,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  return parseResult?.success ? (parseResult.data as Record<string, unknown>) : args
+}
+
+async function finalizeVoiceResult(
+  tool: ADKFunctionTool,
+  ctx: ToolContext,
+  result: unknown,
+): Promise<unknown> {
+  if (tool.finalize) {
+    const finalized = await tool.finalize({ ...ctx, result })
+    if (finalized !== undefined) result = finalized
+  }
+  return result
+}
+
+/** Reports a failed attempt, or asks for a retry when the error handler recovers by retrying. */
+async function handleVoiceToolFailure(
+  scope: VoiceToolCallScope,
+  err: unknown,
+  attempt: number,
+): Promise<'retry' | EarlyReturn> {
+  const lastError = err instanceof Error ? err : new Error(String(err))
+  const error = lastError.message
+  scope.bridgeCtx.forcedToolGate?.completeToolCall(scope.tool.name, lastError)
+
+  const recovered = await recoverVoiceToolError(scope, lastError, attempt)
+  if (recovered) return recovered
+
+  // No retry — return error to the model
+  await appendScopedResult(scope, undefined, error)
+  return { value: `Error: ${error}` }
+}
+
+async function rejectInvalidArgs(
+  bridgeCtx: ToolBridgeContext,
+  tool: ADKFunctionTool,
+  callId: string,
+  toolCallEvent: ToolCallEvent,
+  parseError: { message: string },
+): Promise<string> {
+  const error = `Invalid arguments: ${parseError.message}`
+  bridgeCtx.forcedToolGate?.completeToolCall(tool.name, new Error(error))
+  const errorEvent: ToolResultEvent = {
+    id: createEventId(),
+    type: 'tool_result',
+    createdAt: Date.now(),
+    callId,
+    name: tool.name,
+    error,
+    invocationId: bridgeCtx.invocationId,
+    agentName: bridgeCtx.agentName,
+    durationMs: 0,
+  }
+  await appendEvents(bridgeCtx, [toolCallEvent, errorEvent])
+  return `Error: ${error}`
+}
+
+async function executeVoiceTool(
+  tool: ADKFunctionTool,
+  ctx: ToolContext,
+  bridgeCtx: ToolBridgeContext,
+  waitForPlayout: (() => Promise<void>) | undefined,
+): Promise<unknown> {
+  if (!tool.execute) return undefined
+  if (waitForPlayout) {
+    const playoutDone = waitForPlayout().catch(() => {})
+    playoutDone.then(() => bridgeCtx.onToolStart?.())
+    try {
+      return await tool.execute(ctx)
+    } finally {
+      await playoutDone
+      bridgeCtx.onToolEnd?.()
+    }
+  }
+  bridgeCtx.onToolStart?.()
+  try {
+    return await tool.execute(ctx)
+  } finally {
+    bridgeCtx.onToolEnd?.()
+  }
+}
+
+async function appendScopedResult(
+  scope: VoiceToolCallScope,
+  result: unknown,
+  error: string | undefined,
+  output?: boolean,
+): Promise<ToolResultEvent> {
+  const { bridgeCtx, callId, tool, toolCallEvent, ctx, startMs } = scope
+  const evt = makeToolResult(
+    bridgeCtx,
+    callId,
+    tool.name,
+    result,
+    error,
+    Date.now() - startMs,
+    output,
+  )
+  const final = await applyAfterTool(bridgeCtx, ctx, evt)
+  await appendEvents(bridgeCtx, [toolCallEvent, final])
+  return final
+}
+
+function endSession(
+  bridgeCtx: ToolBridgeContext,
+  toolName: string,
+  outputToolName: string | undefined,
+): void {
+  if (outputToolName && outputToolName !== toolName) {
+    const triggerOutputTool = () =>
+      bridgeCtx.voiceSession.generateReply({
+        toolChoice: 'required',
+        instructions: renderToolRequiredInstructions(outputToolName),
+      })
+    bridgeCtx.onEnd?.(async () => {
+      if (bridgeCtx.waitForOutputTool) {
+        await bridgeCtx.waitForOutputTool(outputToolName, triggerOutputTool)
+      } else {
+        await triggerOutputTool()
+      }
+    })
+  } else {
+    bridgeCtx.onEnd?.()
+  }
+}
+
+/** Handles output, end and transfer signals a tool can return in place of a result. */
+async function resultForVoiceSignal(
+  scope: VoiceToolCallScope,
+  result: unknown,
+): Promise<EarlyReturn | undefined> {
+  const { bridgeCtx } = scope
+  if (isOutputSignal(result)) {
+    const outputValue = result.value
+    await appendScopedResult(scope, outputValue, undefined, true)
+    bridgeCtx.onOutput?.(outputValue)
+    return { value: undefined }
+  }
+
+  if (isEndSignal(result)) {
+    const outputToolName = getOutputToolName(bridgeCtx.agent)
+    await appendScopedResult(scope, 'Session ending', undefined)
+    endSession(bridgeCtx, scope.tool.name, outputToolName)
+    return { value: 'Session ending' }
+  }
+
+  if (isRunnable(result)) {
+    const target = result as Runnable
+    const msg = `Transferring to agent '${target.name}'`
+    await appendScopedResult(scope, msg, undefined)
+    if (bridgeCtx.onTransfer) {
+      return { value: await bridgeCtx.onTransfer(target) }
+    }
+    console.warn(
+      `[adk/voice] Agent transfer to '${target.name}' ` +
+        'is not supported in this context. The tool result was returned as text.',
+    )
+    return { value: msg }
+  }
+
+  return undefined
+}
+
+/**
+ * Applies the error handler's recovery for a failed attempt: 'retry' to run the tool again, an
+ * early return for a fallback, or undefined to report the error to the model.
+ */
+async function recoverVoiceToolError(
+  scope: VoiceToolCallScope,
+  lastError: Error,
+  attempt: number,
+): Promise<'retry' | EarlyReturn | undefined> {
+  const { bridgeCtx, tool, callId } = scope
+  // Invoke error handler if available (retry, rate-limit, fallback, etc.)
+  if (!bridgeCtx.errorHandler) return undefined
+  const errorCtx: ErrorContext = {
+    invocationId: bridgeCtx.invocationId,
+    agent: bridgeCtx.agent,
+    phase: 'tool',
+    attempt,
+    error: lastError,
+    toolName: tool.name,
+    callId,
+    timestamp: Date.now(),
+  }
+  const recovery = await bridgeCtx.errorHandler.handle(errorCtx)
+
+  switch (recovery.action) {
+    case 'retry':
+      if (recovery.delay) await sleep(recovery.delay)
+      return 'retry'
+
+    case 'fallback':
+      await appendScopedResult(scope, recovery.result, undefined)
+      return { value: serializeResult(recovery.result) }
+
+    case 'throw':
+      throw lastError
+
+    case 'abort':
+    case 'skip':
+    case 'pass':
+    default:
+      // Fall through to return error to the model
+      return undefined
+  }
+}
+
 function createToolExecutor(tool: ADKFunctionTool, getBridgeCtx: () => ToolBridgeContext) {
   return async (args: Record<string, unknown>, lkRunCtx: unknown): Promise<unknown> => {
     const bridgeCtx = getBridgeCtx()
@@ -92,18 +331,12 @@ function createToolExecutor(tool: ADKFunctionTool, getBridgeCtx: () => ToolBridg
     }
 
     const parseResult = isZodSchema(tool.schema) ? safeParseToolArgs(args, tool.schema) : undefined
-    let currentArgs = parseResult?.success ? (parseResult.data as Record<string, unknown>) : args
+    let currentArgs = initialToolArgs(parseResult, args)
     let ctx = buildContext(bridgeCtx, tool.name, currentArgs, callId, waitForPlayout)
 
     const forcedToolInterception = await bridgeCtx.forcedToolGate?.interceptToolCall(toolCallEvent)
     if (forcedToolInterception) {
-      await appendEvents(bridgeCtx, [toolCallEvent, forcedToolInterception.result])
-      if (forcedToolInterception.afterResult) {
-        setTimeout(forcedToolInterception.afterResult, 0)
-      }
-      return (
-        forcedToolInterception.result.error ?? serializeResult(forcedToolInterception.result.result)
-      )
+      return await replayForcedInterception(bridgeCtx, toolCallEvent, forcedToolInterception)
     }
 
     if (bridgeCtx.hook?.beforeTool) {
@@ -115,21 +348,7 @@ function createToolExecutor(tool: ADKFunctionTool, getBridgeCtx: () => ToolBridg
     }
 
     if (parseResult && !parseResult.success) {
-      const error = `Invalid arguments: ${parseResult.error.message}`
-      bridgeCtx.forcedToolGate?.completeToolCall(tool.name, new Error(error))
-      const errorEvent: ToolResultEvent = {
-        id: createEventId(),
-        type: 'tool_result',
-        createdAt: Date.now(),
-        callId,
-        name: tool.name,
-        error,
-        invocationId: bridgeCtx.invocationId,
-        agentName: bridgeCtx.agentName,
-        durationMs: 0,
-      }
-      await appendEvents(bridgeCtx, [toolCallEvent, errorEvent])
-      return `Error: ${error}`
+      return await rejectInvalidArgs(bridgeCtx, tool, callId, toolCallEvent, parseResult.error)
     }
 
     const startMs = Date.now()
@@ -142,195 +361,39 @@ function createToolExecutor(tool: ADKFunctionTool, getBridgeCtx: () => ToolBridg
       }
     }
 
+    const scope: VoiceToolCallScope = { bridgeCtx, tool, callId, toolCallEvent, ctx, startMs }
     let attempt = 0
-    let lastError: Error | undefined
 
     while (attempt < MAX_TOOL_RETRY_ATTEMPTS) {
       attempt++
-      let result: unknown
-      let error: string | undefined
 
       try {
-        if (tool.execute) {
-          if (waitForPlayout) {
-            const playoutDone = waitForPlayout().catch(() => {})
-            playoutDone.then(() => bridgeCtx.onToolStart?.())
-            try {
-              result = await tool.execute(ctx)
-            } finally {
-              await playoutDone
-              bridgeCtx.onToolEnd?.()
-            }
-          } else {
-            bridgeCtx.onToolStart?.()
-            try {
-              result = await tool.execute(ctx)
-            } finally {
-              bridgeCtx.onToolEnd?.()
-            }
-          }
-        }
+        const result = await executeVoiceTool(tool, ctx, bridgeCtx, waitForPlayout)
 
         bridgeCtx.forcedToolGate?.completeToolCall(tool.name)
 
         // Finalize on success (before control signal detection, matching text-mode
         // order for normal results; output signals and runnables skip finalize
         // just like in the text-mode runner)
-        if (isOutputSignal(result)) {
-          const outputValue = result.value
-          const evt = makeToolResult(
-            bridgeCtx,
-            callId,
-            tool.name,
-            outputValue,
-            undefined,
-            Date.now() - startMs,
-            true,
-          )
-          await appendEvents(bridgeCtx, [toolCallEvent, await applyAfterTool(bridgeCtx, ctx, evt)])
-          bridgeCtx.onOutput?.(outputValue)
-          return undefined
-        }
-
-        if (isEndSignal(result)) {
-          const outputToolName = getOutputToolName(bridgeCtx.agent)
-          const evt = makeToolResult(
-            bridgeCtx,
-            callId,
-            tool.name,
-            'Session ending',
-            undefined,
-            Date.now() - startMs,
-          )
-          await appendEvents(bridgeCtx, [toolCallEvent, await applyAfterTool(bridgeCtx, ctx, evt)])
-          if (outputToolName && outputToolName !== tool.name) {
-            const triggerOutputTool = () =>
-              bridgeCtx.voiceSession.generateReply({
-                toolChoice: 'required',
-                instructions: renderToolRequiredInstructions(outputToolName),
-              })
-            bridgeCtx.onEnd?.(async () => {
-              if (bridgeCtx.waitForOutputTool) {
-                await bridgeCtx.waitForOutputTool(outputToolName, triggerOutputTool)
-              } else {
-                await triggerOutputTool()
-              }
-            })
-          } else {
-            bridgeCtx.onEnd?.()
-          }
-          return 'Session ending'
-        }
-
-        if (isRunnable(result)) {
-          const target = result as Runnable
-          const msg = `Transferring to agent '${target.name}'`
-          const evt = makeToolResult(
-            bridgeCtx,
-            callId,
-            tool.name,
-            msg,
-            undefined,
-            Date.now() - startMs,
-          )
-          await appendEvents(bridgeCtx, [toolCallEvent, await applyAfterTool(bridgeCtx, ctx, evt)])
-          if (bridgeCtx.onTransfer) {
-            return await bridgeCtx.onTransfer(target)
-          }
-          console.warn(
-            `[adk/voice] Agent transfer to '${target.name}' ` +
-              'is not supported in this context. The tool result was returned as text.',
-          )
-          return msg
-        }
-
-        if (tool.finalize) {
-          const finalized = await tool.finalize({ ...ctx, result })
-          if (finalized !== undefined) result = finalized
-        }
+        const signalled = await resultForVoiceSignal(scope, result)
+        if (signalled) return signalled.value
 
         // Normal success
-        const evt = makeToolResult(
-          bridgeCtx,
-          callId,
-          tool.name,
-          result,
+        const final = await appendScopedResult(
+          scope,
+          await finalizeVoiceResult(tool, ctx, result),
           undefined,
-          Date.now() - startMs,
         )
-        const final = await applyAfterTool(bridgeCtx, ctx, evt)
-        await appendEvents(bridgeCtx, [toolCallEvent, final])
         return final.error ?? serializeResult(final.result)
       } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err))
-        error = lastError.message
-        bridgeCtx.forcedToolGate?.completeToolCall(tool.name, lastError)
-
-        // Invoke error handler if available (retry, rate-limit, fallback, etc.)
-        if (bridgeCtx.errorHandler) {
-          const errorCtx: ErrorContext = {
-            invocationId: bridgeCtx.invocationId,
-            agent: bridgeCtx.agent,
-            phase: 'tool',
-            attempt,
-            error: lastError,
-            toolName: tool.name,
-            callId,
-            timestamp: Date.now(),
-          }
-          const recovery = await bridgeCtx.errorHandler.handle(errorCtx)
-
-          switch (recovery.action) {
-            case 'retry':
-              if (recovery.delay) await sleep(recovery.delay)
-              continue
-
-            case 'fallback': {
-              const evt = makeToolResult(
-                bridgeCtx,
-                callId,
-                tool.name,
-                recovery.result,
-                undefined,
-                Date.now() - startMs,
-              )
-              await appendEvents(bridgeCtx, [
-                toolCallEvent,
-                await applyAfterTool(bridgeCtx, ctx, evt),
-              ])
-              return serializeResult(recovery.result)
-            }
-
-            case 'throw':
-              throw lastError
-
-            case 'abort':
-            case 'skip':
-            case 'pass':
-            default:
-              // Fall through to return error to the model
-              break
-          }
-        }
-
-        // No retry — return error to the model
-        const evt = makeToolResult(
-          bridgeCtx,
-          callId,
-          tool.name,
-          undefined,
-          error,
-          Date.now() - startMs,
-        )
-        await appendEvents(bridgeCtx, [toolCallEvent, await applyAfterTool(bridgeCtx, ctx, evt)])
-        return `Error: ${error}`
+        const outcome = await handleVoiceToolFailure(scope, err, attempt)
+        if (outcome === 'retry') continue
+        return outcome.value
       }
     }
-
     // Exhausted retry attempts
     const error = `Tool '${tool.name}' exceeded maximum retry attempts (${MAX_TOOL_RETRY_ATTEMPTS})`
-    const evt = makeToolResult(bridgeCtx, callId, tool.name, undefined, error, Date.now() - startMs)
-    await appendEvents(bridgeCtx, [toolCallEvent, await applyAfterTool(bridgeCtx, ctx, evt)])
+    await appendScopedResult(scope, undefined, error)
     return `Error: ${error}`
   }
 }

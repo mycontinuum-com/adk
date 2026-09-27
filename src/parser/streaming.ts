@@ -44,6 +44,127 @@ interface StreamContext<T> {
   complete: boolean
 }
 
+type PrimitiveJsonish = Extract<JsonishValue, { type: 'string' | 'number' | 'boolean' | 'null' }>
+type ObjectJsonish = Extract<JsonishValue, { type: 'object' }>
+type ArrayJsonish = Extract<JsonishValue, { type: 'array' }>
+
+function pushPrimitiveDeltas<T>(
+  deltas: StreamDelta<T>[],
+  oldValue: JsonishValue,
+  newValue: PrimitiveJsonish,
+  path: string[],
+): void {
+  const oldPrimitive = oldValue as typeof newValue
+  if (oldPrimitive.value !== newValue.value) {
+    if (
+      newValue.type === 'string' &&
+      oldValue.type === 'string' &&
+      (newValue.value as string).startsWith(oldPrimitive.value as string)
+    ) {
+      const appendedContent = (newValue.value as string).slice(
+        (oldPrimitive.value as string).length,
+      )
+      if (appendedContent) {
+        deltas.push({ path, value: appendedContent, operation: 'append' })
+      }
+    } else {
+      deltas.push({ path, value: newValue.value, operation: 'set' })
+    }
+  }
+  if (
+    oldPrimitive.completionState !== newValue.completionState &&
+    newValue.completionState === 'complete'
+  ) {
+    deltas.push({ path, value: newValue.value, operation: 'complete' })
+  }
+}
+
+function pushObjectDeltas<T>(
+  deltas: StreamDelta<T>[],
+  oldObj: ObjectJsonish,
+  newValue: ObjectJsonish,
+  path: string[],
+): void {
+  const oldKeysObj: Record<string, number> = {}
+  oldObj.entries.forEach((e, i) => {
+    oldKeysObj[e.key] = i
+  })
+  const newKeysObj: Record<string, number> = {}
+  newValue.entries.forEach((e, i) => {
+    newKeysObj[e.key] = i
+  })
+
+  for (const key of Object.keys(newKeysObj)) {
+    const newIdx = newKeysObj[key]
+    const newEntry = newValue.entries[newIdx]
+    const oldIdx = oldKeysObj[key]
+
+    if (oldIdx === undefined) {
+      deltas.push({
+        path: [...path, key],
+        value: jsonishToPlain(newEntry.value),
+        operation: 'set',
+      })
+    } else {
+      const oldEntry = oldObj.entries[oldIdx]
+      deltas.push(...computeDeltas<T>(oldEntry.value, newEntry.value, [...path, key]))
+    }
+  }
+
+  for (const key of Object.keys(oldKeysObj)) {
+    if (!(key in newKeysObj)) {
+      deltas.push({
+        path: [...path, key],
+        value: undefined,
+        operation: 'delete',
+      })
+    }
+  }
+
+  if (
+    oldObj.completionState !== newValue.completionState &&
+    newValue.completionState === 'complete'
+  ) {
+    deltas.push({
+      path,
+      value: jsonishToPlain(newValue),
+      operation: 'complete',
+    })
+  }
+}
+
+function pushArrayDeltas<T>(
+  deltas: StreamDelta<T>[],
+  oldArr: ArrayJsonish,
+  newValue: ArrayJsonish,
+  path: string[],
+): void {
+  const minLen = Math.min(oldArr.items.length, newValue.items.length)
+
+  for (let i = 0; i < minLen; i++) {
+    deltas.push(...computeDeltas<T>(oldArr.items[i], newValue.items[i], [...path, String(i)]))
+  }
+
+  for (let i = minLen; i < newValue.items.length; i++) {
+    deltas.push({
+      path: [...path, String(i)],
+      value: jsonishToPlain(newValue.items[i]),
+      operation: 'set',
+    })
+  }
+
+  if (
+    oldArr.completionState !== newValue.completionState &&
+    newValue.completionState === 'complete'
+  ) {
+    deltas.push({
+      path,
+      value: jsonishToPlain(newValue),
+      operation: 'complete',
+    })
+  }
+}
+
 function computeDeltas<T>(
   oldValue: JsonishValue | undefined,
   newValue: JsonishValue | undefined,
@@ -76,112 +197,17 @@ function computeDeltas<T>(
     case 'string':
     case 'number':
     case 'boolean':
-    case 'null': {
-      const oldPrimitive = oldValue as typeof newValue
-      if (oldPrimitive.value !== newValue.value) {
-        if (
-          newValue.type === 'string' &&
-          oldValue.type === 'string' &&
-          (newValue.value as string).startsWith(oldPrimitive.value as string)
-        ) {
-          const appendedContent = (newValue.value as string).slice(
-            (oldPrimitive.value as string).length,
-          )
-          if (appendedContent) {
-            deltas.push({ path, value: appendedContent, operation: 'append' })
-          }
-        } else {
-          deltas.push({ path, value: newValue.value, operation: 'set' })
-        }
-      }
-      if (
-        oldPrimitive.completionState !== newValue.completionState &&
-        newValue.completionState === 'complete'
-      ) {
-        deltas.push({ path, value: newValue.value, operation: 'complete' })
-      }
+    case 'null':
+      pushPrimitiveDeltas(deltas, oldValue, newValue, path)
       break
-    }
 
-    case 'object': {
-      const oldObj = oldValue as typeof newValue
-      const oldKeysObj: Record<string, number> = {}
-      oldObj.entries.forEach((e, i) => {
-        oldKeysObj[e.key] = i
-      })
-      const newKeysObj: Record<string, number> = {}
-      newValue.entries.forEach((e, i) => {
-        newKeysObj[e.key] = i
-      })
-
-      for (const key of Object.keys(newKeysObj)) {
-        const newIdx = newKeysObj[key]
-        const newEntry = newValue.entries[newIdx]
-        const oldIdx = oldKeysObj[key]
-
-        if (oldIdx === undefined) {
-          deltas.push({
-            path: [...path, key],
-            value: jsonishToPlain(newEntry.value),
-            operation: 'set',
-          })
-        } else {
-          const oldEntry = oldObj.entries[oldIdx]
-          deltas.push(...computeDeltas<T>(oldEntry.value, newEntry.value, [...path, key]))
-        }
-      }
-
-      for (const key of Object.keys(oldKeysObj)) {
-        if (!(key in newKeysObj)) {
-          deltas.push({
-            path: [...path, key],
-            value: undefined,
-            operation: 'delete',
-          })
-        }
-      }
-
-      if (
-        oldObj.completionState !== newValue.completionState &&
-        newValue.completionState === 'complete'
-      ) {
-        deltas.push({
-          path,
-          value: jsonishToPlain(newValue),
-          operation: 'complete',
-        })
-      }
+    case 'object':
+      pushObjectDeltas(deltas, oldValue as typeof newValue, newValue, path)
       break
-    }
 
-    case 'array': {
-      const oldArr = oldValue as typeof newValue
-      const minLen = Math.min(oldArr.items.length, newValue.items.length)
-
-      for (let i = 0; i < minLen; i++) {
-        deltas.push(...computeDeltas<T>(oldArr.items[i], newValue.items[i], [...path, String(i)]))
-      }
-
-      for (let i = minLen; i < newValue.items.length; i++) {
-        deltas.push({
-          path: [...path, String(i)],
-          value: jsonishToPlain(newValue.items[i]),
-          operation: 'set',
-        })
-      }
-
-      if (
-        oldArr.completionState !== newValue.completionState &&
-        newValue.completionState === 'complete'
-      ) {
-        deltas.push({
-          path,
-          value: jsonishToPlain(newValue),
-          operation: 'complete',
-        })
-      }
+    case 'array':
+      pushArrayDeltas(deltas, oldValue as typeof newValue, newValue, path)
       break
-    }
 
     case 'fixed':
     case 'markdown': {

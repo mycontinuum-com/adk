@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 
 import type { DisplayEvent, PendingBracket } from '../blocks'
 
@@ -9,6 +9,33 @@ import {
   getEventId,
 } from '../app-helpers'
 
+type DeltaBatchSelection = {
+  id: string
+  deltaType: 'thought_delta' | 'assistant_delta'
+}
+
+/**
+ * Records whether the selection sits on a pending bracket or delta batch, which later resolve into
+ * other events the selection should follow.
+ */
+function rememberTransientSelection(
+  currentEvent: DisplayEvent | undefined,
+  wasOnPendingBracketRef: MutableRefObject<PendingBracket | null>,
+  wasOnDeltaBatchRef: MutableRefObject<DeltaBatchSelection | null>,
+): void {
+  if (currentEvent?.type === 'pending_block_end' || currentEvent?.type === 'pending_context_end') {
+    wasOnPendingBracketRef.current = currentEvent as PendingBracket
+    wasOnDeltaBatchRef.current = null
+  } else if (currentEvent?.type === 'delta_batch') {
+    const batch = currentEvent as DeltaBatchSelection
+    wasOnDeltaBatchRef.current = { id: batch.id, deltaType: batch.deltaType }
+    wasOnPendingBracketRef.current = null
+  } else {
+    wasOnPendingBracketRef.current = null
+    wasOnDeltaBatchRef.current = null
+  }
+}
+
 /**
  * Owns the trace selection and keeps it on the same logical event as pending brackets and delta
  * batches resolve.
@@ -17,10 +44,7 @@ export function useSelectionTracking(selectableEvents: DisplayEvent[]) {
   const [selectedIndex, setSelectedIndex] = useState<number>(0)
   const selectedEventIdRef = useRef<string | undefined>(undefined)
   const wasOnPendingBracketRef = useRef<PendingBracket | null>(null)
-  const wasOnDeltaBatchRef = useRef<{
-    id: string
-    deltaType: 'thought_delta' | 'assistant_delta'
-  } | null>(null)
+  const wasOnDeltaBatchRef = useRef<DeltaBatchSelection | null>(null)
 
   const selectableEventIdToIndex = useMemo(() => {
     const map = new Map<string, number>()
@@ -89,20 +113,7 @@ export function useSelectionTracking(selectableEvents: DisplayEvent[]) {
       selectedEventIdRef.current = currentId
     }
 
-    if (
-      currentEvent?.type === 'pending_block_end' ||
-      currentEvent?.type === 'pending_context_end'
-    ) {
-      wasOnPendingBracketRef.current = currentEvent as PendingBracket
-      wasOnDeltaBatchRef.current = null
-    } else if (currentEvent?.type === 'delta_batch') {
-      const batch = currentEvent as { id: string; deltaType: 'thought_delta' | 'assistant_delta' }
-      wasOnDeltaBatchRef.current = { id: batch.id, deltaType: batch.deltaType }
-      wasOnPendingBracketRef.current = null
-    } else {
-      wasOnPendingBracketRef.current = null
-      wasOnDeltaBatchRef.current = null
-    }
+    rememberTransientSelection(currentEvent, wasOnPendingBracketRef, wasOnDeltaBatchRef)
   }, [selectableEvents, selectedIndex, selectableEventIdToIndex, pendingBracketLookupMaps])
 
   return { selectedIndex, setSelectedIndex, selectedEventIdRef }

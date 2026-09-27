@@ -30,6 +30,72 @@ interface SpeakerState {
   lastSoleSpeakerEndMs: number
 }
 
+type SpeakingFlags = { agent: boolean; user: boolean }
+
+function soleSpeaker(flags: SpeakingFlags): 'agent' | 'user' | null {
+  return flags.agent && !flags.user ? 'agent' : flags.user && !flags.agent ? 'user' : null
+}
+
+// --- Silence gap: both were silent, someone starts ---
+function recordSilenceBreak(
+  timing: MutableVoiceTiming,
+  state: SpeakerState,
+  next: SpeakingFlags,
+  nowMs: number,
+  elapsed: number,
+): void {
+  timing.silenceGaps.push({ ms: elapsed, afterTurnIndex: state.turnIndex })
+
+  // Response time across silence gap: last sole speaker was X, now Y starts.
+  // LiveKit almost always has a silence gap between speakers, so the direct
+  // "user speaking → agent starts" transition rarely fires. Instead we measure
+  // from when the last sole speaker stopped to when the new speaker begins.
+  const nextSole = soleSpeaker(next)
+  if (nextSole && state.lastSoleSpeaker && nextSole !== state.lastSoleSpeaker) {
+    const responseMs = nowMs - state.lastSoleSpeakerEndMs
+    timing.responseTimes.push({
+      ms: responseMs,
+      afterTurnIndex: state.turnIndex,
+      speaker: nextSole,
+    })
+  }
+}
+
+function recordOverlaps(
+  timing: MutableVoiceTiming,
+  state: SpeakerState,
+  prev: SpeakingFlags,
+  next: SpeakingFlags,
+  elapsed: number,
+): void {
+  // --- Response time: user was speaking alone, agent starts (direct, no gap) ---
+  if (prev.user && !prev.agent && next.agent) {
+    timing.responseTimes.push({
+      ms: elapsed,
+      afterTurnIndex: state.turnIndex,
+      speaker: 'agent',
+    })
+    if (next.user) {
+      timing.interruptions.byAgent++
+      timing.interruptions.count++
+    }
+  }
+
+  // --- Interruption: agent was speaking alone, user starts while agent continues ---
+  if (prev.agent && !prev.user && next.user) {
+    if (next.agent) {
+      timing.interruptions.byUser++
+      timing.interruptions.count++
+    }
+  }
+
+  // --- Simultaneous start from silence (both start in same VAD tick) ---
+  if (!prev.agent && !prev.user && next.agent && next.user) {
+    timing.interruptions.count++
+    // Not attributed to either side
+  }
+}
+
 /** Timing for a run that measured no speech. */
 export function emptyTiming(): VoiceTiming {
   return {
@@ -95,52 +161,11 @@ export function createSpeakerTracker(agentIdentity: string, userIdentity: string
       // No change — ignore
       if (prev.agent === next.agent && prev.user === next.user) return
 
-      // --- Silence gap: both were silent, someone starts ---
       if (!prev.agent && !prev.user && (next.agent || next.user)) {
-        timing.silenceGaps.push({ ms: elapsed, afterTurnIndex: state.turnIndex })
-
-        // Response time across silence gap: last sole speaker was X, now Y starts.
-        // LiveKit almost always has a silence gap between speakers, so the direct
-        // "user speaking → agent starts" transition rarely fires. Instead we measure
-        // from when the last sole speaker stopped to when the new speaker begins.
-        const nextSole =
-          next.agent && !next.user ? 'agent' : next.user && !next.agent ? 'user' : null
-        if (nextSole && state.lastSoleSpeaker && nextSole !== state.lastSoleSpeaker) {
-          const responseMs = nowMs - state.lastSoleSpeakerEndMs
-          timing.responseTimes.push({
-            ms: responseMs,
-            afterTurnIndex: state.turnIndex,
-            speaker: nextSole,
-          })
-        }
+        recordSilenceBreak(timing, state, next, nowMs, elapsed)
       }
 
-      // --- Response time: user was speaking alone, agent starts (direct, no gap) ---
-      if (prev.user && !prev.agent && next.agent) {
-        timing.responseTimes.push({
-          ms: elapsed,
-          afterTurnIndex: state.turnIndex,
-          speaker: 'agent',
-        })
-        if (next.user) {
-          timing.interruptions.byAgent++
-          timing.interruptions.count++
-        }
-      }
-
-      // --- Interruption: agent was speaking alone, user starts while agent continues ---
-      if (prev.agent && !prev.user && next.user) {
-        if (next.agent) {
-          timing.interruptions.byUser++
-          timing.interruptions.count++
-        }
-      }
-
-      // --- Simultaneous start from silence (both start in same VAD tick) ---
-      if (!prev.agent && !prev.user && next.agent && next.user) {
-        timing.interruptions.count++
-        // Not attributed to either side
-      }
+      recordOverlaps(timing, state, prev, next, elapsed)
 
       // --- First speech by agent ---
       if (timing.timeToFirstSpeechMs == null && next.agent) {
@@ -148,8 +173,8 @@ export function createSpeakerTracker(agentIdentity: string, userIdentity: string
       }
 
       // --- Turn index: increment on sole-speaker role change ---
-      const prevSole = prev.agent && !prev.user ? 'agent' : prev.user && !prev.agent ? 'user' : null
-      const nextSole = next.agent && !next.user ? 'agent' : next.user && !next.agent ? 'user' : null
+      const prevSole = soleSpeaker(prev)
+      const nextSole = soleSpeaker(next)
       if (prevSole && nextSole && prevSole !== nextSole) {
         state.turnIndex++
       }

@@ -1,6 +1,6 @@
 import { EventType, type AGUIEvent, type CustomEvent, type StateSnapshotEvent } from '@ag-ui/core'
 
-import type { StreamEvent, ToolYieldEvent } from '../types/events'
+import type { StreamEvent, ToolCallEvent, ToolYieldEvent } from '../types/events'
 
 export { EventType }
 
@@ -9,6 +9,33 @@ export interface AdapterOptions {
   includeSteps?: boolean
   includeRawEvents?: boolean
   yieldTransformers?: Record<string, (event: ToolYieldEvent) => CustomEvent | null>
+}
+
+type BaseFields = { timestamp: number; rawEvent?: StreamEvent }
+
+function toolCallEvents(event: ToolCallEvent, base: BaseFields): AGUIEvent[] {
+  const out: AGUIEvent[] = [
+    {
+      type: EventType.TOOL_CALL_START,
+      toolCallId: event.callId,
+      toolCallName: event.name,
+      ...base,
+    },
+    {
+      type: EventType.TOOL_CALL_ARGS,
+      toolCallId: event.callId,
+      delta: JSON.stringify(event.args),
+      ...base,
+    },
+  ]
+  if (!event.yields) {
+    out.push({
+      type: EventType.TOOL_CALL_END,
+      toolCallId: event.callId,
+      ...base,
+    })
+  }
+  return out
 }
 
 export class AgUIAdapter {
@@ -63,12 +90,15 @@ export class AgUIAdapter {
     return event.invocationId !== undefined && this.nestedInvocations.has(event.invocationId)
   }
 
+  /** Nested invocations surface only as steps. */
+  private isHiddenNestedEvent(event: StreamEvent): boolean {
+    return (
+      this.isNested(event) && event.type !== 'invocation_start' && event.type !== 'invocation_end'
+    )
+  }
+
   transform(event: StreamEvent): AGUIEvent[] {
-    if (
-      this.isNested(event) &&
-      event.type !== 'invocation_start' &&
-      event.type !== 'invocation_end'
-    ) {
+    if (this.isHiddenNestedEvent(event)) {
       return []
     }
     const out: AGUIEvent[] = []
@@ -77,47 +107,12 @@ export class AgUIAdapter {
     switch (event.type) {
       case 'thought_delta':
         if (!this.reasoning) break
-        if (!this.inReasoning) {
-          this.inReasoning = true
-          this.reasoningPhaseId = `reasoning_${++this.messageId}`
-          this.reasoningMsgId = `reasoning_msg_${this.messageId}`
-          out.push({
-            type: EventType.REASONING_START,
-            messageId: this.reasoningPhaseId,
-            ...base,
-          })
-          out.push({
-            type: EventType.REASONING_MESSAGE_START,
-            messageId: this.reasoningMsgId,
-            role: 'reasoning',
-            ...base,
-          })
-        }
-        out.push({
-          type: EventType.REASONING_MESSAGE_CONTENT,
-          messageId: this.reasoningMsgId!,
-          delta: event.delta,
-          ...base,
-        })
+        out.push(...this.reasoningDeltaEvents(event.delta, base))
         break
 
       case 'thought':
         if (!this.reasoning) break
-        if (this.inReasoning) {
-          out.push({
-            type: EventType.REASONING_MESSAGE_END,
-            messageId: this.reasoningMsgId!,
-            ...base,
-          })
-          out.push({
-            type: EventType.REASONING_END,
-            messageId: this.reasoningPhaseId!,
-            ...base,
-          })
-          this.inReasoning = false
-          this.reasoningPhaseId = null
-          this.reasoningMsgId = null
-        }
+        out.push(...this.endReasoningEvents(base))
         break
 
       case 'assistant_delta':
@@ -152,25 +147,7 @@ export class AgUIAdapter {
 
       case 'tool_call':
         out.push(...this.closeReasoning(base.timestamp))
-        out.push({
-          type: EventType.TOOL_CALL_START,
-          toolCallId: event.callId,
-          toolCallName: event.name,
-          ...base,
-        })
-        out.push({
-          type: EventType.TOOL_CALL_ARGS,
-          toolCallId: event.callId,
-          delta: JSON.stringify(event.args),
-          ...base,
-        })
-        if (!event.yields) {
-          out.push({
-            type: EventType.TOOL_CALL_END,
-            toolCallId: event.callId,
-            ...base,
-          })
-        }
+        out.push(...toolCallEvents(event, base))
         break
 
       case 'tool_result':
@@ -225,6 +202,53 @@ export class AgUIAdapter {
         break
     }
 
+    return out
+  }
+
+  private reasoningDeltaEvents(delta: string, base: BaseFields): AGUIEvent[] {
+    const out: AGUIEvent[] = []
+    if (!this.inReasoning) {
+      this.inReasoning = true
+      this.reasoningPhaseId = `reasoning_${++this.messageId}`
+      this.reasoningMsgId = `reasoning_msg_${this.messageId}`
+      out.push({
+        type: EventType.REASONING_START,
+        messageId: this.reasoningPhaseId,
+        ...base,
+      })
+      out.push({
+        type: EventType.REASONING_MESSAGE_START,
+        messageId: this.reasoningMsgId,
+        role: 'reasoning',
+        ...base,
+      })
+    }
+    out.push({
+      type: EventType.REASONING_MESSAGE_CONTENT,
+      messageId: this.reasoningMsgId!,
+      delta,
+      ...base,
+    })
+    return out
+  }
+
+  private endReasoningEvents(base: BaseFields): AGUIEvent[] {
+    if (!this.inReasoning) return []
+    const out: AGUIEvent[] = [
+      {
+        type: EventType.REASONING_MESSAGE_END,
+        messageId: this.reasoningMsgId!,
+        ...base,
+      },
+      {
+        type: EventType.REASONING_END,
+        messageId: this.reasoningPhaseId!,
+        ...base,
+      },
+    ]
+    this.inReasoning = false
+    this.reasoningPhaseId = null
+    this.reasoningMsgId = null
     return out
   }
 

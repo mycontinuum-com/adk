@@ -43,6 +43,45 @@ interface ProcessSubscription {
 }
 
 /** Gateway implementation. */
+/** Replays stored session events after the cursor, recording every stored id as seen. */
+function* sessionHistoryEvents(
+  events: readonly Event[],
+  cursor: string | undefined,
+  yieldedIds: Set<string>,
+): Generator<ProcessEvent> {
+  let pastCursor = !cursor
+  for (const event of events) {
+    if (event.id) yieldedIds.add(event.id)
+    if (pastCursor) {
+      yield { type: 'stream', event: event as StreamEvent }
+    } else if (event.id === cursor) {
+      pastCursor = true
+    }
+  }
+}
+
+/** Yields buffered live events not already replayed; returns true once `completed` is yielded. */
+function* unseenBufferedEvents(
+  buffered: readonly ProcessEvent[],
+  yieldedIds: Set<string>,
+): Generator<ProcessEvent, boolean> {
+  for (const event of buffered) {
+    const bufferedId = event.type === 'stream' ? event.event.id : undefined
+    if (bufferedId) {
+      if (yieldedIds.has(bufferedId)) continue
+      yieldedIds.add(bufferedId)
+    }
+    yield event
+    if (event.type === 'completed') return true
+  }
+  return false
+}
+
+function isAlreadyYielded(event: ProcessEvent, yieldedIds: Set<string>): boolean {
+  const streamId = event.type === 'stream' ? event.event.id : undefined
+  return Boolean(streamId && yieldedIds.has(streamId))
+}
+
 export class GatewayImpl implements Gateway {
   private readonly appName: string
   private readonly processStore: ProcessStore
@@ -192,28 +231,12 @@ export class GatewayImpl implements Gateway {
 
       const session = await this.sessionService.getSession(this.appName, process.sessionId)
       if (session) {
-        const cursor = options?.after
-        let pastCursor = !cursor
-        for (const event of session.events) {
-          if (event.id) yieldedIds.add(event.id)
-          if (pastCursor) {
-            yield { type: 'stream', event: event as StreamEvent }
-          } else if (event.id === cursor) {
-            pastCursor = true
-          }
-        }
+        yield* sessionHistoryEvents(session.events, options?.after, yieldedIds)
       }
 
       const bufferedSnapshot = subscription.emittedEvents.slice()
-      for (const buffered of bufferedSnapshot) {
-        const bufferedId = buffered.type === 'stream' ? buffered.event.id : undefined
-        if (bufferedId) {
-          if (yieldedIds.has(bufferedId)) continue
-          yieldedIds.add(bufferedId)
-        }
-        yield buffered
-        if (buffered.type === 'completed') return
-      }
+      const bufferedCompleted = yield* unseenBufferedEvents(bufferedSnapshot, yieldedIds)
+      if (bufferedCompleted) return
 
       const currentProcess = await this.processStore.get(this.appName, processId)
       if (currentProcess?.status === 'completed' && eventQueue.length === 0) {
@@ -227,8 +250,7 @@ export class GatewayImpl implements Gateway {
           const event = eventQueue.shift()!
 
           // Deduplicate: skip stream events already yielded from history
-          const streamId = event.type === 'stream' ? event.event.id : undefined
-          if (streamId && yieldedIds.has(streamId)) {
+          if (isAlreadyYielded(event, yieldedIds)) {
             continue
           }
 
@@ -243,8 +265,7 @@ export class GatewayImpl implements Gateway {
             resolveNext = (result) => resolve(result.value)
           })
 
-          const streamId = event.type === 'stream' ? event.event.id : undefined
-          if (streamId && yieldedIds.has(streamId)) {
+          if (isAlreadyYielded(event, yieldedIds)) {
             continue
           }
 

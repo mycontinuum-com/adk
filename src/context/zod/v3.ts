@@ -79,11 +79,8 @@ function findReused(schema: z.ZodType): Set<Identity> {
   return reused
 }
 
-function getTypeName(schema: z.ZodType, ctx: RenderContext): string {
-  const d = getDef(schema)
-  const t = d.typeName
-  const id = getIdentity(schema)
-
+/** Returns null when `t` is not a scalar type. */
+function getScalarTypeName(t: string | undefined, d: ZodDef): string | null {
   if (t === 'ZodString') return 'string'
   if (t === 'ZodNumber') return 'number'
   if (t === 'ZodBoolean') return 'boolean'
@@ -92,11 +89,28 @@ function getTypeName(schema: z.ZodType, ctx: RenderContext): string {
   if (t === 'ZodLiteral') return JSON.stringify(d.value)
   if (t === 'ZodEnum') return (d.values ?? []).map((v) => JSON.stringify(v)).join(' | ')
   if (t === 'ZodNativeEnum') return 'enum'
+  return null
+}
+
+/** Returns null when `t` is not a wrapper or composite type handled here. */
+function getWrapperTypeName(t: string | undefined, d: ZodDef, ctx: RenderContext): string | null {
   if (t === 'ZodRecord' && d.valueType) return `Record<string, ${getTypeName(d.valueType, ctx)}>`
   if (t === 'ZodDefault' && d.innerType) return getTypeName(d.innerType, ctx)
   if (t === 'ZodNullable' && d.innerType) return `${getTypeName(d.innerType, ctx)} | null`
   if (t === 'ZodOptional' && d.innerType) return getTypeName(d.innerType, ctx)
   if (t === 'ZodUnion' && d.options) return d.options.map((o) => getTypeName(o, ctx)).join(' | ')
+  return null
+}
+
+function getTypeName(schema: z.ZodType, ctx: RenderContext): string {
+  const d = getDef(schema)
+  const t = d.typeName
+  const id = getIdentity(schema)
+
+  const scalar = getScalarTypeName(t, d)
+  if (scalar !== null) return scalar
+  const wrapped = getWrapperTypeName(t, d, ctx)
+  if (wrapped !== null) return wrapped
   if (t === 'ZodArray' && d.type) {
     const innerId = getIdentity(d.type)
     if (ctx.refs.has(innerId)) return `Array<${ctx.refs.get(innerId)}>`
@@ -109,6 +123,74 @@ function getTypeName(schema: z.ZodType, ctx: RenderContext): string {
   return 'unknown'
 }
 
+function renderLazy(
+  schema: z.ZodType,
+  d: ZodDef,
+  id: Identity,
+  indent: number,
+  ctx: RenderContext,
+): string {
+  if (ctx.rendering.has(id)) {
+    const name = `T${++ctx.counter}`
+    ctx.refs.set(id, name)
+    return name
+  }
+  const needsRef = ctx.reused.has(id)
+  const refName = needsRef ? `T${++ctx.counter}` : undefined
+  if (refName) ctx.refs.set(id, refName)
+
+  ctx.rendering.add(id)
+  const inner = d.getter ? d.getter() : schema
+  const result = render(inner, indent, ctx)
+  ctx.rendering.delete(id)
+
+  if (refName && !result.startsWith('{ #')) {
+    return result.replace('{', `{ #${refName}`)
+  }
+  return result
+}
+
+function pushFieldLines(
+  lines: string[],
+  key: string,
+  value: z.ZodType,
+  pad: string,
+  indent: number,
+  ctx: RenderContext,
+): void {
+  const fieldDef = getDef(value)
+  const isOpt = fieldDef.typeName === 'ZodOptional'
+  const inner = isOpt && fieldDef.innerType ? fieldDef.innerType : value
+  const innerDef = getDef(inner)
+  const innerId = getIdentity(inner)
+
+  if (fieldDef.description) {
+    lines.push(`${pad}  // ${fieldDef.description}`)
+  }
+
+  const isComplex = innerDef.typeName === 'ZodObject' || innerDef.typeName === 'ZodLazy'
+  const isArrayOfComplex =
+    innerDef.typeName === 'ZodArray' &&
+    innerDef.type &&
+    ['ZodObject', 'ZodLazy'].includes(getDef(innerDef.type).typeName ?? '')
+
+  if (isComplex || isArrayOfComplex) {
+    let rendered: string
+    if (isArrayOfComplex && innerDef.type) {
+      const arrayInnerId = getIdentity(innerDef.type)
+      const innerRendered = ctx.refs.has(arrayInnerId)
+        ? ctx.refs.get(arrayInnerId)!
+        : render(innerDef.type, indent + 1, ctx)
+      rendered = `Array<${innerRendered}>`
+    } else {
+      rendered = ctx.refs.has(innerId) ? ctx.refs.get(innerId)! : render(inner, indent + 1, ctx)
+    }
+    lines.push(`${pad}  ${key}${isOpt ? '?' : ''}: ${rendered}`)
+  } else {
+    lines.push(`${pad}  ${key}: ${getTypeName(value, ctx)}`)
+  }
+}
+
 function render(schema: z.ZodType, indent: number, ctx: RenderContext): string {
   const d = getDef(schema)
   const pad = '  '.repeat(indent)
@@ -119,24 +201,7 @@ function render(schema: z.ZodType, indent: number, ctx: RenderContext): string {
   }
 
   if (d.typeName === 'ZodLazy') {
-    if (ctx.rendering.has(id)) {
-      const name = `T${++ctx.counter}`
-      ctx.refs.set(id, name)
-      return name
-    }
-    const needsRef = ctx.reused.has(id)
-    const refName = needsRef ? `T${++ctx.counter}` : undefined
-    if (refName) ctx.refs.set(id, refName)
-
-    ctx.rendering.add(id)
-    const inner = d.getter ? d.getter() : schema
-    const result = render(inner, indent, ctx)
-    ctx.rendering.delete(id)
-
-    if (refName && !result.startsWith('{ #')) {
-      return result.replace('{', `{ #${refName}`)
-    }
-    return result
+    return renderLazy(schema, d, id, indent, ctx)
   }
 
   if (d.typeName !== 'ZodObject') {
@@ -158,37 +223,7 @@ function render(schema: z.ZodType, indent: number, ctx: RenderContext): string {
   const lines: string[] = [refName ? `{ #${refName}` : '{']
 
   for (const [key, value] of Object.entries(shape)) {
-    const fieldDef = getDef(value as z.ZodType)
-    const isOpt = fieldDef.typeName === 'ZodOptional'
-    const inner = isOpt && fieldDef.innerType ? fieldDef.innerType : (value as z.ZodType)
-    const innerDef = getDef(inner)
-    const innerId = getIdentity(inner)
-
-    if (fieldDef.description) {
-      lines.push(`${pad}  // ${fieldDef.description}`)
-    }
-
-    const isComplex = innerDef.typeName === 'ZodObject' || innerDef.typeName === 'ZodLazy'
-    const isArrayOfComplex =
-      innerDef.typeName === 'ZodArray' &&
-      innerDef.type &&
-      ['ZodObject', 'ZodLazy'].includes(getDef(innerDef.type).typeName ?? '')
-
-    if (isComplex || isArrayOfComplex) {
-      let rendered: string
-      if (isArrayOfComplex && innerDef.type) {
-        const arrayInnerId = getIdentity(innerDef.type)
-        const innerRendered = ctx.refs.has(arrayInnerId)
-          ? ctx.refs.get(arrayInnerId)!
-          : render(innerDef.type, indent + 1, ctx)
-        rendered = `Array<${innerRendered}>`
-      } else {
-        rendered = ctx.refs.has(innerId) ? ctx.refs.get(innerId)! : render(inner, indent + 1, ctx)
-      }
-      lines.push(`${pad}  ${key}${isOpt ? '?' : ''}: ${rendered}`)
-    } else {
-      lines.push(`${pad}  ${key}: ${getTypeName(value as z.ZodType, ctx)}`)
-    }
+    pushFieldLines(lines, key, value as z.ZodType, pad, indent, ctx)
   }
 
   ctx.rendering.delete(id)

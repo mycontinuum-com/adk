@@ -71,6 +71,27 @@ function jsonSchemaToZod(schema: Record<string, unknown>): z.ZodType<Record<stri
   return z.strictObject(shape) as z.ZodType<Record<string, unknown>>
 }
 
+function stringPropToZod(prop: Record<string, unknown>): z.ZodType {
+  if (prop.enum) {
+    return z.enum(prop.enum as [string, ...string[]])
+  }
+  let str = z.string()
+  if (typeof prop.minLength === 'number') str = str.min(prop.minLength)
+  if (typeof prop.maxLength === 'number') str = str.max(prop.maxLength)
+  if (typeof prop.pattern === 'string') str = str.regex(new RegExp(prop.pattern))
+  return str
+}
+
+function numberPropToZod(prop: Record<string, unknown>, integer: boolean): z.ZodType {
+  let num = z.number()
+  if (integer) num = num.int()
+  if (typeof prop.minimum === 'number') num = num.min(prop.minimum)
+  if (typeof prop.maximum === 'number') num = num.max(prop.maximum)
+  if (typeof prop.exclusiveMinimum === 'number') num = num.gt(prop.exclusiveMinimum)
+  if (typeof prop.exclusiveMaximum === 'number') num = num.lt(prop.exclusiveMaximum)
+  return num
+}
+
 function propToZod(prop: Record<string, unknown>): z.ZodType {
   if (prop.const !== undefined) return z.literal(prop.const as string | number | boolean)
 
@@ -81,23 +102,9 @@ function propToZod(prop: Record<string, unknown>): z.ZodType {
   let schema: z.ZodType
 
   if (baseType === 'string') {
-    if (prop.enum) {
-      schema = z.enum(prop.enum as [string, ...string[]])
-    } else {
-      let str = z.string()
-      if (typeof prop.minLength === 'number') str = str.min(prop.minLength)
-      if (typeof prop.maxLength === 'number') str = str.max(prop.maxLength)
-      if (typeof prop.pattern === 'string') str = str.regex(new RegExp(prop.pattern))
-      schema = str
-    }
+    schema = stringPropToZod(prop)
   } else if (baseType === 'number' || baseType === 'integer') {
-    let num = z.number()
-    if (baseType === 'integer') num = num.int()
-    if (typeof prop.minimum === 'number') num = num.min(prop.minimum)
-    if (typeof prop.maximum === 'number') num = num.max(prop.maximum)
-    if (typeof prop.exclusiveMinimum === 'number') num = num.gt(prop.exclusiveMinimum)
-    if (typeof prop.exclusiveMaximum === 'number') num = num.lt(prop.exclusiveMaximum)
-    schema = num
+    schema = numberPropToZod(prop, baseType === 'integer')
   } else if (baseType === 'boolean') {
     schema = z.boolean()
   } else if (baseType === 'array') {

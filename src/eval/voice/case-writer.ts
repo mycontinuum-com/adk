@@ -69,15 +69,38 @@ function renderTiming(timing: VoiceTiming): string[] {
   return lines
 }
 
+type VoiceDiagnosticEvent = NonNullable<VoiceRunResult['voiceEvents']>[number]
+
+function voiceActivityDetails(
+  event: Extract<VoiceDiagnosticEvent, { type: 'voice_activity' }>,
+): string {
+  return `${event.activity}${event.inactivityCount !== undefined ? `, inactivityCount=${event.inactivityCount}` : ''}${event.timeoutMs !== undefined ? `, timeoutMs=${event.timeoutMs}` : ''}${event.reason ? `, reason=${event.reason}` : ''}`
+}
+
+function outputToolFailureDetails(
+  event: Extract<VoiceDiagnosticEvent, { type: 'output_tool_completion_failed' }>,
+): string {
+  const forcedDetails = event.forcedToolReason
+    ? [
+        `forcedReason=${event.forcedToolReason}`,
+        `actual=${event.incorrectToolName ?? 'none'}`,
+        `attempt=${event.attempts ?? 'n/a'}/${event.maxAttempts ?? 'n/a'}`,
+      ].join(', ')
+    : ''
+  return [
+    `phase=${event.phase}`,
+    ...(forcedDetails ? [forcedDetails] : []),
+    `error=${event.errorName}: ${event.errorMessage}`,
+  ].join(', ')
+}
+
 function renderVoiceDiagnostics(result: VoiceRunResult): string[] {
   const lines: string[] = []
   for (const event of result.voiceEvents ?? []) {
     const at = formatMs(event.createdAt - result.startedAtMs)
     switch (event.type) {
       case 'voice_activity':
-        lines.push(
-          `${at} voice_activity(${event.activity}${event.inactivityCount !== undefined ? `, inactivityCount=${event.inactivityCount}` : ''}${event.timeoutMs !== undefined ? `, timeoutMs=${event.timeoutMs}` : ''}${event.reason ? `, reason=${event.reason}` : ''})`,
-        )
+        lines.push(`${at} voice_activity(${voiceActivityDetails(event)})`)
         break
       case 'lifecycle_hook_started':
         lines.push(
@@ -117,24 +140,11 @@ function renderVoiceDiagnostics(result: VoiceRunResult): string[] {
           `${at} output_tool_completion_succeeded(${event.intendedToolName}, ${event.elapsedMs}ms)`,
         )
         break
-      case 'output_tool_completion_failed': {
-        const forcedDetails = event.forcedToolReason
-          ? [
-              `forcedReason=${event.forcedToolReason}`,
-              `actual=${event.incorrectToolName ?? 'none'}`,
-              `attempt=${event.attempts ?? 'n/a'}/${event.maxAttempts ?? 'n/a'}`,
-            ].join(', ')
-          : ''
-        const failureDetails = [
-          `phase=${event.phase}`,
-          ...(forcedDetails ? [forcedDetails] : []),
-          `error=${event.errorName}: ${event.errorMessage}`,
-        ].join(', ')
+      case 'output_tool_completion_failed':
         lines.push(
-          `${at} output_tool_completion_failed(${event.intendedToolName}, ${failureDetails})`,
+          `${at} output_tool_completion_failed(${event.intendedToolName}, ${outputToolFailureDetails(event)})`,
         )
         break
-      }
       case 'forced_tool_correction':
         lines.push(
           `${at} forced_tool_correction(expected=${event.intendedToolName}, actual=${event.incorrectToolName ?? 'none'}, attempt=${event.attempts}/${event.maxAttempts})`,

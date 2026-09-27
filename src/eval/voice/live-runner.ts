@@ -459,35 +459,43 @@ class LiveVoiceCaseRun<S extends StateSchema> {
     await this.cleanup('room deletion', () => this.service.deleteRoom(this.roomName))
   }
 
-  private async collect(): Promise<VoiceRunResult<S>> {
+  /** Appends the spoken transcript and delegated backend usage to the call session, then commits. */
+  private async persistLiveTranscript(
+    liveTranscript: Parameters<typeof transcriptMessages>[0],
+  ): Promise<void> {
     const { app, sessionService } = this.appContext
+    for (const event of transcriptMessages(liveTranscript, this.evalCase.backend.name)) {
+      // react-doctor-disable-next-line react-doctor/async-await-in-loop -- transcript events are appended to the session in spoken order
+      await sessionService.appendEvent(this.session, event)
+    }
+    const backendSessionIds = this.session.events.flatMap((event) =>
+      event.type === 'annotation' &&
+      event.label === 'live-backend-work' &&
+      typeof event.data?.backendSessionId === 'string'
+        ? [event.data.backendSessionId]
+        : [],
+    )
+    const backendSessions = await Promise.all(
+      backendSessionIds.map((backendSessionId) => app.sessions.get(backendSessionId)),
+    )
+    for (const backendSession of backendSessions) {
+      for (const usage of backendSession?.events ?? []) {
+        if (usage.type !== 'model_end') continue
+        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- backend usage events are appended to the session in delegation order
+        await sessionService.appendEvent(this.session, usage)
+      }
+    }
+    if (!(await app.sessions.commit(this.session)).ok)
+      throw new Error('Voice eval result commit conflict')
+  }
+
+  private async collect(): Promise<VoiceRunResult<S>> {
+    const { app } = this.appContext
     const liveTranscript = this.context?.transcript.snapshot()
     try {
       this.session = this.context?.session ?? (await app.sessions.get(this.callId)) ?? this.session
       if (liveTranscript) {
-        for (const event of transcriptMessages(liveTranscript, this.evalCase.backend.name)) {
-          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- transcript events are appended to the session in spoken order
-          await sessionService.appendEvent(this.session, event)
-        }
-        const backendSessionIds = this.session.events.flatMap((event) =>
-          event.type === 'annotation' &&
-          event.label === 'live-backend-work' &&
-          typeof event.data?.backendSessionId === 'string'
-            ? [event.data.backendSessionId]
-            : [],
-        )
-        const backendSessions = await Promise.all(
-          backendSessionIds.map((backendSessionId) => app.sessions.get(backendSessionId)),
-        )
-        for (const backendSession of backendSessions) {
-          for (const usage of backendSession?.events ?? []) {
-            if (usage.type !== 'model_end') continue
-            // react-doctor-disable-next-line react-doctor/async-await-in-loop -- backend usage events are appended to the session in delegation order
-            await sessionService.appendEvent(this.session, usage)
-          }
-        }
-        if (!(await app.sessions.commit(this.session)).ok)
-          throw new Error('Voice eval result commit conflict')
+        await this.persistLiveTranscript(liveTranscript)
       }
     } catch (cause) {
       this.finish('error', cause)

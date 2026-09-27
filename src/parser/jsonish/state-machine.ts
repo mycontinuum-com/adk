@@ -173,63 +173,71 @@ function collectionToValue(collection: CollectionType): JsonishValue | null {
         completionState: collection.completionState,
       }
     case 'tripleQuotedString':
-    case 'tripleBacktickString': {
-      const content = getContent(collection)
-      const firstNewline = content.indexOf('\n')
-      if (firstNewline < 0) {
-        return {
-          type: 'string',
-          value: content,
-          completionState: collection.completionState,
-        }
-      }
-      const firstLine = content.slice(0, firstNewline).trim()
-      const hasLangTag = /^[a-zA-Z0-9_-]*$/.test(firstLine) && firstLine.length <= 20
-      if (hasLangTag) {
-        const afterFirstLine = content.slice(firstNewline + 1)
-        const dedented = dedent(afterFirstLine)
-        return {
-          type: 'string',
-          value: dedented,
-          completionState: collection.completionState,
-        }
-      }
-      return {
-        type: 'string',
-        value: dedent(content),
-        completionState: collection.completionState,
-      }
+    case 'tripleBacktickString':
+      return tripleQuotedContentToValue(getContent(collection), collection.completionState)
+    case 'unquotedString':
+      return unquotedContentToValue(getContent(collection), collection.completionState)
+  }
+}
+
+function tripleQuotedContentToValue(
+  content: string,
+  completionState: CompletionState,
+): JsonishValue {
+  const firstNewline = content.indexOf('\n')
+  if (firstNewline < 0) {
+    return {
+      type: 'string',
+      value: content,
+      completionState,
     }
-    case 'unquotedString': {
-      const trimmed = getContent(collection).trim()
-      if (trimmed === 'true') return { type: 'boolean', value: true, completionState: 'complete' }
-      if (trimmed === 'false') return { type: 'boolean', value: false, completionState: 'complete' }
-      if (trimmed === 'null') return { type: 'null', value: null, completionState: 'complete' }
-
-      const intVal = parseInt(trimmed, 10)
-      if (!Number.isNaN(intVal) && String(intVal) === trimmed) {
-        return {
-          type: 'number',
-          value: intVal,
-          completionState: collection.completionState,
-        }
-      }
-
-      const floatVal = parseFloat(trimmed)
-      if (!Number.isNaN(floatVal)) {
-        return {
-          type: 'number',
-          value: floatVal,
-          completionState: collection.completionState,
-        }
-      }
-
-      return {
-        type: 'string',
-        value: trimmed,
-        completionState: collection.completionState,
-      }
+  }
+  const firstLine = content.slice(0, firstNewline).trim()
+  const hasLangTag = /^[a-zA-Z0-9_-]*$/.test(firstLine) && firstLine.length <= 20
+  if (hasLangTag) {
+    const afterFirstLine = content.slice(firstNewline + 1)
+    const dedented = dedent(afterFirstLine)
+    return {
+      type: 'string',
+      value: dedented,
+      completionState,
     }
+  }
+  return {
+    type: 'string',
+    value: dedent(content),
+    completionState,
+  }
+}
+
+function unquotedContentToValue(content: string, completionState: CompletionState): JsonishValue {
+  const trimmed = content.trim()
+  if (trimmed === 'true') return { type: 'boolean', value: true, completionState: 'complete' }
+  if (trimmed === 'false') return { type: 'boolean', value: false, completionState: 'complete' }
+  if (trimmed === 'null') return { type: 'null', value: null, completionState: 'complete' }
+
+  const intVal = parseInt(trimmed, 10)
+  if (!Number.isNaN(intVal) && String(intVal) === trimmed) {
+    return {
+      type: 'number',
+      value: intVal,
+      completionState,
+    }
+  }
+
+  const floatVal = parseFloat(trimmed)
+  if (!Number.isNaN(floatVal)) {
+    return {
+      type: 'number',
+      value: floatVal,
+      completionState,
+    }
+  }
+
+  return {
+    type: 'string',
+    value: trimmed,
+    completionState,
   }
 }
 
@@ -364,6 +372,29 @@ function getHex4At(str: string, index: number): string {
   return str[index] + str[index + 1] + str[index + 2] + str[index + 3]
 }
 
+function quotedStringClosesAfterWhitespace(
+  str: string,
+  afterQuoteIndex: number,
+  pos: Position,
+): boolean {
+  const inObjectKey = pos === 'inObjectKey'
+  const inObjectValue = pos === 'inObjectValue'
+  const inArray = pos === 'inArray'
+
+  let i = afterQuoteIndex
+  while (i < str.length && WHITESPACE_REGEX.test(str[i])) i++
+  if (i >= str.length) return true
+
+  const afterWhitespace = str[i]
+  if (afterWhitespace === '}' && (inObjectKey || inObjectValue)) return true
+  if (afterWhitespace === ':' && inObjectKey) return true
+  if (afterWhitespace === ',' && inObjectValue) return true
+  if ((afterWhitespace === ',' || afterWhitespace === ']') && inArray) return true
+  if (afterWhitespace === '/' && charAtSafe(str, i + 1) === '/') return true
+  if (afterWhitespace === '/' && charAtSafe(str, i + 1) === '*') return true
+  return false
+}
+
 function shouldCloseQuotedString(
   state: ParseState,
   str: string,
@@ -391,18 +422,7 @@ function shouldCloseQuotedString(
   if (nextChar === ']' && inArray) return true
 
   if (WHITESPACE_REGEX.test(nextChar)) {
-    let i = afterQuoteIndex
-    while (i < str.length && WHITESPACE_REGEX.test(str[i])) i++
-    if (i >= str.length) return true
-
-    const afterWhitespace = str[i]
-    if (afterWhitespace === '}' && (inObjectKey || inObjectValue)) return true
-    if (afterWhitespace === ':' && inObjectKey) return true
-    if (afterWhitespace === ',' && inObjectValue) return true
-    if ((afterWhitespace === ',' || afterWhitespace === ']') && inArray) return true
-    if (afterWhitespace === '/' && charAtSafe(str, i + 1) === '/') return true
-    if (afterWhitespace === '/' && charAtSafe(str, i + 1) === '*') return true
-    return false
+    return quotedStringClosesAfterWhitespace(str, afterQuoteIndex, pos)
   }
 
   if (nextChar === closingChar) return false
@@ -414,6 +434,62 @@ function shouldCloseQuotedString(
   }
 
   return false
+}
+
+type UnquotedClose = { close: boolean; skip: number; completionState: CompletionState }
+
+function skipWhitespaceFrom(str: string, index: number): number {
+  let i = index
+  while (i < str.length && WHITESPACE_REGEX.test(str[i])) i++
+  return i
+}
+
+function isCommentStartAt(str: string, index: number): boolean {
+  if (str[index] !== '/') return false
+  const following = charAtSafe(str, index + 1)
+  return following === '/' || following === '*'
+}
+
+function closeUnquotedObjectKey(
+  str: string,
+  index: number,
+  nextChar: string,
+): UnquotedClose | undefined {
+  if (nextChar === ':') {
+    return { close: true, skip: 0, completionState: 'complete' }
+  }
+  if (WHITESPACE_REGEX.test(nextChar)) {
+    const i = skipWhitespaceFrom(str, index)
+    if (i < str.length && str[i] === ':') {
+      return { close: true, skip: i - index, completionState: 'complete' }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Closes an unquoted object value or array item when the next character is a delimiter, or when
+ * whitespace is followed by a delimiter or a comment start.
+ */
+function closeUnquotedInContainer(
+  str: string,
+  index: number,
+  nextChar: string,
+  immediateDelimiters: readonly string[],
+  delimitersAfterWhitespace: readonly string[],
+): UnquotedClose | undefined {
+  if (immediateDelimiters.includes(nextChar)) {
+    return { close: true, skip: 0, completionState: 'complete' }
+  }
+  if (WHITESPACE_REGEX.test(nextChar)) {
+    const i = skipWhitespaceFrom(str, index)
+    if (i < str.length) {
+      if (delimitersAfterWhitespace.includes(str[i]) || isCommentStartAt(str, i)) {
+        return { close: true, skip: i - index, completionState: 'complete' }
+      }
+    }
+  }
+  return undefined
 }
 
 function shouldCloseUnquotedString(
@@ -447,60 +523,18 @@ function shouldCloseUnquotedString(
   }
 
   if (pos === 'inObjectKey') {
-    if (nextChar === ':') {
-      return { close: true, skip: 0, completionState: 'complete' }
-    }
-    if (WHITESPACE_REGEX.test(nextChar)) {
-      let i = index
-      while (i < str.length && WHITESPACE_REGEX.test(str[i])) i++
-      if (i < str.length && str[i] === ':') {
-        return { close: true, skip: i - index, completionState: 'complete' }
-      }
-    }
+    const keyClose = closeUnquotedObjectKey(str, index, nextChar)
+    if (keyClose) return keyClose
   }
 
   if (pos === 'inObjectValue') {
-    if (nextChar === ',' || nextChar === '}' || nextChar === '\n') {
-      return { close: true, skip: 0, completionState: 'complete' }
-    }
-    if (WHITESPACE_REGEX.test(nextChar)) {
-      let i = index
-      while (i < str.length && WHITESPACE_REGEX.test(str[i])) i++
-      if (i < str.length) {
-        const afterWs = str[i]
-        if (afterWs === ',' || afterWs === '}') {
-          return { close: true, skip: i - index, completionState: 'complete' }
-        }
-        if (afterWs === '/' && charAtSafe(str, i + 1) === '/') {
-          return { close: true, skip: i - index, completionState: 'complete' }
-        }
-        if (afterWs === '/' && charAtSafe(str, i + 1) === '*') {
-          return { close: true, skip: i - index, completionState: 'complete' }
-        }
-      }
-    }
+    const valueClose = closeUnquotedInContainer(str, index, nextChar, [',', '}', '\n'], [',', '}'])
+    if (valueClose) return valueClose
   }
 
   if (pos === 'inArray') {
-    if (nextChar === ',' || nextChar === ']') {
-      return { close: true, skip: 0, completionState: 'complete' }
-    }
-    if (WHITESPACE_REGEX.test(nextChar)) {
-      let i = index
-      while (i < str.length && WHITESPACE_REGEX.test(str[i])) i++
-      if (i < str.length) {
-        const afterWs = str[i]
-        if (afterWs === ',' || afterWs === ']') {
-          return { close: true, skip: i - index, completionState: 'complete' }
-        }
-        if (afterWs === '/' && charAtSafe(str, i + 1) === '/') {
-          return { close: true, skip: i - index, completionState: 'complete' }
-        }
-        if (afterWs === '/' && charAtSafe(str, i + 1) === '*') {
-          return { close: true, skip: i - index, completionState: 'complete' }
-        }
-      }
-    }
+    const itemClose = closeUnquotedInContainer(str, index, nextChar, [',', ']'], [',', ']'])
+    if (itemClose) return itemClose
   }
 
   if (pos === 'inNothing') {

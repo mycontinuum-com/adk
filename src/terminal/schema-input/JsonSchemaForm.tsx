@@ -54,6 +54,61 @@ function slotKey(slot: NavigableSlot): string {
   return slot.field?.name ?? ''
 }
 
+/** Values to submit: entered values, with defaults for empty required fields. */
+function buildSubmission(
+  fields: FieldDescriptor[],
+  values: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const f of fields) {
+    const v = values[f.name]
+    if (v !== undefined && v !== '') result[f.name] = v
+    else if (f.required) result[f.name] = getDefaultValue(f)
+  }
+  return result
+}
+
+function focusedSlotValue(
+  focused: NavigableSlot,
+  field: FieldDescriptor,
+  values: Record<string, unknown>,
+): unknown {
+  return focused.parentFieldName !== undefined && focused.arrayIndex !== undefined
+    ? (values[focused.parentFieldName] as Record<string, unknown>[])?.[focused.arrayIndex]?.[
+        field.name
+      ]
+    : values[field.name]
+}
+
+interface ArrowKeys {
+  leftArrow?: boolean
+  rightArrow?: boolean
+}
+
+function applyBooleanKey(
+  input: string,
+  key: ArrowKeys,
+  val: unknown,
+  setValue: (value: unknown) => void,
+): void {
+  if (key.leftArrow || key.rightArrow || input === ' ') {
+    setValue(!val)
+  }
+  if (input === 't' || input === 'y') setValue(true)
+  if (input === 'f' || input === 'n') setValue(false)
+}
+
+function applyEnumKey(
+  key: ArrowKeys,
+  opts: string[],
+  val: unknown,
+  setValue: (value: unknown) => void,
+): void {
+  const idx = opts.indexOf(val as string)
+  if (key.leftArrow) setValue(opts[idx > 0 ? idx - 1 : opts.length - 1])
+  if (key.rightArrow) setValue(opts[idx < opts.length - 1 ? idx + 1 : 0])
+}
+
 export function JsonSchemaForm({ fields, onSubmit, onCancel }: Props): React.ReactElement {
   const [values, setValues] = useState<Record<string, unknown>>(() =>
     Object.fromEntries(fields.map((f) => [f.name, getDefaultValue(f)])),
@@ -139,13 +194,7 @@ export function JsonSchemaForm({ fields, onSubmit, onCancel }: Props): React.Rea
     }
 
     if (key.return) {
-      const result: Record<string, unknown> = {}
-      for (const f of fields) {
-        const v = values[f.name]
-        if (v !== undefined && v !== '') result[f.name] = v
-        else if (f.required) result[f.name] = getDefaultValue(f)
-      }
-      onSubmit(result)
+      onSubmit(buildSubmission(fields, values))
       return
     }
 
@@ -160,40 +209,17 @@ export function JsonSchemaForm({ fields, onSubmit, onCancel }: Props): React.Rea
 
     if (!focused || focused.type !== 'field' || !focused.field) return
 
-    const val =
-      focused.parentFieldName !== undefined && focused.arrayIndex !== undefined
-        ? (values[focused.parentFieldName] as Record<string, unknown>[])?.[focused.arrayIndex]?.[
-            focused.field.name
-          ]
-        : values[focused.field.name]
+    const field = focused.field
+    const val = focusedSlotValue(focused, field, values)
+    const setFocusedValue = (value: unknown) =>
+      setSlotValue(field.name, value, focused.parentFieldName, focused.arrayIndex)
 
-    if (focused.field.kind === 'boolean') {
-      if (key.leftArrow || key.rightArrow || input === ' ') {
-        setSlotValue(focused.field.name, !val, focused.parentFieldName, focused.arrayIndex)
-      }
-      if (input === 't' || input === 'y')
-        setSlotValue(focused.field.name, true, focused.parentFieldName, focused.arrayIndex)
-      if (input === 'f' || input === 'n')
-        setSlotValue(focused.field.name, false, focused.parentFieldName, focused.arrayIndex)
+    if (field.kind === 'boolean') {
+      applyBooleanKey(input, key, val, setFocusedValue)
     }
 
-    if (focused.field.kind === 'enum' && focused.field.enumValues) {
-      const opts = focused.field.enumValues
-      const idx = opts.indexOf(val as string)
-      if (key.leftArrow)
-        setSlotValue(
-          focused.field.name,
-          opts[idx > 0 ? idx - 1 : opts.length - 1],
-          focused.parentFieldName,
-          focused.arrayIndex,
-        )
-      if (key.rightArrow)
-        setSlotValue(
-          focused.field.name,
-          opts[idx < opts.length - 1 ? idx + 1 : 0],
-          focused.parentFieldName,
-          focused.arrayIndex,
-        )
+    if (field.kind === 'enum' && field.enumValues) {
+      applyEnumKey(key, field.enumValues, val, setFocusedValue)
     }
   })
 
@@ -329,6 +355,42 @@ export function JsonSchemaForm({ fields, onSubmit, onCancel }: Props): React.Rea
   )
 }
 
+function renderBooleanValue(v: boolean, focused: boolean): React.ReactElement {
+  return (
+    <Text>
+      <Text color={v ? 'greenBright' : 'gray'}>{v ? '●' : '○'}</Text>
+      <Text color={focused ? 'yellowBright' : undefined}> true </Text>
+      <Text color={!v ? 'redBright' : 'gray'}>{!v ? '●' : '○'}</Text>
+      <Text color={focused ? 'yellowBright' : undefined}> false</Text>
+    </Text>
+  )
+}
+
+function renderEnumValue(opts: string[], value: unknown, focused: boolean): React.ReactElement {
+  if (opts.length <= 4) {
+    return (
+      <Text>
+        {opts.map((opt, i) => (
+          <Text key={opt}>
+            <Text color={opt === value ? 'greenBright' : 'gray'}>{opt === value ? '●' : '○'}</Text>
+            <Text color={focused && opt === value ? 'yellowBright' : undefined}> {opt}</Text>
+            {i < opts.length - 1 && <Text> </Text>}
+          </Text>
+        ))}
+      </Text>
+    )
+  }
+  const idx = opts.indexOf(value as string)
+  return (
+    <Text color={focused ? 'yellowBright' : 'greenBright'}>
+      "{String(value)}"{' '}
+      <Text dimColor>
+        ({idx + 1}/{opts.length})
+      </Text>
+    </Text>
+  )
+}
+
 function FieldValue({
   field,
   value,
@@ -341,43 +403,11 @@ function FieldValue({
   onChange: (v: unknown) => void
 }): React.ReactElement {
   if (field.kind === 'boolean') {
-    const v = value as boolean
-    return (
-      <Text>
-        <Text color={v ? 'greenBright' : 'gray'}>{v ? '●' : '○'}</Text>
-        <Text color={focused ? 'yellowBright' : undefined}> true </Text>
-        <Text color={!v ? 'redBright' : 'gray'}>{!v ? '●' : '○'}</Text>
-        <Text color={focused ? 'yellowBright' : undefined}> false</Text>
-      </Text>
-    )
+    return renderBooleanValue(value as boolean, focused)
   }
 
   if (field.kind === 'enum' && field.enumValues) {
-    const opts = field.enumValues
-    if (opts.length <= 4) {
-      return (
-        <Text>
-          {opts.map((opt, i) => (
-            <Text key={opt}>
-              <Text color={opt === value ? 'greenBright' : 'gray'}>
-                {opt === value ? '●' : '○'}
-              </Text>
-              <Text color={focused && opt === value ? 'yellowBright' : undefined}> {opt}</Text>
-              {i < opts.length - 1 && <Text> </Text>}
-            </Text>
-          ))}
-        </Text>
-      )
-    }
-    const idx = opts.indexOf(value as string)
-    return (
-      <Text color={focused ? 'yellowBright' : 'greenBright'}>
-        "{String(value)}"{' '}
-        <Text dimColor>
-          ({idx + 1}/{opts.length})
-        </Text>
-      </Text>
-    )
+    return renderEnumValue(field.enumValues, value, focused)
   }
 
   if (field.kind === 'string') {

@@ -1,21 +1,25 @@
 import { z } from 'zod/v4'
 
+function normalizeObject(schema: z.ZodObject): z.ZodType {
+  const shape: Record<string, z.ZodType> = {}
+  let changed = false
+  for (const [key, value] of Object.entries(schema.shape)) {
+    if (!(value instanceof z.ZodType)) throw new Error('Unsupported object field')
+    let result = normalize(value)
+    if (value instanceof z.ZodOptional && !value.isNullable()) {
+      result = normalize(value.unwrap()).nullable().optional()
+      if (value.description) result = result.describe(value.description)
+    }
+    shape[key] = result
+    changed ||= result !== value
+  }
+  return changed ? schema.clone({ ...schema.def, shape }) : schema
+}
+
 function normalize(schema: z.core.$ZodType): z.ZodType {
   if (!(schema instanceof z.ZodType)) throw new Error('ADK schemas must use Zod Classic')
   if (schema instanceof z.ZodObject) {
-    const shape: Record<string, z.ZodType> = {}
-    let changed = false
-    for (const [key, value] of Object.entries(schema.shape)) {
-      if (!(value instanceof z.ZodType)) throw new Error('Unsupported object field')
-      let result = normalize(value)
-      if (value instanceof z.ZodOptional && !value.isNullable()) {
-        result = normalize(value.unwrap()).nullable().optional()
-        if (value.description) result = result.describe(value.description)
-      }
-      shape[key] = result
-      changed ||= result !== value
-    }
-    return changed ? schema.clone({ ...schema.def, shape }) : schema
+    return normalizeObject(schema)
   }
   if (schema instanceof z.ZodArray) {
     const element = normalize(schema.element)

@@ -132,6 +132,106 @@ interface AgentState {
   functionTools: readonly FunctionTool[]
 }
 
+// --- Entry helpers ---
+
+function agentAndHandlerHooks<S extends StateSchema>(
+  agent: Agent<any>,
+  config: VoiceHandlerConfig<S>,
+) {
+  return [...(agent.hooks ?? []), ...(config.hooks ?? [])]
+}
+
+function initialAgentState<S extends StateSchema>(
+  agent: Agent<any>,
+  config: VoiceHandlerConfig<S>,
+  invocationId: string,
+  functionTools: readonly FunctionTool[],
+): AgentState {
+  return {
+    agent,
+    invocationId,
+    composedHook: composeHooks([...(agent.hooks ?? []), ...(config.hooks ?? [])]),
+    composedErrorHandler: composeErrorHandlers(
+      config.errorHandlers ?? [],
+      agent.errorHandlers ?? [],
+    ),
+    functionTools,
+  }
+}
+
+function inactivityTimeoutMs<S extends StateSchema>(
+  agent: Agent<any>,
+  config: VoiceHandlerConfig<S>,
+): number | undefined {
+  return agent.timeouts?.inactivity ?? config.timeouts?.inactivity
+}
+
+// Max duration timeout — uses expiry (with maxDuration fallback)
+function expiryTimeoutMs<S extends StateSchema>(
+  agent: Agent<any>,
+  config: VoiceHandlerConfig<S>,
+): number | undefined {
+  return (
+    agent.timeouts?.expiry ??
+    agent.timeouts?.maxDuration ??
+    config.timeouts?.expiry ??
+    config.timeouts?.maxDuration
+  )
+}
+
+function sessionInputOptions<S extends StateSchema>(
+  sessionNC: NoiseCancellationType | undefined,
+  config: VoiceHandlerConfig<S>,
+): Record<string, unknown> {
+  const inputOptions: Record<string, unknown> = {
+    closeOnDisconnect: false,
+  }
+  const ncType = sessionNC ?? config.sound?.noiseCancellation
+  if (ncType) {
+    inputOptions.noiseCancellation = resolveNoiseCancellation(ncType)
+  }
+  return inputOptions
+}
+
+async function drainTranscriptQueue(transcriptQueue: EventQueue): Promise<void> {
+  try {
+    await Promise.race([
+      transcriptQueue.drain(),
+      new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
+    ])
+  } catch {
+    /* best-effort */
+  }
+}
+
+async function stopRecording(recorder: RecordingSession): Promise<void> {
+  try {
+    await recorder.stop()
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Starts the background audio player; returns it even when starting fails, matching a best-effort
+ * start that leaves the player assigned.
+ */
+async function startBackgroundAudio(
+  lk: ReturnType<VoiceDeps['agents']>,
+  room: JobContext['room'],
+  voiceSession: LiveKitVoiceSession,
+): Promise<LKBackgroundAudioPlayer | undefined> {
+  let bgAudio: LKBackgroundAudioPlayer | undefined
+  try {
+    bgAudio = new lk.voice.BackgroundAudioPlayer!({})
+    await bgAudio.start({ room })
+    voiceSession.setBgAudio(bgAudio)
+  } catch {
+    /* best-effort */
+  }
+  return bgAudio
+}
+
 // --- Entry function factory ---
 
 function createEntryFunction<S extends StateSchema>(
@@ -213,20 +313,16 @@ function createEntryFunction<S extends StateSchema>(
     const lifecycle = createLifecycle()
 
     // --- Mutable state ---
-    const agentState: AgentState = {
-      agent: initialAgent,
-      invocationId: initialInvocationId,
-      composedHook: composeHooks([...(initialAgent.hooks ?? []), ...(config.hooks ?? [])]),
-      composedErrorHandler: composeErrorHandlers(
-        config.errorHandlers ?? [],
-        initialAgent.errorHandlers ?? [],
-      ),
-      functionTools: initialRenderCtx.functionTools,
-    }
+    const agentState: AgentState = initialAgentState(
+      initialAgent,
+      config,
+      initialInvocationId,
+      initialRenderCtx.functionTools,
+    )
     const activeVoiceHooks = () => [...(agentState.agent.hooks ?? []), ...(config.hooks ?? [])]
 
     let invocationOutput: unknown
-    let currentInactivityMs = initialAgent.timeouts?.inactivity ?? config.timeouts?.inactivity
+    let currentInactivityMs = inactivityTimeoutMs(initialAgent, config)
     const inactivity = createInactivityTimer({
       timeoutMs: () => currentInactivityMs,
       isActive: () => lifecycle.state === 'active',
@@ -414,7 +510,7 @@ function createEntryFunction<S extends StateSchema>(
       deps,
     )
     // --- Compose onVoiceEvent from all hooks ---
-    const voiceEventFns = [...(initialAgent.hooks ?? []), ...(config.hooks ?? [])]
+    const voiceEventFns = agentAndHandlerHooks(initialAgent, config)
       .map((h) => (h as VoiceHook).onVoiceEvent)
       .filter((fn): fn is NonNullable<typeof fn> => fn != null)
     composedOnVoiceEvent =
@@ -425,7 +521,7 @@ function createEntryFunction<S extends StateSchema>(
         : undefined
 
     // --- Compose onTranscript from all hooks ---
-    const transcriptFns = [...(initialAgent.hooks ?? []), ...(config.hooks ?? [])]
+    const transcriptFns = agentAndHandlerHooks(initialAgent, config)
       .map((h) => (h as VoiceHook).onTranscript)
       .filter((fn): fn is NonNullable<typeof fn> => fn != null)
     const transcriptQueue = transcriptFns.length > 0 ? createEventQueue() : undefined
@@ -724,55 +820,53 @@ function createEntryFunction<S extends StateSchema>(
     agentState.composedHook.onEvent?.(invocationStartEvent)
 
     // --- beforeAgent hook (pre-session, may redirect to a different agent) ---
-    let entryAnnouncement: string | undefined
-    while (agentState.composedHook.beforeAgent) {
-      const invCtx = createInvocationContext(
-        session,
-        sessionService,
-        agentState.invocationId,
-        agentState.agent,
-      )
-      const hookResult = await agentState.composedHook.beforeAgent(invCtx)
-
-      if (isRunnable(hookResult)) {
-        const target = hookResult as Runnable
-        const endEvent = makeInvocationEnd(
+    // Returns the announcement a hook asked to speak in place of running the agent.
+    const runBeforeAgentHooks = async (): Promise<string | undefined> => {
+      while (agentState.composedHook.beforeAgent) {
+        const invCtx = createInvocationContext(
+          session,
+          sessionService,
           agentState.invocationId,
-          agentState.agent.name,
-          'transferred',
-          { invocationId: '', agentName: target.name },
+          agentState.agent,
         )
-        await sessionService.appendEvent(session, endEvent)
-        agentState.composedHook.onEvent?.(endEvent)
+        const hookResult = await agentState.composedHook.beforeAgent(invCtx)
 
-        // Build redirected agent
-        activeLkAgent = await switchToAgent(target)
+        if (isRunnable(hookResult)) {
+          const target = hookResult as Runnable
+          const endEvent = makeInvocationEnd(
+            agentState.invocationId,
+            agentState.agent.name,
+            'transferred',
+            { invocationId: '', agentName: target.name },
+          )
+          await sessionService.appendEvent(session, endEvent)
+          agentState.composedHook.onEvent?.(endEvent)
 
-        const startEvent = makeInvocationStart(agentState.invocationId, agentState.agent.name)
-        await sessionService.appendEvent(session, startEvent)
-        agentState.composedHook.onEvent?.(startEvent)
-        continue
+          // Build redirected agent
+          activeLkAgent = await switchToAgent(target)
+
+          const startEvent = makeInvocationStart(agentState.invocationId, agentState.agent.name)
+          await sessionService.appendEvent(session, startEvent)
+          agentState.composedHook.onEvent?.(startEvent)
+          continue
+        }
+
+        if (typeof hookResult === 'string') {
+          // A beforeAgent hook can short-circuit the agent by returning a string to speak.
+          // Defer it to the main session flow below so it shares the one start → teardown →
+          // finalize path rather than running a parallel lifecycle here.
+          return hookResult
+        }
+
+        return undefined
       }
-
-      if (typeof hookResult === 'string') {
-        // A beforeAgent hook can short-circuit the agent by returning a string to speak.
-        // Defer it to the main session flow below so it shares the one start → teardown →
-        // finalize path rather than running a parallel lifecycle here.
-        entryAnnouncement = hookResult
-      }
-
-      break
+      return undefined
     }
+    const entryAnnouncement = await runBeforeAgentHooks()
 
     try {
       // --- Start the LiveKit session ---
-      const inputOptions: Record<string, unknown> = {
-        closeOnDisconnect: false,
-      }
-      const ncType = sessionNC ?? config.sound?.noiseCancellation
-      if (ncType) {
-        inputOptions.noiseCancellation = resolveNoiseCancellation(ncType)
-      }
+      const inputOptions = sessionInputOptions(sessionNC, config)
       const startOpts: Parameters<typeof lkSession.start>[0] = {
         agent: activeLkAgent,
         room: ctx.room,
@@ -801,13 +895,7 @@ function createEntryFunction<S extends StateSchema>(
       let cachedThinkingFrames: unknown[] | undefined
 
       if (lk.voice.BackgroundAudioPlayer) {
-        try {
-          bgAudio = new lk.voice.BackgroundAudioPlayer({})
-          await bgAudio.start({ room: ctx.room })
-          voiceSession.setBgAudio(bgAudio)
-        } catch {
-          /* best-effort */
-        }
+        bgAudio = await startBackgroundAudio(lk, ctx.room, voiceSession)
       }
 
       if (thinkingCfg) {
@@ -896,11 +984,7 @@ function createEntryFunction<S extends StateSchema>(
       lkSession.on('speech_created', () => inactivity.agentReplyCreated())
 
       // Max duration timeout — uses expiry (with maxDuration fallback)
-      const expiryMs =
-        initialAgent.timeouts?.expiry ??
-        initialAgent.timeouts?.maxDuration ??
-        config.timeouts?.expiry ??
-        config.timeouts?.maxDuration
+      const expiryMs = expiryTimeoutMs(initialAgent, config)
       let maxDurationTimer: ReturnType<typeof setTimeout> | undefined
       if (expiryMs) {
         maxDurationTimer = setTimeout(() => {
@@ -941,21 +1025,10 @@ function createEntryFunction<S extends StateSchema>(
       await finalizeInvocationOnce()
     } finally {
       if (transcriptQueue) {
-        try {
-          await Promise.race([
-            transcriptQueue.drain(),
-            new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
-          ])
-        } catch {
-          /* best-effort */
-        }
+        await drainTranscriptQueue(transcriptQueue)
       }
       if (recorder) {
-        try {
-          await recorder.stop()
-        } catch {
-          /* best-effort */
-        }
+        await stopRecording(recorder)
       }
       await commitOnce()
       if (callTerminationRequested) {
