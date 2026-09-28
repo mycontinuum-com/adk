@@ -28,6 +28,9 @@
   "types": "dist/index.d.ts",
   "typesVersions": {
     "*": {
+      "cli": [
+        "dist/terminal/index.d.ts"
+      ],
       "terminal": [
         "dist/terminal/index.d.ts"
       ],
@@ -88,6 +91,11 @@
     }
   },
   "exports": {
+    "./cli": {
+      "types": "./dist/terminal/index.d.ts",
+      "import": "./dist/terminal/index.mjs",
+      "require": "./dist/terminal/index.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",

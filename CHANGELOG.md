@@ -31,131 +31,65 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
-## Unreleased
+## [0.6.1] - Unreleased
+
+Adds GPT Live voice agents, mixed text/voice evaluations and model judges, self-hosted model adapters, and Zod 4 support. Review the stream and hook migration notes before upgrading from 0.6.0.
 
 ### Added
 
-- `configurePricing(options | false)` — points cost estimation at another LiteLLM-format price map, or disables it.
-- `calculateSessionCost(modelName, seconds, catalog)`, `summarizeModelUsage(calls, pricing)` and `computeUsageSummary(events, pricing)` take the live pricing catalog; GPT Live session time is priced from the registry's per-second rate instead of a bundled table.
-- `ToolExecutionContext.note(message, opts)` — the tool context type now declares `ctx.note`, which tools could already call at runtime.
-- `mayLeaveProcess(event)` — whether a stream event may be sent outside the process. It returns `false` for `state_change`.
-- `Session.addStateChangeListener(listener)` — adds a state change listener alongside the `onStateChange` callback and returns a function that removes it. The listener receives the recording session; clones copy listeners. `StateChangeListener` is its type. A custom `Session` implementation must add it; the runner already required `BaseSession` at runtime.
-- `app.evaluate.cli(cases, options)` runs text and voice cases through a noninteractive CLI with `list`, `run`, exact case selection, repetition, JSON evidence and pass/fail exit codes.
-- `app.evaluate` and `app.evaluate.cases` accept mixed text/voice cases. Common scheduling uses one concurrency limit; voice-specific hooks, metrics and room configuration live under `options.voice`.
-- `openai.live('gpt-live-1', options)` declares a GPT Live voice agent. `app.handler.voice({ agent, backend, hooks })` delegates each Live request to an ordinary ADK backend agent with tools, typed result hooks and call-owned workflow state. See `docs/gpt-live.md`.
-- GPT Live controls: `appendCommentary(text, { allowInterruptions: false })` says a line the caller cannot talk over: caller audio is silenced, the line is given once GPT Live is quiet with no delegation in flight and no earlier commentary still to be said, and it counts as said when GPT Live's next speaking turn ends, judged from AgentSession states only, within `playoutTimeoutMs` (default 30 s) per step; an agent-requested end waits for such lines within the same bound; `ctx.voice.turnCount` counts caller speech turns. See `docs/gpt-live.md`.
-- Voice eval controls add `muteUser(muted)`, which stops and restores the simulated caller's audio, so a case can hold a silence a model caller would not.
-- A Live voice eval whose caller hangs up waits up to 5 s for the handler to close through its own hangup path, so the call records a caller hangup instead of a worker shutdown.
-- Live voice eval results include `callerHeard`, the simulated caller's final transcriptions of the agent's audio when its model sets `inputTranscription`. Live cases can set the handler's `timeouts`, and inactivity and expiry endings report `inactivity_timeout` and `max_duration`.
-- GPT Live handlers accept `timeouts: { inactivity, expiry }` with `onInactivity(ctx)` (`ctx.inactivityCount`) and `onExpiry(ctx)` hooks. The call ends unless a hook returns `false`. See `docs/gpt-live.md`.
-- `ctx.voice` exposes `appendThinking`, `appendCommentary`, `appendInstructions` and `end()` to Live backend tools and hooks, scoped to the active delegation.
-- `app.evaluate` runs voice cases against Live handlers.
-- `run.settled` fulfills after ADK-owned execution and cleanup finish. Await it before committing or closing a session store.
-- GPT Live cost accounting — `onExit` receives `ctx.usage` with backend and voice cost; Live eval results add `run.liveUsage` with backend, voice and simulated-caller cost. Each cost has a `CostBasis` of `reported`, `estimated` or `unavailable`. See `docs/gpt-live.md`.
-- `gpt-live-1` pricing — $0.05 per minute of session time, billed per second.
-- `app.evaluate.judge({ name, criteria, model?, timeoutMs? })` — an LLM-judge metric for text and voice cases. It renders the run's timeline, `callerHeard` and final state verbatim and returns a verdict and a one-sentence reason per criterion in `data.verdicts`, judged by meaning in any language. The model defaults to `gpt-5.4-mini` at low reasoning effort. Its usage appears as `judge` in the report's cost line. See `docs/judge-metric.md`.
-- `liveTranscriptTurns(run, { pauseMs })` (`@animahealth/adk/eval`) — joins a Live run's transcript fragments into speaker turns.
-- Eval `result.json` adds `judgeCost` per case (the cost of its metrics' `usage`) and a top-level `cost` with `total`, `judge` and the report's other components. `cost.total` includes judge spend; case `usage` and `liveUsage` stay the agent's own spend. See `docs/judge-metric.md`.
-- Live voice eval cases accept a GPT Live simulated caller: `userAgent: app.agent({ model: openai.live('gpt-live-1'), context })`. It speaks from system instructions only, with no backend model or tools, and a caller delegation fails the run. `run.liveUsage.caller` prices it from session time. Realtime callers remain supported. See `docs/gpt-live.md`.
+- `@animahealth/adk/chat-completions` and `@animahealth/adk/eurouter` — model adapters with streaming, tools and structured output; named adapters support multiple self-hosted endpoints.
+- `openai.live('gpt-live-1', options)` — GPT Live voice agents delegate to an ordinary ADK backend with tools, typed result hooks and persisted call state. Hooks expose transcripts, native voice controls and backend/voice cost accounting. See [GPT Live](docs/gpt-live.md).
+- GPT Live lifecycle — inactivity and expiry hooks, caller turn counts, and non-interruptible commentary through `appendCommentary(text, { allowInterruptions: false })`. Commentary mutes caller input and uses bounded waits for speaking turns; it does not guarantee verbatim speech.
+- `app.evaluate.cli(cases, options)` — noninteractive case listing, selection, repetition, JSON evidence and pass/fail exit codes. Mixed text/voice suites share one concurrency limit and place voice configuration under `options.voice`.
+- Live voice evaluations — support GPT Live handlers and simulated callers, caller muting, handler timeouts, `callerHeard` transcriptions when enabled, and separate backend, voice and caller costs.
+- `app.evaluate.judge({ name, criteria, model?, timeoutMs? })` — model-judged text/voice metrics with per-criterion verdicts and reasons. Reports and JSON evidence include judge spend separately from agent usage. See [judge metrics](docs/judge-metric.md).
+- `liveTranscriptTurns(run, { pauseMs })` (`@animahealth/adk/eval`) — groups Live transcript fragments into speaker turns.
+- `run.settled` — fulfills after ADK-owned execution and cleanup finish; await it before committing or closing a session store.
+- `mayLeaveProcess(event)` — identifies events safe to forward outside the process; excludes `state_change`.
+- `Session.addStateChangeListener(listener)` and `StateChangeListener` — observe session state changes alongside `onStateChange`; registration returns an unsubscribe function.
 
 ### Changed
 
-- GPT Live transcript `fragments` are in receipt order instead of native offset order, and `GPTLiveTranscript.attach()` returns nothing.
-- GPT Live call close waits once, up to `backendTimeoutMs`, for backend work. Work still being recorded in the call session at that bound no longer gets a second `backendTimeoutMs`, and close no longer waits for call-session commits in flight before it reloads the call. When a commit lands during close, close commits `live-call-ended` and `onExit` state once more at the reloaded version; a second conflict is logged and the call still ends. See `docs/gpt-live.md`.
-- Cost estimates — `usage.cost` uses live prices from LiteLLM's public price map instead of a bundled table, so new models such as `claude-opus-5-5` are priced without an ADK release. Costs are omitted when the registry is unreachable or a model is unlisted.
-- Cost estimates — realtime audio tokens are no longer also billed at the text rate, and Gemini thinking tokens count toward `outputCost` instead of `inputCost`.
-- `ModelUsage.provider` — text model calls record the agent's provider.
-- OpenAI realtime usage — reports `audioCachedTokens` from `cached_tokens_details`, so cached audio is priced once.
-- LiveKit agents peer range is now `^1.9.0`. GPT Live requires LiveKit Agents and its OpenAI plugin 1.9 or later.
-- LiveKit agents — supports matching agent and provider-plugin versions from `1.4.4`; `openai.live` requires LiveKit Agents and its OpenAI plugin 1.9 or later.
-- Voice evidence directories start with an execution index to prevent collisions between case names. Follow `index.md` or returned recording paths instead of constructing paths from case names.
-- Concurrent suites retain results from already-running cases after stopping scheduling on failure.
-- Voice metric data must be JSON-compatible before worker IPC; unsupported values fail rather than disappearing from evidence.
-- A metric that throws makes its case `error` instead of `failed`, for text and voice cases, so a broken metric no longer reads as a product regression. `MetricResult.error` carries the message. A metric can also return `error` itself; the judge does, with the usage its failed call spent.
-- Eval report cost — a metric error no longer makes a completed run's cost `unavailable`; only a run that errored, timed out or was aborted does. When part of a suite's cost is unknown, the report prints the known part, with or without Live cases.
-- `MetricResult` adds `usage`, the model usage the metric itself spent. Live voice eval evidence (`case-N.json`) includes `callerHeard`.
-- `app.cli(...)` → `app.terminal(...)`; subpath `./cli` → `./terminal`; `src/cli` → `src/terminal`. `CLIOptions`/`CLIConfig`/`CLIHandle`/`CLIStatus` → `TerminalOptions`/`TerminalConfig`/`TerminalHandle`/`TerminalStatus`. Renames the interactive terminal UI to stop colliding in name with `app.evaluate.cli`, which is unrelated and keeps its name.
-- `app.hook.cli()` → `app.hook.console()`; `cliHook` → `consoleHook`; `CliHookOptions` → `ConsoleHookOptions`; `src/hook/cli.ts` → `src/hook/console.ts`. Renames the ANSI console-print hook for the same reason.
-- `app.terminal(...)`'s default session's app name is now `'terminal'` (was `'cli'`) when no `session` is passed.
-- `onEvent` hooks — receive exactly the run's stream events, in stream order. Parallel branch events, including notes and handoff events, reach hooks when the branches settle, not as they happen. A parallel branch that ran before `failFast` stopped the run no longer reaches hooks. After a run yields or fails, hooks still receive events from spawned or dispatched work it left running.
-- Hook state changes — a run's hooks receive only the `state_change` events its own invocations record, including nested, spawned and dispatched work, until the run is aborted or that work finishes. Before, a run's hooks received every later state change on the session, including direct `session.state` writes and other runs' writes.
-- `app.handler.agui` and `AgUIAdapter.transform` — runs started with `ctx.run`, `spawn` or `dispatch` stay out of the conversation; with `includeSteps` they map to step events only. Before, spawned and dispatched agents' text streamed into the chat.
-- `app.handler.rest` and `app.handler.agui` — drop events for which `mayLeaveProcess` returns `false`, so neither exposes `state_change`. REST `events` now include nested runs and `tool_yield`; AG-UI emits a `CUSTOM` `TOOL_YIELD` event before `RUN_INTERRUPTED` and a `TOOL_CALL_RESULT` for an answered yield.
-- `app.evaluate.report()` and `ReportOptions` take results whose cases are `EvalCaseResult` or `VoiceEvalCaseResult` (`AnyEvalCaseResult`). A case result without a `run` is a type error; before, the report counted it as a non-Live case.
+- Schema compatibility — accepts Zod 3 Classic `^3.25.76` and Zod 4 Classic `^4.6.5` across state, tools, output, parsing and provider conversion.
+- Provider compatibility — accepts matching LiveKit agents/plugins from `1.4.4`; GPT Live requires Agents and the OpenAI plugin 1.9 or later. OpenAI requires `^6.0.0`, Google GenAI `^1.52.0`, and `@livekit/rtc-node` is an explicit optional peer.
+- Terminal UI — adds `app.terminal`, subpath `/terminal` and `Terminal*` types; `app.cli`, `/cli` and `CLI*` types remain deprecated aliases.
+- Console hook — adds `app.hook.console()`, `consoleHook` and `ConsoleHookOptions`; `app.hook.cli()`, `cliHook` and `CliHookOptions` remain deprecated aliases.
+- Cost estimation — uses LiteLLM's live price map, including session-time pricing. `configurePricing(options | false)` selects another map or disables estimation; unavailable prices omit estimates. `calculateSessionCost`, `summarizeModelUsage` and `computeUsageSummary` accept the pricing catalog.
+- Run streams and `onEvent` hooks — carry the same invocation events in stream order, including nested runs, notes, yields and state changes. Parallel branch events arrive when branches settle; hooks continue observing unfinished spawned/dispatched work after a parent yields or fails.
+- REST and AG-UI — filter process-local events. REST includes nested runs and `tool_yield`; AG-UI keeps nested agent text out of chat, maps nested runs to steps when requested, and reports yielding tools and their answers.
+- Eval metrics — thrown errors produce case status `error`, not `failed`; `MetricResult.error` and `usage` record metric failures and spend. Reports preserve known costs when a metric fails or only part of a suite's cost is available.
+- Eval evidence — voice case directories include an execution index; use returned paths or `index.md`. Metric data must be JSON-compatible, concurrent suites retain already-running results after a failure, and report case types require a `run`.
 
 ### Fixed
 
-- Run streams — a run's `StreamResult` now carries every event its invocations append, which hooks already saw: `tool_yield`, `state_change`, `ctx.note` annotations, answered-yield `tool_result`s, `beforeAgent` replies, parallel `merge` events, and nested `ctx.run`, `spawn` and `dispatch` runs with their `invocation_start`, input `user` event and `invocation_end`. Each invocation's events arrive in ledger order.
-- Spawned and dispatched runs — the stream stays open until they finish, including ones started inside a sequence, a loop or a transferred agent. Before, they could be cut off when their parent finished.
-- `ctx.run` — a nested run that throws appends an `invocation_end` with reason `error`, like `spawn` and `dispatch`.
-- `RunResult.status` — the runner returns the root runnable's status unchanged. Before, any status it did not map was reported as `aborted`. For `skipped`, `terminated`, `disconnected`, `participant_left` and `transferred`, `app.handler.turn`, `rest` and `agui` now run `afterTurn` hooks and commit the session, and `agui` ends with `RUN_FINISHED` instead of `RUN_ERROR`.
-- `app.parallel` — appends the parallel invocation's `invocation_start` (or `invocation_resume`) once, not once per branch.
-- Resumed yields — each resumed invocation answers only its own yielded calls. Before, parallel branches that yielded the same tool answered each other's calls.
-- A run no longer replaces the session's `onStateChange` callback when it starts.
-- Claude usage — `inputTokens` now includes cache reads and cache writes, `cachedTokens` reports cache reads and `cacheWriteTokens` reports cache writes, matching the other providers. Before, Anthropic's uncached-only `input_tokens` made `calculateCost` underprice cached calls and never count cache writes.
-- Realtime cost estimates — treat audio and cached-audio tokens as part of the input and output totals, as providers report them. Audio is no longer also charged at the text rate.
-- Zod 3 tool schemas keep a description written on a wrapper such as `.optional().describe(...)`, `.nullable()` or `.default()`. Before, the model never received those field descriptions.
+- Voice inactivity — measures silence only while neither participant is speaking, preventing caller interruptions from prematurely triggering `onInactivity`; adds `user_speech_ended`.
+- Streams and sessions — keep streams open for spawned/dispatched work, record nested-run errors and parallel starts correctly, preserve the root runnable's status, and resume only each invocation's own yielded tools. Runs preserve existing state callbacks and isolate hooks to their own invocation state changes.
+- Provider usage — Claude includes cache reads/writes in input totals; realtime audio and cached audio are priced once; Gemini thinking tokens count toward output cost. Text usage records its provider.
+- EUrouter reasoning — preserves structured `reasoning_details` and empty reasoning fields through calls and saved sessions.
+- OpenAI sampling — accepts `reasoning.effort: 'none'` and forwards an explicit temperature when reasoning is disabled.
+- Zod schemas — preserve wrapper descriptions in Zod 3 tool schemas and treat wrapped primitive session output keys as raw text.
+- Tool context types — declare the already-supported `ctx.note` method.
+- Package contents — exclude generated `src/node_modules` caches.
 
 ### Removed
 
-- `InvocationContext.onStream` and `ToolContext.onStream` — events reach hooks only through the run's stream. Return data from the tool or use `ctx.note` instead.
-- `runVoiceProbe`, `disposeVoiceProbeRuntime`, `VoiceProbeOptions` and `VoiceProbeResult` (`@animahealth/adk/eval`) and `docs/voice-probes.md` — added earlier in this unreleased cycle; the scripted audio probe had no callers. Use `app.evaluate.voice` with a Live case.
-- `ADK_VOICE_EVAL_TRACE` — the Realtime voice eval runner no longer prints room and session events to the console. Use the case `report.md` and `result.json` evidence.
-- `VoiceRunResult.usageScope` — added earlier in this unreleased cycle; it was always `'backend'` beside `liveUsage`. A Live run's `usage` covers backend models only; read `liveUsage` for voice and caller cost.
-- `openGPTLiveTranscript` and `GPTLiveTranscriptSource` (`@animahealth/adk/voice`) — the GPT Live handler records each call's transcript itself; read it through `ctx.transcript`. The recorder has no in-memory mode and does not reopen a stored transcript.
-- GPT Live transcript duplicate and conflict detection — `GPTLiveTranscript.status` goes, snapshots drop `status`, `duplicates`, `conflicts` and `diagnostics`, and fragments drop `eventId`. The handler no longer fails a delegation on conflicting transcript event IDs.
-- GPT Live transcript records other than transcript deltas and delegations — observations drop `version` and the `started`, `closed`, `control`, `acknowledgement`, `attached`, `detached` and `invalid-event` kinds; delegation events drop `target`.
-- `LiveVoiceDelegation`, `LiveLifecycleHookResult`, `LiveCommentaryOptions`, `LiveVoiceInactivityContext`, `UsageCost` and `LiveVoiceSessionUsage` exports (`@animahealth/adk/voice`) — the hook and usage types that use them still carry their shapes.
-- The `live-delegation` annotation on GPT Live backend sessions, and `delegationId`, `receiptThroughAtCompletion` and `unresolved` on `live-backend-work` annotations.
+- `InvocationContext.onStream` and `ToolContext.onStream` — return tool data or use `ctx.note` for annotations.
 
-### Migration from 0.6.1
+### Migration from 0.6.0
 
-#### Metrics that throw
+#### Stream forwarding and hooks
 
-A metric that throws now makes its case `error`, not `failed`. A metric that reads product state
-without a guard, such as `session.state.identity.outcome.kind` when `outcome` is absent, now reports
-a product failure as an eval error. Return `passed: false` for a product failure and throw only when
-no verdict is possible.
+Run and turn-handler streams now include `state_change` for every scope. Before forwarding events outside the process, filter with `mayLeaveProcess`; REST and AG-UI already do so. Annotations are forwarded, so avoid patient data in `ctx.note`.
 
-#### State changes on in-process streams
+Hooks receive parallel events when branches settle and only state changes owned by their run's invocations. To observe direct session writes or other runs, use `session.addStateChangeListener`. Custom `Session` implementations must implement that method.
 
-`app.run` and `app.handler.turn` streams now carry `state_change` events for every scope, including `patient` and `practice` state. If you forward stream events outside the process, drop the events for which `mayLeaveProcess(event)` returns `false`. `app.handler.rest` and `app.handler.agui` already do. Annotations do leave the process, so keep patient data out of `ctx.note` data.
+REST consumers should group nested events by `invocationId` and `parentInvocationId`. AG-UI consumers should use tool results rather than expecting nested agents' text in the conversation.
 
-#### Hooks and the stream
+#### Metrics and pricing
 
-`onEvent` hooks now receive the same events as the run's stream. A hook that tracked parallel branches live now receives their events when the branches settle. `ctx.onStream` is gone; use `ctx.note` to emit an annotation.
+Return `passed: false` for a product failure; throw only when no verdict is possible. Guard missing product state in metrics so a failed requirement does not become an eval error.
 
-#### Nested runs at the edges
-
-REST `events` include nested runs; group them by `invocationId` and `parentInvocationId`. AG-UI clients no longer see spawned or dispatched agents' text in the chat; the tool call and its result represent the nested run.
-
-#### State changes in hooks
-
-A hook that relied on seeing direct `session.state` writes made outside any invocation, or another run's writes, no longer receives them. Use `session.addStateChangeListener` to observe every state change on a session.
-
-## [0.6.1]
-
-### Added
-
-- `@animahealth/adk/chat-completions` connects self-hosted text models with streaming, tools, structured output, and endpoint-scoped reasoning replay. Named adapters support multiple hosts in one app.
-
-- `@animahealth/adk/eurouter` adds EUrouter model support with streaming, tool calls, and structured output.
-
-### Changed
-
-- EUrouter reasoning — preserves structured `reasoning_details` and empty reasoning fields across model calls and saved sessions.
-
-- `zod` compatibility — accepts Zod 3 Classic `^3.25.76` and Zod 4 Classic `^4.6.5` across state, tools, output schemas, parsing, CLI input, and provider schema conversion. Existing Zod 3 applications can upgrade without changing schemas.
-- LiveKit agents — supports matching agent and provider-plugin versions from `1.4.4`; CI verifies `1.4.4` and development uses `1.9.0`.
-- Provider SDKs — accepts OpenAI `^6.0.0` and Google GenAI `^1.52.0`. `@livekit/rtc-node` is now an explicit optional peer.
-- OpenAI sampling — accepts `reasoning.effort: 'none'` and forwards an explicit temperature when reasoning is disabled. Active reasoning continues to omit temperature, and an omitted temperature preserves the provider default.
-
-### Fixed
-
-- Voice inactivity timer: counts only the time when neither the caller nor the agent is speaking. Before, a caller who spoke over the agent had their own speech counted as silence, so `onInactivity` could fire seconds after they finished and interrupt the agent's reply. The timer now starts when the caller stops speaking, and a new reply restarts it. Adds the `user_speech_ended` voice activity.
-
-- Published files — excludes generated `src/node_modules` cache files.
-- `output: '<session key>'` for a key declared with `.optional()`, `.nullable()`, or `.default()` around a primitive (`z.string().optional()` and the like) is now a raw-text output key like its unwrapped form — previously the wrapper hid the primitive from the shorthand, so the key took the schema path and the model's prose was parsed as a value (the first number in "last 7 days" became the output `"7"`).
+Cost estimates depend on access to the configured price map and a matching model entry. Treat missing cost as unknown, not zero; configure a reachable map or disable estimation explicitly.
 
 ## [0.6.0] - 2026-09-01
 

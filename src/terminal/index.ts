@@ -8,6 +8,18 @@ import { BaseSession } from '../session'
 import { initLogCapture, repatchConsole } from './logCapture'
 
 export type { TerminalOptions, TerminalConfig, TerminalHandle, DisplayMode } from './types'
+export type { TerminalStatus } from './types'
+
+/** @deprecated Use TerminalOptions instead. */
+export type CLIOptions = TerminalOptions
+/** @deprecated Use TerminalConfig instead. */
+export type CLIConfig = TerminalConfig
+/** @deprecated Use TerminalHandle instead. */
+export type CLIHandle = TerminalHandle
+/** @deprecated Use TerminalStatus instead. */
+export type CLIStatus = import('./types').TerminalStatus
+/** @deprecated Use terminal instead. */
+export const cli = terminal
 
 // Terminal utilities (moved here from main index to avoid leaking react/ink into the main CJS bundle)
 export { extractCurrentThoughtBlock } from './event-display'

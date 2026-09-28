@@ -48,6 +48,31 @@ if (missing.length > 0) {
 
 console.log(`Verified ${packedPaths.size} packed files cover all export targets.`)
 
+execFileSync(
+  process.execPath,
+  [
+    '--input-type=module',
+    '-e',
+    `
+      import assert from 'node:assert/strict'
+      import { createRequire } from 'node:module'
+      import { cli, terminal } from '@animahealth/adk/cli'
+      import { terminal as canonicalTerminal } from '@animahealth/adk/terminal'
+      assert.equal(typeof cli, 'function')
+      assert.equal(cli, terminal)
+      assert.equal(cli, canonicalTerminal)
+      const require = createRequire(import.meta.url)
+      const legacy = require('@animahealth/adk/cli')
+      const canonical = require('@animahealth/adk/terminal')
+      assert.equal(typeof legacy.cli, 'function')
+      assert.equal(legacy.cli, legacy.terminal)
+      assert.equal(legacy.cli, canonical.terminal)
+    `,
+  ],
+  { cwd: root, stdio: 'inherit' },
+)
+console.log('Verified legacy CLI exports resolve in ESM and CommonJS.')
+
 // The key-free entries must load with nothing installed beyond required deps: a bundler change
 // that hoists a lazy provider import to a static one (the class that shipped a main entry needing
 // `openai` and `@ag-ui/core`) is invisible to the monorepo test suite, where every devDep exists,

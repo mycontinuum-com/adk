@@ -316,6 +316,8 @@ interface HookNamespace<S extends StateSchema = StateSchema> {
   voice(hook: Partial<VoiceHook<S>>): VoiceHook<S>
   metrics(options: MetricsHookOptions): Hook<S>
   console(options?: ConsoleHookOptions): Hook<S>
+  /** @deprecated Use console instead. */
+  cli(options?: ConsoleHookOptions): Hook<S>
 }
 
 type UserHandlerConfig<S extends StateSchema> = Omit<HandlerConfig<S>, 'appName'>
@@ -456,6 +458,8 @@ export interface AdkApp<S extends StateSchema> {
   terminal(runnable: Runnable<S>): TerminalHandle
   terminal(runnable: Runnable<S>, input: string): TerminalHandle
   terminal(runnable: Runnable<S>, config: TerminalConfig): TerminalHandle
+  /** @deprecated Use terminal instead. */
+  cli: AdkApp<S>['terminal']
 
   close(): Promise<void>
 }
@@ -831,6 +835,7 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
       voice: (h: Partial<VoiceHook<S>>): VoiceHook<S> => h as VoiceHook<S>,
       metrics: (opts: MetricsHookOptions) => metricsHook(opts) as Hook<S>,
       console: (opts?: ConsoleHookOptions) => consoleHook(opts) as Hook<S>,
+      cli: (opts?: ConsoleHookOptions) => consoleHook(opts) as Hook<S>,
     }),
     handler: {
       rest: (cfg) =>
@@ -1087,6 +1092,10 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
     }),
 
     initialState: (state: StateChanges<S>) => state,
+
+    get cli() {
+      return app.terminal
+    },
 
     terminal(runnable: Runnable<S>, inputOrConfig?: string | TerminalConfig): TerminalHandle {
       const terminalConfig: TerminalConfig =

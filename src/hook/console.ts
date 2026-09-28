@@ -9,6 +9,11 @@ export interface ConsoleHookOptions {
   labelWidth?: number
 }
 
+/** @deprecated Use ConsoleHookOptions instead. */
+export type CliHookOptions = ConsoleHookOptions
+/** @deprecated Use consoleHook instead. */
+export const cliHook = consoleHook
+
 const RESET = '\x1b[0m'
 const BOLD = '\x1b[1m'
 const DIM = '\x1b[2m'

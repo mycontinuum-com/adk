@@ -73,6 +73,7 @@ exports.terminal = function terminal(runnable, inputOrConfig) {
 
   return handle;
 };
+exports.cli = exports.terminal;
 `
 
 fs.writeFileSync(target, wrapper, 'utf8')
