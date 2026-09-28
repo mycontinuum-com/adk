@@ -75,9 +75,7 @@ function validatePipelineFingerprint(session: Session, currentFingerprint: strin
  * @returns The catalog, or `undefined` when no call is priceable, pricing is disabled or
  *   unavailable, or a first fetch takes longer than `RESULT_PRICING_WAIT_MS`.
  */
-async function loadPricingFor(
-  events: readonly Event[],
-): Promise<PricingCatalog | undefined> {
+async function loadPricingFor(events: readonly Event[]): Promise<PricingCatalog | undefined> {
   const priceable = events.some((e) => e.type === 'model_end' && isPriceable(e.usage))
   return priceable ? loadPricing({ maxWaitMs: RESULT_PRICING_WAIT_MS }) : undefined
 }

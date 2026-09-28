@@ -15,8 +15,8 @@ export interface InactivityTimer {
   agentBecameActive(): void
   agentWentIdle(): void
   /**
-   * A reply is on its way, so a prompt now would cut it off. The timer restarts rather than
-   * stops, so a reply that never plays still ends in a prompt.
+   * A reply is on its way, so a prompt now would cut it off. The timer restarts rather than stops,
+   * so a reply that never plays still ends in a prompt.
    */
   agentReplyCreated(): void
   /** Cancels the timer and the count without reporting it, for a transfer or session end. */
@@ -27,9 +27,9 @@ export interface InactivityTimer {
  * Fires `onTimeout` after a stretch of silence, meaning neither the caller nor the agent is
  * speaking.
  *
- * A caller who talks over the agent is already speaking when the agent goes idle, so the
- * timer waits for them to finish. Agent `thinking` counts as active, because it covers tool
- * calls that can run far longer than the timeout.
+ * A caller who talks over the agent is already speaking when the agent goes idle, so the timer
+ * waits for them to finish. Agent `thinking` counts as active, because it covers tool calls that
+ * can run far longer than the timeout.
  */
 export function createInactivityTimer(options: InactivityTimerOptions): InactivityTimer {
   let handle: ReturnType<typeof setTimeout> | undefined

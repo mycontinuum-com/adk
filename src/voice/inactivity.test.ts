@@ -1,8 +1,7 @@
 import { vi, type Mock } from 'vitest'
 
-import type { VoiceEvent } from './types'
-
 import type { InactivityTimer } from './inactivity'
+import type { VoiceEvent } from './types'
 
 import { createInactivityTimer } from './inactivity'
 
