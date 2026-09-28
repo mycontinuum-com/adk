@@ -92,7 +92,10 @@ export interface LiveVoiceExitContext<
 interface LiveVoiceInactivityContext<
   S extends StateSchema = StateSchema,
 > extends LiveVoiceContext<S> {
-  /** Silences in a row before this one. Resets to 0 when the caller speaks. */
+  /**
+   * Silences in a row before this one. Resets to 0 when the agent replies to the caller, so a noise
+   * the agent does not answer keeps the count.
+   */
   readonly inactivityCount: number
 }
 

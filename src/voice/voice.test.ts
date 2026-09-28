@@ -166,6 +166,12 @@ function emitUserSpeech(lkSessionMock: { _emit(event: string, ...args: unknown[]
   })
 }
 
+/** A caller turn: speech that starts and stops. */
+function emitUserTurn(lkSessionMock: { _emit(event: string, ...args: unknown[]): void }) {
+  emitUserSpeech(lkSessionMock)
+  lkSessionMock._emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
+}
+
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void
   let reject!: (reason?: unknown) => void
@@ -3824,6 +3830,47 @@ describe('Voice module', () => {
         .filter((e: any) => e.type === 'invocation_end')
       expect(endEvents).toHaveLength(1)
       expect(endEvents[0].reason).toBe('completed')
+    })
+
+    test('keeps the silence count through caller speech with no reply, and resets it when the agent replies', async () => {
+      const lkSessionMock = makeLKSessionMock()
+      lkAgents.voice.AgentSession.mockImplementation(function () {
+        return lkSessionMock
+      })
+      const counts: number[] = []
+      const onInactivity = vi
+        .fn<(ctx: { inactivityCount: number }) => Promise<boolean>>()
+        .mockImplementation(async (ctx) => {
+          counts.push(ctx.inactivityCount)
+          setTimeout(() => {
+            // The hook's silence prompt.
+            lkSessionMock._emit('speech_created', {})
+            if (counts.length === 1) emitUserTurn(lkSessionMock)
+            if (counts.length === 2) {
+              emitUserTurn(lkSessionMock)
+              lkSessionMock._emit('speech_created', {})
+            }
+            if (counts.length === 3) lkSessionMock._emit('close')
+          }, 0)
+          return false
+        })
+      const handle = voiceHandler({
+        agent: makeAgent({ timeouts: { inactivity: 20 }, hooks: [{ onInactivity }] }),
+        sessionService: makeSessionService(),
+      })
+
+      lkSessionMock.start.mockImplementation(async () => {
+        setTimeout(() => {
+          lkSessionMock._emit('agent_state_changed', {
+            oldState: 'speaking',
+            newState: 'listening',
+          })
+        }, 0)
+      })
+
+      await handle.entry(makeJobContext())
+
+      expect(counts).toEqual([0, 1, 0])
     })
 
     test('onInactivity does not fire while a caller who talked over the agent is still speaking', async () => {

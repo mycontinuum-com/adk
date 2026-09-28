@@ -84,7 +84,7 @@ Tools receive `ctx.voice` for voice capabilities such as `say`, `playSound`, `ge
 
 `onTranscript` runs in a dedicated queue so it does not block the voice pipeline. Lifecycle hooks return `false` to keep the session alive and `true` to explicitly end; multiple hooks compose so any `false` vetoes ending.
 
-`onInactivity` fires after `timeouts.inactivity` of silence, meaning neither the caller nor the agent is speaking. The timer starts when whichever side spoke last stops, and a newly created reply restarts it.
+`onInactivity` fires after `timeouts.inactivity` of silence, meaning neither the caller nor the agent is speaking. The timer starts when whichever side spoke last stops, and a newly created reply restarts it. `inactivityCount` resets when a reply is created after the caller spoke and before the next silence fired, so caller noise the agent does not answer keeps the count. The first reply created after a silence fired is that silence's prompt and never resets the count, unless the caller spoke before the hook ran and the hook was skipped; a hook that keeps the call without speaking therefore has its next real reply taken as the prompt.
 
 For voice session completion, prefer a `FunctionTool` as `agent.output`; ADK validates, executes, captures output, shuts down, and can auto-trigger the output tool on disconnect/inactivity/expiry once the caller has engaged.
 

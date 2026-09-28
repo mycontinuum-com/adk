@@ -175,8 +175,8 @@ export interface LifecycleHookContext<S extends StateSchema = StateSchema> {
   readonly state: TypedState<S>
   readonly voice: VoiceSession
   /**
-   * How many times this inactivity cycle has fired. Resets to 0 when the user speaks. Only
-   * meaningful in onInactivity.
+   * How many times this inactivity cycle has fired. Resets to 0 when the agent replies to the user,
+   * not when the user merely makes a sound. Only meaningful in onInactivity.
    */
   readonly inactivityCount: number
 }

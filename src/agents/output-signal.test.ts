@@ -113,6 +113,45 @@ describe('ctx.output() in tool execution', () => {
     expect(greetResult?.output).toBeUndefined()
   })
 
+  test('ctx.output() answers the calls after it in the same step without running them', async () => {
+    const ran: string[] = []
+    const finish = app.tool({
+      name: 'finish',
+      description: 'Finish with output',
+      schema: z.object({}),
+      execute: (ctx) => ctx.output({ done: true }),
+    })
+    const record = app.tool({
+      name: 'record',
+      description: 'Record something',
+      schema: z.object({}),
+      execute: () => {
+        ran.push('record')
+        return { recorded: true }
+      },
+    })
+
+    const { output, events } = await runTest(testAgent({ tools: [finish, record] }), [
+      user('Go'),
+      model({
+        toolCalls: [
+          { name: 'finish', args: {} },
+          { name: 'record', args: {} },
+        ],
+      }),
+    ])
+
+    expect(output).toEqual({ done: true })
+    expect(ran).toEqual([])
+    const results = [...events]
+      .filter((e): e is ToolResultEvent => e.type === 'tool_result')
+      .map((e) => [e.name, e.error ?? e.result])
+    expect(results).toEqual([
+      ['finish', { done: true }],
+      ['record', 'Not run: finish ended the turn first.'],
+    ])
+  })
+
   test('ctx.output() with complex object value', async () => {
     const outputTool = app.tool({
       name: 'analyze',

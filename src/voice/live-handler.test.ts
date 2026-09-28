@@ -1033,33 +1033,55 @@ async function endReason(f: Awaited<ReturnType<typeof fixture>>) {
   )
 }
 
-test('asks on each silence with a count caller speech resets, and ends when no hook keeps the call', async () => {
+test('asks on each silence, keeps the count through caller speech it does not answer, and ends when no hook keeps the call', async () => {
   const counts: number[] = []
   const f = await fixture({
     timeouts: { inactivity: 40 },
     lifecycle: {
       onInactivity(ctx) {
         counts.push(ctx.inactivityCount)
-        return ctx.inactivityCount < 2 ? false : undefined
+        return ctx.inactivityCount < 3 ? false : undefined
       },
     },
   })
   const call = await f.call()
-  await vi.waitFor(() => expect(counts).toEqual([0]))
+  await vi.waitFor(() => expect(counts).toEqual([0, 1]), { interval: 5 })
   call.session.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
   call.session.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
   await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1))
-  expect(counts).toEqual([0, 0, 1, 2])
+  expect(counts).toEqual([0, 1, 2, 3])
   expect(await endReason(f)).toMatchObject({ data: { reason: 'inactivity' } })
   expect(f.exited).toHaveBeenCalledTimes(1)
 })
 
-test('skips a silence hook when the caller spoke while it waited to run', async () => {
+test('resets the silence count when the agent replies to the caller', async () => {
+  const counts: number[] = []
+  const f = await fixture({
+    timeouts: { inactivity: 40 },
+    lifecycle: {
+      onInactivity(ctx) {
+        counts.push(ctx.inactivityCount)
+        return false
+      },
+    },
+  })
+  const call = await f.call()
+  await vi.waitFor(() => expect(counts).toEqual([0, 1]), { interval: 5 })
+  // The second silence prompt, then the caller speaks and the agent replies.
+  call.session.emit('speech_created', {})
+  call.session.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
+  call.session.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
+  call.session.emit('speech_created', {})
+  await vi.waitFor(() => expect(counts).toEqual([0, 1, 0]))
+  await call.shutdown()
+})
+
+test('skips a silence hook when the caller spoke while it waited to run, and still counts that silence', async () => {
   const enterGate = gate()
   const counts: number[] = []
   const f = await fixture({
     enterGate,
-    timeouts: { inactivity: 30 },
+    timeouts: { inactivity: 100 },
     lifecycle: {
       onInactivity(ctx) {
         counts.push(ctx.inactivityCount)
@@ -1068,15 +1090,42 @@ test('skips a silence hook when the caller spoke while it waited to run', async 
     },
   })
   const pending = f.call()
-  await vi.waitFor(() => expect(f.entered).toHaveLength(1))
-  await new Promise((resolve) => setTimeout(resolve, 45))
+  await vi.waitFor(() => expect(f.entered).toHaveLength(1), { interval: 5 })
+  await new Promise((resolve) => setTimeout(resolve, 150))
   f.sessions[0]!.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
   enterGate.release()
   const call = await pending
   await new Promise((resolve) => setTimeout(resolve, 20))
   expect(counts).toEqual([])
   call.session.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
-  await vi.waitFor(() => expect(counts).toEqual([0]))
+  await vi.waitFor(() => expect(counts).toEqual([1]), { interval: 5 })
+  await call.shutdown()
+})
+
+test('resets the count when the agent answers a caller whose speech skipped a silence hook', async () => {
+  const enterGate = gate()
+  const counts: number[] = []
+  const f = await fixture({
+    enterGate,
+    timeouts: { inactivity: 100 },
+    lifecycle: {
+      onInactivity(ctx) {
+        counts.push(ctx.inactivityCount)
+        return false
+      },
+    },
+  })
+  const pending = f.call()
+  await vi.waitFor(() => expect(f.entered).toHaveLength(1), { interval: 5 })
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  f.sessions[0]!.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
+  enterGate.release()
+  const call = await pending
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  // The skipped hook made no prompt, so this reply answers the caller.
+  call.session.emit('speech_created', {})
+  call.session.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
+  await vi.waitFor(() => expect(counts).toEqual([0]), { interval: 5 })
   await call.shutdown()
 })
 

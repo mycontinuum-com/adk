@@ -204,7 +204,8 @@ class LiveCall<S extends StateSchema, T> {
   private readonly silence = createInactivityTimer({
     timeoutMs: () => this.runtime.config.timeouts?.inactivity,
     isActive: () => !this.stopped && this.context !== undefined,
-    onTimeout: (inactivityCount) => this.lifecycle('onInactivity', 'inactivity', inactivityCount),
+    onTimeout: (inactivityCount, timeoutId) =>
+      this.lifecycle('onInactivity', 'inactivity', inactivityCount, timeoutId),
     emit: () => {},
   })
   private expiry: ReturnType<typeof setTimeout> | undefined
@@ -290,9 +291,15 @@ class LiveCall<S extends StateSchema, T> {
   /**
    * Runs a lifecycle hook after the call's queued work, so the call keeps one state writer. The
    * call ends unless a hook returns `false`; a call that has not entered ends without hooks. A
-   * silence the caller broke while the hook waited in the queue no longer calls for it.
+   * silence the caller broke while the hook waited in the queue no longer calls for it, but it
+   * still counts toward `inactivityCount` until the agent replies to the caller.
    */
-  private lifecycle(name: 'onInactivity' | 'onExpiry', reason: string, inactivityCount = 0): void {
+  private lifecycle(
+    name: 'onInactivity' | 'onExpiry',
+    reason: string,
+    inactivityCount = 0,
+    timeoutId = 0,
+  ): void {
     const context = this.context
     if (this.stopped) return
     if (!context) {
@@ -303,7 +310,10 @@ class LiveCall<S extends StateSchema, T> {
     this.queue = this.queue
       .then(async () => {
         if (this.stopped) return
-        if (name === 'onInactivity' && this.activity.callerTurns !== turns) return
+        if (name === 'onInactivity' && this.activity.callerTurns !== turns) {
+          this.silence.promptSkipped(timeoutId)
+          return
+        }
         let keep = false
         try {
           for (const hook of this.runtime.hooks) {

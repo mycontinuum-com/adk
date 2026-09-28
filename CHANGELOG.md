@@ -59,6 +59,7 @@ Adds GPT Live voice agents, mixed text/voice evaluations and model judges, self-
 - REST and AG-UI — filter process-local events. REST includes nested runs and `tool_yield`; AG-UI keeps nested agent text out of chat, maps nested runs to steps when requested, and reports yielding tools and their answers.
 - Eval metrics — thrown errors produce case status `error`, not `failed`; `MetricResult.error` and `usage` record metric failures and spend. Reports preserve known costs when a metric fails or only part of a suite's cost is available.
 - Eval evidence — voice case directories include an execution index; use returned paths or `index.md`. Metric data must be JSON-compatible, concurrent suites retain already-running results after a failure, and report case types require a `run`.
+- Silence count — `inactivityCount` resets when the agent replies to the caller, not when the caller starts speaking, so caller sound the agent does not answer, such as a click, no longer restarts the prompt sequence. On GPT Live a reply is one LiveKit agent audio burst, so an answer that continues the agent's previous audio without an 800 ms pause keeps the count.
 
 ### Fixed
 
@@ -70,6 +71,7 @@ Adds GPT Live voice agents, mixed text/voice evaluations and model judges, self-
 - Zod schemas — preserve wrapper descriptions in Zod 3 tool schemas and treat wrapped primitive session output keys as raw text.
 - Tool context types — declare the already-supported `ctx.note` method.
 - Package contents — exclude generated `src/node_modules` caches.
+- Output and transfer tools — calls after `ctx.output()` or a transfer in the same model step get an error `tool_result` (`Not run: <tool> ended the turn first.`) and do not run. Before, the next model request held a call with no output, which OpenAI rejects with a 400.
 
 ### Removed
 
@@ -90,6 +92,10 @@ REST consumers should group nested events by `invocationId` and `parentInvocatio
 Return `passed: false` for a product failure; throw only when no verdict is possible. Guard missing product state in metrics so a failed requirement does not become an eval error.
 
 Cost estimates depend on access to the configured price map and a matching model entry. Treat missing cost as unknown, not zero; configure a reachable map or disable estimation explicitly.
+
+#### Silence count
+
+`inactivityCount` no longer resets when the caller starts speaking; it resets when the agent replies. A hook that ends the call at a fixed count now ends it that many silences after the agent last answered, even if the caller made a sound in between.
 
 ## [0.6.0] - 2026-09-01
 

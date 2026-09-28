@@ -4,8 +4,12 @@ export interface InactivityTimerOptions {
   /** Read at every start, so an agent transfer can change it. Unset disables the timer. */
   timeoutMs: () => number | undefined
   isActive: () => boolean
-  /** Receives how many timeouts have fired in a row before this one. */
-  onTimeout: (inactivityCount: number) => void
+  /**
+   * Receives how many timeouts have fired in a row before this one, and this timeout's own id. The
+   * count resets only when the agent replies to the caller, so a noise the agent does not answer
+   * keeps it.
+   */
+  onTimeout: (inactivityCount: number, timeoutId: number) => void
   emit: (event: VoiceEvent) => void
 }
 
@@ -16,9 +20,17 @@ export interface InactivityTimer {
   agentWentIdle(): void
   /**
    * A reply is on its way, so a prompt now would cut it off. The timer restarts rather than stops,
-   * so a reply that never plays still ends in a prompt.
+   * so a reply that never plays still ends in a prompt. The first reply after a timeout is taken as
+   * its prompt and never resets the count. Any other reply created after the caller spoke, before
+   * another timeout fired, answers the caller and resets the count.
    */
   agentReplyCreated(): void
+  /**
+   * The prompt of timeout `timeoutId` will not be created, because its hook was skipped. If that is
+   * the timeout still awaiting its prompt, the next reply is not taken as a prompt. A skipped older
+   * timeout never clears a newer one's pending prompt.
+   */
+  promptSkipped(timeoutId: number): void
   /** Cancels the timer and the count without reporting it, for a transfer or session end. */
   stop(): void
 }
@@ -34,6 +46,15 @@ export interface InactivityTimer {
 export function createInactivityTimer(options: InactivityTimerOptions): InactivityTimer {
   let handle: ReturnType<typeof setTimeout> | undefined
   let inactivityCount = 0
+  /** The caller has spoken since the last timeout, so the agent's next reply answers them. */
+  let awaitingReply = false
+  /** Ids the timeouts in firing order. */
+  let fired = 0
+  /**
+   * The timeout that fired and whose prompt has not been created yet. The next reply is that
+   * prompt, so it never resets the count, even when the caller made a sound before it played.
+   */
+  let promptPendingFor: number | undefined
   let userSpeaking = false
   let agentActive = false
 
@@ -57,13 +78,16 @@ export function createInactivityTimer(options: InactivityTimerOptions): Inactivi
     handle = setTimeout(() => {
       if (!options.isActive()) return
       const count = inactivityCount++
+      awaitingReply = false
+      const timeoutId = ++fired
+      promptPendingFor = timeoutId
       options.emit({
         type: 'voice_activity',
         activity: 'inactivity_timeout_fired',
         inactivityCount: count,
         timeoutMs,
       })
-      options.onTimeout(count)
+      options.onTimeout(count, timeoutId)
       start()
     }, timeoutMs)
   }
@@ -71,7 +95,7 @@ export function createInactivityTimer(options: InactivityTimerOptions): Inactivi
   return {
     callerStartedSpeaking() {
       userSpeaking = true
-      inactivityCount = 0
+      awaitingReply = true
       clear('user_speech_started')
     },
 
@@ -91,13 +115,23 @@ export function createInactivityTimer(options: InactivityTimerOptions): Inactivi
     },
 
     agentReplyCreated() {
+      if (promptPendingFor !== undefined) promptPendingFor = undefined
+      else {
+        if (awaitingReply) inactivityCount = 0
+        awaitingReply = false
+      }
       if (handle) start()
+    },
+
+    promptSkipped(timeoutId) {
+      if (promptPendingFor === timeoutId) promptPendingFor = undefined
     },
 
     stop() {
       if (handle) clearTimeout(handle)
       handle = undefined
       inactivityCount = 0
+      promptPendingFor = undefined
     },
   }
 }

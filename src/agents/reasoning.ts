@@ -734,7 +734,7 @@ async function* processToolCalls(
   errorHandler: ComposedErrorHandler,
   session: Session,
 ): AsyncGenerator<StreamEvent, ToolExecutionResult> {
-  for (const toolCall of toolCalls) {
+  for (const [index, toolCall] of toolCalls.entries()) {
     const toolCtx = createToolContext(
       ctx,
       toolCall,
@@ -766,11 +766,28 @@ async function* processToolCalls(
     if (delegateYielded) {
       return { abort: false, delegateYieldInfo: delegateYielded }
     }
-    if (transfer) {
-      return { abort: false, transferInfo: transfer }
-    }
-    if (outputSignal) {
-      return { abort: false, outputInfo: outputSignal }
+    if (transfer || outputSignal) {
+      // Providers reject a history with a call that has no result, so the
+      // calls this one cut off are answered without being run.
+      for (const skipped of toolCalls.slice(index + 1)) {
+        const skippedEvent: ToolResultEvent = {
+          id: createEventId(),
+          type: 'tool_result',
+          createdAt: Date.now(),
+          callId: skipped.callId,
+          name: skipped.name,
+          providerContext: skipped.providerContext,
+          invocationId: skipped.invocationId,
+          agentName: skipped.agentName,
+          error: `Not run: ${toolCall.name} ended the turn first.`,
+        }
+        await runnerConfig.sessionService.appendEvent(session, skippedEvent)
+        yield skippedEvent
+        config?.onStep?.([skippedEvent], session, agent)
+      }
+      return transfer
+        ? { abort: false, transferInfo: transfer }
+        : { abort: false, outputInfo: outputSignal }
     }
     if (abort) {
       return { abort: true }
