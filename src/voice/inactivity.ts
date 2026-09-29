@@ -31,6 +31,11 @@ export interface InactivityTimer {
    * timeout never clears a newer one's pending prompt.
    */
   promptSkipped(timeoutId: number): void
+  /**
+   * Timeout `timeoutId` found caller speech the agent had not answered, so it was no silence: it is
+   * not counted, and the next reply answers the caller.
+   */
+  callerUnanswered(timeoutId: number): void
   /** Cancels the timer and the count without reporting it, for a transfer or session end. */
   stop(): void
 }
@@ -125,6 +130,13 @@ export function createInactivityTimer(options: InactivityTimerOptions): Inactivi
 
     promptSkipped(timeoutId) {
       if (promptPendingFor === timeoutId) promptPendingFor = undefined
+    },
+
+    callerUnanswered(timeoutId) {
+      if (timeoutId !== fired) return
+      if (promptPendingFor === timeoutId) promptPendingFor = undefined
+      inactivityCount = Math.max(0, inactivityCount - 1)
+      awaitingReply = true
     },
 
     stop() {

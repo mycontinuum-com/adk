@@ -126,6 +126,14 @@ const contentFilterEvent = z.object({
   error: z.object({ code: z.literal('content_filter') }),
 })
 
+/** A provider error's type and code: fixed identifiers, logged without the message. */
+const providerErrorEvent = z.object({
+  type: z.literal('error'),
+  error: z
+    .object({ type: z.string().max(64).nullish(), code: z.string().max(64).nullish() })
+    .optional(),
+})
+
 /** What the connection after a moderation stop is told in place of the conversation. */
 const RESTARTED_AFTER_MODERATION =
   'The connection restarted mid-call and the conversation so far is not shown. Do not greet the caller or start the conversation again: delegate what they say, and say what you are given.'
@@ -264,8 +272,10 @@ class LiveCall<S extends StateSchema, T> {
   private readonly silence = createInactivityTimer({
     timeoutMs: () => this.runtime.config.timeouts?.inactivity,
     isActive: () => !this.stopped && this.context !== undefined,
-    onTimeout: (inactivityCount, timeoutId) =>
-      this.lifecycle('onInactivity', 'inactivity', inactivityCount, timeoutId),
+    onTimeout: (inactivityCount, timeoutId) => {
+      if (this.delegateUnanswered()) this.silence.callerUnanswered(timeoutId)
+      else this.lifecycle('onInactivity', 'inactivity', inactivityCount, timeoutId)
+    },
     emit: () => {},
   })
   private expiry: ReturnType<typeof setTimeout> | undefined
@@ -273,6 +283,12 @@ class LiveCall<S extends StateSchema, T> {
   /** Admitted delegations not yet settled. The caller is waiting on them, not silent. */
   private delegating = 0
   private agentActive = false
+  /** The GPT Live session, once entered. */
+  private live: GPTLiveSession | undefined
+  /** Runs the handler started itself, on caller speech GPT Live did not delegate. */
+  private readonly undelegated = new WeakSet<LiveVoiceDelegation>()
+  /** Transcript receipt the latest admitted run was given, so no speech is run on twice. */
+  private admittedThrough = 0
 
   constructor(
     private readonly runtime: LiveRuntime<S, T>,
@@ -405,6 +421,7 @@ class LiveCall<S extends StateSchema, T> {
       if (!(duplexSession instanceof this.runtime.realtime.GPTLiveSession))
         throw new Error('Expected GPT Live session')
       const live = duplexSession
+      this.live = live
       this.transcript.attach(live)
       if (live.sessionId) this.meter.observeConnection(live.sessionId)
       // Moderation closes the connection; its replacement then starts with nothing to flag, and
@@ -412,6 +429,16 @@ class LiveCall<S extends StateSchema, T> {
       let contentFiltered = false
       live.on('openai_server_event_received', (event) => {
         this.meter.observeServerEvent(event, live.sessionId ?? undefined)
+        const providerError = providerErrorEvent.safeParse(event)
+        if (providerError.success)
+          this.log(
+            {
+              callId: this.context?.callId,
+              errorType: providerError.data.error?.type ?? null,
+              errorCode: providerError.data.error?.code ?? null,
+            },
+            'Live provider error',
+          )
         if (!contentFilterEvent.safeParse(event).success) return
         contentFiltered = true
         forgetConversation(live)
@@ -544,6 +571,8 @@ class LiveCall<S extends StateSchema, T> {
   ): LiveVoiceControls {
     const usable = () =>
       !this.stopped && active() && (!delegation || live.sessionId === delegation.connectionId)
+    // A run GPT Live did not delegate has no delegation of its own to answer.
+    const delegationId = delegation && !this.undelegated.has(delegation) ? delegation.id : undefined
     const activity = this.activity
     return {
       get turnCount() {
@@ -554,15 +583,15 @@ class LiveCall<S extends StateSchema, T> {
       },
       untilQuiet: () => this.uninterrupted ?? Promise.resolve(),
       appendThinking: (text) => {
-        if (usable()) live.appendThinking(text, { delegationId: delegation?.id })
+        if (usable()) live.appendThinking(text, { delegationId })
       },
       appendCommentary: (text, options) => {
         if (!usable()) return
-        if (options?.allowInterruptions === false) this.sayUninterrupted(live, text, delegation?.id)
-        else live.appendCommentary(text, { delegationId: delegation?.id })
+        if (options?.allowInterruptions === false) this.sayUninterrupted(live, text, delegationId)
+        else live.appendCommentary(text, { delegationId })
       },
       appendInstructions: (text) => {
-        if (usable()) live.appendInstructions(text, { delegationId: delegation?.id })
+        if (usable()) live.appendInstructions(text, { delegationId })
       },
     }
   }
@@ -619,8 +648,29 @@ class LiveCall<S extends StateSchema, T> {
     if (!said) this.log({ callId: this.context?.callId }, 'Live line_unconfirmed')
   }
 
+  /**
+   * At a silence timeout, runs the backend on caller speech that GPT Live neither delegated nor
+   * answered, as if it had delegated it: the latest transcript on the connection is the caller's,
+   * after its last delegation and its last speech, and no run has been given it. GPT Live delegated
+   * every recorded caller turn within 3 s of their last words, so the timeout is long past that.
+   */
+  private delegateUnanswered(): boolean {
+    const live = this.live
+    const connectionId = live?.sessionId
+    if (!live || !connectionId || this.stopped || this.delegating > 0) return false
+    const latest = this.transcript
+      .snapshot()
+      .observations.findLast((observation) => observation.connection.id === connectionId)
+    if (latest?.payload.kind !== 'transcript' || latest.sequence <= this.admittedThrough)
+      return false
+    if (latest.payload.event.type !== 'session.input_transcript.delta') return false
+    this.log({ callId: this.context?.callId }, 'Live caller speech not delegated')
+    this.admit(live, `undelegated-${randomUUID()}`, false)
+    return true
+  }
+
   /** Freezes the transcript snapshot synchronously, then queues the delegation. */
-  private admit(live: GPTLiveSession, delegationId: string): void {
+  private admit(live: GPTLiveSession, delegationId: string, delegated = true): void {
     const connectionId = live.sessionId
     if (!connectionId || this.stopped) return
     const key = `${connectionId}/${delegationId}`
@@ -633,6 +683,8 @@ class LiveCall<S extends StateSchema, T> {
       connectionId,
       nativeThrough: snapshot.receivedThrough,
     }
+    if (!delegated) this.undelegated.add(delegation)
+    this.admittedThrough = snapshot.receivedThrough
     let active = true
     const voice = this.controls(live, delegation, () => active)
     this.delegating++
@@ -672,7 +724,9 @@ class LiveCall<S extends StateSchema, T> {
     ) {
       if (earlier.delivery === 'pending') return this.deliver(live, delegation, voice, earlier)
       // Its result hooks may already have acted, so they are not run again.
-      live.appendThinking(HANDLED_BEFORE_RECONNECT, { delegationId: delegation.id })
+      live.appendThinking(HANDLED_BEFORE_RECONNECT, {
+        delegationId: this.undelegated.has(delegation) ? undefined : delegation.id,
+      })
       return
     }
     this.lastRun = undefined

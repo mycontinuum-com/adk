@@ -890,8 +890,17 @@ describe('Live voice handler', () => {
     call.live.emit('session_reconnected', {})
     call.live.emit('openai_server_event_received', {
       type: 'error',
-      error: { type: 'content_filter', code: 'content_filter' },
+      error: {
+        type: 'content_filter',
+        code: 'content_filter',
+        message: 'Stopped: Patient Okafor said',
+      },
     })
+    expect(f.logError).toHaveBeenCalledWith(
+      expect.objectContaining({ errorType: 'content_filter', errorCode: 'content_filter' }),
+      'Live provider error',
+    )
+    expect(JSON.stringify(f.logError.mock.calls)).not.toContain('Okafor')
     expect(history.items).toEqual([])
     expect(call.live.sent.at(-1)).toEqual({
       kind: 'instructions',
@@ -1335,6 +1344,52 @@ test('asks on each silence, keeps the count through caller speech it does not an
   expect(counts).toEqual([0, 1, 2, 3])
   expect(await endReason(f)).toMatchObject({ data: { reason: 'inactivity' } })
   expect(f.exited).toHaveBeenCalledTimes(1)
+})
+
+test('runs the backend on caller speech GPT Live neither delegated nor answered, in place of a silence prompt', async () => {
+  const counts: number[] = []
+  const f = await fixture({
+    timeouts: { inactivity: 40 },
+    lifecycle: {
+      onInactivity(ctx) {
+        counts.push(ctx.inactivityCount)
+        return false
+      },
+    },
+  })
+  const call = await f.call()
+  call.live.fragment('user', 'No, that is everything', 'input-missed')
+  await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+  expect(f.started).toEqual(['first'])
+  expect(f.logError).toHaveBeenCalledWith(expect.anything(), 'Live caller speech not delegated')
+  // Its line answers no delegation of GPT Live's, so it carries no delegation ID.
+  await vi.waitFor(() =>
+    expect(call.live.sent.at(-1)).toMatchObject({ kind: 'commentary', text: 'first' }),
+  )
+  expect(call.live.sent.at(-1)?.delegationId).toBeUndefined()
+  // The same speech is not run on again, and that timeout was not a silence.
+  await vi.waitFor(() => expect(counts).toEqual([0]), { interval: 5 })
+  expect(f.started).toEqual(['first'])
+  await call.shutdown()
+})
+
+test('prompts a silence after caller speech GPT Live answered itself', async () => {
+  const counts: number[] = []
+  const f = await fixture({
+    timeouts: { inactivity: 40 },
+    lifecycle: {
+      onInactivity(ctx) {
+        counts.push(ctx.inactivityCount)
+        return false
+      },
+    },
+  })
+  const call = await f.call()
+  call.live.fragment('user', 'Hello?', 'input-answered')
+  call.live.fragment('assistant', 'Yes, I am here.', 'output-answered')
+  await vi.waitFor(() => expect(counts).toEqual([0]), { interval: 5 })
+  expect(f.started).toEqual([])
+  await call.shutdown()
 })
 
 test('resets the silence count when the agent replies to the caller', async () => {

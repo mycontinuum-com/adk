@@ -57,6 +57,8 @@ Migration section:
 - Voice eval recording uses the participants' own rooms to avoid missing audio tracks. Evidence preserves safe error fields, omits function-valued state properties, and identifies invalid JSON values by path.
 - Output coercion handles repeated union values independently instead of treating them as cycles. Output tools run even when omitted from the agent's `tools` list.
 - MCP installs process signal handlers only after an MCP server is added, leaving other hosts' shutdown handling untouched otherwise.
+- GPT Live logs each provider `error` event as `Live provider error` with its type and code only, never its message, so moderation stops and other provider failures are visible.
+- A caller turn GPT Live transcribes but never delegates is run on the backend when the silence timer fires, instead of a silence prompt, so the call no longer ends on silence.
 
 ### Migration from 0.6.1
 
