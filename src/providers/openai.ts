@@ -70,6 +70,17 @@ export function serializePromptCacheOptions(
   }
 }
 
+/**
+ * `parallel_tool_calls: false` when the agent's config explicitly turns it off; otherwise nothing,
+ * leaving the Responses API's own default (`true`) in place.
+ */
+export function serializeParallelToolCallsOption(
+  config: ProviderModelConfig,
+): { parallel_tool_calls: false } | Record<string, never> {
+  if (config.provider !== 'openai' || config.parallelToolCalls !== false) return {}
+  return { parallel_tool_calls: false }
+}
+
 function createEndpointKey(endpoint: OpenAIEndpoint, model?: string): string {
   return `${endpoint.type}:${endpoint.baseUrl ?? 'default'}:${
     endpoint.apiVersion ?? ''
@@ -194,6 +205,7 @@ export class OpenAIAdapter implements ModelAdapter {
         ...promptCacheOptions,
         ...(serializedToolChoice && { tool_choice: serializedToolChoice }),
         ...samplingOptions(config, reasoning),
+        ...serializeParallelToolCallsOption(config),
         ...(reasoning && {
           reasoning,
           include: ['reasoning.encrypted_content'],

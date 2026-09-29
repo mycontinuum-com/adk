@@ -1,6 +1,8 @@
 import type { ErrorContext } from '../types/events'
 import type { ErrorHandler } from './types'
 
+import { safeErrorFields } from './safe-error'
+
 export interface RetryHandlerOptions {
   maxAttempts?: number
   baseDelay?: number
@@ -84,7 +86,7 @@ export function loggingHandler(options: LoggingHandlerOptions = {}): ErrorHandle
   const log =
     options.onError ??
     ((ctx) => {
-      console.error(`[${ctx.phase}] Error in ${ctx.agent}:`, ctx.error.message)
+      console.error(`[${ctx.phase}] Error in ${ctx.agent}:`, safeErrorFields(ctx.error))
     })
 
   return {

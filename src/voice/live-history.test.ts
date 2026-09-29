@@ -20,6 +20,11 @@ test('projects receipt order with stable identity instead of inventing turn orde
     })
   }
   fragment('later', ' Friday', 300, 400)
+  // A delegation ends the caller's run, so the late fragment stays its own event.
+  source.emit('openai_server_event_received', {
+    type: 'session.delegation.created',
+    delegation: { id: 'delegation' },
+  })
   fragment('earlier', 'I said', 100, 200)
   const snapshot = recorder.snapshot()
   fragment('middle', 'next', 200, 300)
@@ -138,5 +143,74 @@ test('restores receipt-anchored work in stable blocks across equal boundaries an
   })
   expect(projected.slice(0, 5)).toEqual(liveHistory(events, first, 'backend'))
   expect(work.unresolved).toEqual([{ callId: 'unknown', name: 'submit' }])
+  await recorder.close()
+})
+
+test('gives the backend the caller’s consecutive fragments as one message, up to the next delegation', async () => {
+  const recorder = await createGPTLiveTranscript(new InMemoryStore(), 'call', () => {})
+  const source = Object.assign(new EventEmitter(), { sessionId: 'connection' })
+  recorder.attach(source)
+  const said = (
+    speaker: 'caller' | 'agent',
+    text: string,
+    start: number | null,
+    end: number | null,
+  ) =>
+    source.emit('openai_server_event_received', {
+      type:
+        speaker === 'caller' ? 'session.input_transcript.delta' : 'session.output_transcript.delta',
+      event_id: `${speaker}-${text}`,
+      delta: text,
+      start_ms: start,
+      end_ms: end,
+    })
+  said('agent', 'Please spell your surname.', 0, 900)
+  for (const [text, start] of [
+    [' S', 1000],
+    [' H', 1200],
+    [' A', 1400],
+    [' R', 1600],
+    [' I', 1800],
+    [' double', 2000],
+    [' F', 2300],
+  ] as const)
+    said('caller', text, start, start + 150)
+  source.emit('openai_server_event_received', {
+    type: 'session.delegation.created',
+    delegation: { id: 'spelled' },
+  })
+  const spelled = recorder.snapshot()
+  said('caller', ' And that is all.', 3000, 3600)
+  const events: Event[] = [
+    {
+      createdAt: 0,
+      invocationId: 'run',
+      agentName: 'backend',
+      id: 'batch',
+      type: 'annotation',
+      kind: 'mark',
+      label: 'live-backend-work',
+      data: { transcriptThrough: spelled.receivedThrough },
+    },
+    {
+      createdAt: 0,
+      invocationId: 'run',
+      agentName: 'backend',
+      id: 'work',
+      type: 'system',
+      text: 'Recorded.',
+    },
+  ]
+  const history = liveHistory(events, recorder.snapshot(), 'backend')
+  expect(history.map((event) => ('text' in event ? event.text : event.type))).toEqual([
+    'Please spell your surname.',
+    ' S H A R I double F',
+    'Recorded.',
+    ' And that is all.',
+  ])
+  expect(history[1]).toMatchObject({
+    id: `call/transcript/${spelled.fragments[1]!.sequence}`,
+    transcriptFragment: { sequence: spelled.fragments[7]!.sequence, startMs: 1000, endMs: 2450 },
+  })
   await recorder.close()
 })

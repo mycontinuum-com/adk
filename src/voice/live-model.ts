@@ -18,6 +18,8 @@ export interface GPTLiveSession extends GPTLiveTranscriptSource {
   unmuteInput(): void
   on(event: 'openai_server_event_received', listener: (event: unknown) => void): unknown
   on(event: 'delegation_created', listener: (event: { id: string }) => void): unknown
+  /** A replacement connection has started. */
+  on(event: 'session_reconnected', listener: () => void): unknown
 }
 
 /**

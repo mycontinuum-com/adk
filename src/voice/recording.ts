@@ -4,15 +4,24 @@ import { join } from 'node:path'
 
 import type { RecordingConfig, EgressRecordingConfig } from './types'
 
+import { safeErrorFields } from '../errors/safe-error'
+
 export interface RecordingSession {
   stop(): Promise<void>
 }
 
+const loadServerSdk = (): unknown => require('livekit-server-sdk')
+
+/**
+ * Starts the configured recordings. `serverSdk` loads `livekit-server-sdk` for egress; a handler
+ * passes its own dependency so tests can replace the egress client.
+ */
 export async function startRecordingSession(
   room: any,
   config: RecordingConfig,
   sessionId: string,
   recordingKey?: string,
+  serverSdk: () => unknown = loadServerSdk,
 ): Promise<RecordingSession> {
   const stops: Array<() => Promise<unknown>> = []
 
@@ -21,7 +30,7 @@ export async function startRecordingSession(
   }
 
   if (config.egress) {
-    const stop = await startEgressRecording(room, config.egress, sessionId, recordingKey)
+    const stop = await startEgressRecording(room, config.egress, sessionId, recordingKey, serverSdk)
     if (stop) stops.push(stop)
   }
 
@@ -244,11 +253,12 @@ async function startEgressRecording(
   room: any,
   config: EgressRecordingConfig,
   sessionId: string,
-  recordingKey?: string,
+  recordingKey: string | undefined,
+  serverSdk: () => unknown,
 ): Promise<(() => Promise<void>) | undefined> {
   let sdk: any
   try {
-    sdk = require('livekit-server-sdk')
+    sdk = serverSdk()
   } catch {
     console.error(
       '[adk/voice] Egress recording requires livekit-server-sdk. ' +
@@ -323,7 +333,7 @@ async function startEgressRecording(
       }
     }
   } catch (err) {
-    console.error('[adk/voice] Failed to start egress recording:', err)
+    console.error('[adk/voice] Failed to start egress recording:', safeErrorFields(err))
     return undefined
   }
 }

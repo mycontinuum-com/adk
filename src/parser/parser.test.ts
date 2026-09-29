@@ -1529,3 +1529,22 @@ describe('Circular reference detection', () => {
     }
   })
 })
+
+describe('union fields holding the same value', () => {
+  const notGiven = z.object({ notGiven: z.literal(true) })
+  const schema = z.object({
+    middleNames: z.union([z.object({ value: z.array(z.string()) }), notGiven]),
+    dateOfBirth: z.union([z.string().date(), notGiven]),
+  })
+
+  it('coerces each field on its own, not as a cycle of the one before', () => {
+    const result = coerce(
+      { middleNames: { notGiven: true }, dateOfBirth: { notGiven: true } },
+      schema,
+    )
+    expect(result).toMatchObject({
+      success: true,
+      value: { middleNames: { notGiven: true }, dateOfBirth: { notGiven: true } },
+    })
+  })
+})

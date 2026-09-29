@@ -25,6 +25,15 @@ export function createContext(partial: boolean, visited?: Set<string>, depth = 0
   }
 }
 
+/**
+ * A fresh context for trying one alternative (a union option, an intersection side, a fallback) at
+ * the same path. It shares what has been visited, so the path must be kept: the visited key names
+ * the path, and without it two fields holding the same value read as a cycle.
+ */
+export function branchContext(ctx: CoercionContext): CoercionContext {
+  return { ...createContext(ctx.partial, ctx.visited, ctx.depth), path: [...ctx.path] }
+}
+
 export function isMaxDepthExceeded(ctx: CoercionContext): boolean {
   return ctx.depth >= MAX_DEPTH
 }

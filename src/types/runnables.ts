@@ -67,6 +67,13 @@ export interface OpenAIModel extends BaseModelConfig {
     ttl: '30m'
   }
   retry?: RetryConfig
+  /**
+   * Forwarded to the Responses API's `parallel_tool_calls`. Undefined leaves the provider's own
+   * default (`true`) in place. Set `false` when a step that emits several same-named tool calls at
+   * once (each argued independently, so none can react to another's result) is a bug for this
+   * agent, not a feature.
+   */
+  parallelToolCalls?: boolean
 }
 
 export interface VertexAIConfig {
@@ -626,4 +633,10 @@ export interface ModelAdapter {
     config: ProviderModelConfig,
     signal?: AbortSignal,
   ): AsyncGenerator<StreamEvent, ModelStepResult>
+  /**
+   * Called once an invocation has ended, however it ended, but not when it yields to be resumed. An
+   * adapter releases what it keeps per invocation here, such as a Realtime socket held open for the
+   * results of the tool calls the last step made.
+   */
+  endInvocation?(invocationId: string): void
 }

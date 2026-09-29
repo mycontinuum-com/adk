@@ -15,11 +15,13 @@ export interface JudgeEvidence {
 }
 
 /**
- * One timeline entry. Voice speech times are the provider's audio offsets; voice tool times are
- * milliseconds from the start of the run. Text runs carry no times.
+ * One timeline entry. Every voice `atMs` is milliseconds from the start of the run, one clock for
+ * speech and tool use: GPT Live speech when its first fragment arrived, Realtime speech at its
+ * start (or its end when it has no start), tool entries when the event was recorded. The provider's
+ * audio offsets are left out, as they run on another clock. Text runs carry no times.
  */
 export type JudgeTurn =
-  | { kind: 'caller' | 'agent'; said: string; fromMs?: number; toMs?: number }
+  | { kind: 'caller' | 'agent'; said: string; atMs?: number }
   | { kind: 'tool_call'; name: string; args: unknown; atMs?: number }
   | { kind: 'tool_result'; name: string; result?: unknown; error?: string; atMs?: number }
 
@@ -138,7 +140,7 @@ function voiceTimeline(run: VoiceRunResult): JudgeTurn[] {
   const speech: Timed[] = run.liveTranscript
     ? liveTranscriptTurns(run).map((turn) => ({
         at: turn.receivedAt,
-        turn: spoken(turn.speaker, turn.text, turn.fromMs, turn.toMs),
+        turn: spoken(turn.speaker, turn.text, turn.receivedAt - run.startedAtMs),
       }))
     : realtimeSpeech(run)
   const tools = run.session.events.flatMap((event): Timed[] => {
@@ -171,23 +173,14 @@ function voiceTimeline(run: VoiceRunResult): JudgeTurn[] {
 function realtimeSpeech(run: VoiceRunResult): Timed[] {
   let at = run.startedAtMs
   return run.transcript.map((entry) => {
+    const timed = entry.startMs !== undefined || entry.endMs !== undefined
     if (entry.startMs !== undefined) at = run.startedAtMs + entry.startMs
     else if (entry.endMs !== undefined) at = Math.max(at, run.startedAtMs + entry.endMs)
     const speaker = entry.role === 'user' ? 'caller' : 'agent'
-    return { at, turn: spoken(speaker, entry.text, entry.startMs ?? null, entry.endMs ?? null) }
+    return { at, turn: spoken(speaker, entry.text, timed ? at - run.startedAtMs : undefined) }
   })
 }
 
-function spoken(
-  kind: 'caller' | 'agent',
-  said: string,
-  fromMs: number | null,
-  toMs: number | null,
-): JudgeTurn {
-  return {
-    kind,
-    said,
-    ...(fromMs !== null && { fromMs }),
-    ...(toMs !== null && { toMs }),
-  }
+function spoken(kind: 'caller' | 'agent', said: string, atMs: number | undefined): JudgeTurn {
+  return { kind, said, ...(atMs !== undefined && { atMs }) }
 }

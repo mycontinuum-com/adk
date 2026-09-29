@@ -3,15 +3,15 @@ import type { CostAccount, UsageSummary } from '../types/runtime'
 import type { StateSchema, TypedState } from '../types/schema'
 import type { Session } from '../types/session'
 import type { GPTLiveTranscript } from './gpt-live-transcript'
-import type { VoiceHandlerConfig } from './types'
+import type { SoundConfig, VoiceHandlerConfig } from './types'
 
 interface LiveCommentaryOptions {
   /**
    * `false` makes a line the caller cannot talk over, such as a notice or a goodbye. Caller audio
-   * is replaced with silence at once. The line is given only once GPT Live is quiet and no
-   * delegation is in flight, and counts as said when GPT Live's next speaking turn has started and
-   * ended. The caller is heard again after that, or after `playoutTimeoutMs` if GPT Live never
-   * speaks. Default: `true`, which gives the line at once.
+   * is replaced with silence at once. The line is given once GPT Live is quiet, and counts as said
+   * when GPT Live's next speaking turn has started and ended. The caller is heard again after that,
+   * or after `playoutTimeoutMs` if GPT Live never speaks. Default: `true`, which gives the line at
+   * once.
    */
   allowInterruptions?: boolean
 }
@@ -25,6 +25,13 @@ export interface LiveVoiceControls {
   appendThinking(text: string): void
   appendCommentary(text: string, options?: LiveCommentaryOptions): void
   appendInstructions(text: string): void
+  /**
+   * Resolves once every line given with `allowInterruptions: false` has been said, or at once if
+   * none is waiting; each line's waits are bounded by `playoutTimeoutMs`. Await it before a step
+   * that must follow a line, such as a transfer after its notice. It never tells whether the caller
+   * heard the line.
+   */
+  untilQuiet(): Promise<void>
   /** Caller speech turns so far in the call. */
   readonly turnCount: number
 }
@@ -118,8 +125,16 @@ export interface LiveVoiceHook<S extends StateSchema = StateSchema, T = unknown>
 export interface LiveVoiceHandlerConfig<
   S extends StateSchema = StateSchema,
   T = unknown,
-> extends Pick<VoiceHandlerConfig<S>, 'name' | 'worker' | 'prewarm' | 'setup' | 'callTermination'> {
+> extends Pick<
+  VoiceHandlerConfig<S>,
+  'name' | 'worker' | 'prewarm' | 'setup' | 'callTermination' | 'recording'
+> {
   agent: LiveAgent<S>
+  /**
+   * Noise cancellation on the caller's audio. A call's `setup().noiseCancellation` overrides it.
+   * The Realtime handler's `sound.backgroundAudio` is not supported here.
+   */
+  sound?: Pick<SoundConfig, 'noiseCancellation'>
   backend: Agent<S, T>
   hooks?: LiveVoiceHook<S, T>[]
   backendTimeoutMs?: number

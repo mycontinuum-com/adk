@@ -66,6 +66,7 @@ import { createLiveKitAgent } from './livekit-agent'
 import { createLiveKitModel } from './livekit-model'
 import { convertTools, type ToolBridgeContext } from './livekit-tools'
 import { defaultVoiceDeps } from './livekit-types'
+import { resolveNoiseCancellation } from './noise-cancellation'
 import { createOutputToolCompletion, OutputToolCompletionError } from './output-tool-completion'
 import { startRecordingSession, type RecordingSession } from './recording'
 import { LiveKitVoiceSession } from './session'
@@ -266,7 +267,13 @@ function createEntryFunction<S extends StateSchema>(
     // Recording: start before LiveKit session so early tracks are captured
     let recorder: RecordingSession | undefined
     if (config.recording) {
-      recorder = await startRecordingSession(ctx.room, config.recording, sessionId, recordingKey)
+      recorder = await startRecordingSession(
+        ctx.room,
+        config.recording,
+        sessionId,
+        recordingKey,
+        deps.livekitServer,
+      )
     }
 
     let commitPromise: Promise<void> | undefined
@@ -1058,23 +1065,6 @@ function validateAgent<S extends StateSchema>(runnable: Runnable<S>): Agent<S> {
     )
   }
   return agent
-}
-
-type NoiseCancellationFactory = () => unknown
-interface NoiseCancellationModule {
-  BackgroundVoiceCancellation: NoiseCancellationFactory
-  TelephonyBackgroundVoiceCancellation: NoiseCancellationFactory
-}
-let _nc: NoiseCancellationModule
-function getNC(): NoiseCancellationModule {
-  return (_nc ??= require('@livekit/noise-cancellation-node') as NoiseCancellationModule)
-}
-
-function resolveNoiseCancellation(type: 'telephony' | 'general'): unknown {
-  const nc = getNC()
-  return type === 'telephony'
-    ? nc.TelephonyBackgroundVoiceCancellation()
-    : nc.BackgroundVoiceCancellation()
 }
 
 async function connectAndCreateSession(

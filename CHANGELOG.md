@@ -31,7 +31,38 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
-## [0.6.1] - Unreleased
+## [0.6.2] - Unreleased
+
+### Added
+
+- `LiveVoiceControls.untilQuiet()` waits for non-interruptible commentary to finish or reach its playout bound. Use it before a transfer that must follow a notice; it does not confirm the caller heard the notice.
+- GPT Live supports call recording through `recording` and `setup().recordingKey`, and caller noise cancellation through `sound.noiseCancellation`.
+- `app.replyTool` and `ReplyToolConfig` let a tool call serve as the agent's reply without forcing an exit.
+- `OpenAIModel.parallelToolCalls: false` disables parallel tool calls on the Responses API.
+- `LiveContentFilterError`, exported from `/voice`, reports moderation stops to GPT Live `onError` hooks after reconnection. It is recoverable and has no delegation.
+
+### Changed
+
+- Non-interruptible GPT Live commentary waits for quiet, not in-flight delegations or earlier commentary to start. Combine a notice and its preceding commentary into one line when their order matters.
+- GPT Live groups consecutive caller transcript fragments on each connection, up to the next delegation, into one user event in backend history and voice evals. `liveTranscript` retains raw fragments.
+- Voice eval evidence uses one run clock through `atMs`; simulated callers can delegate without failing the case.
+- `OpenAIRealtimeTextAdapter` uses the GA Realtime API and no longer sends `temperature`. Optional `ModelAdapter.endInvocation` releases resources when an invocation ends, including on a tool call.
+
+### Fixed
+
+- GPT Live reconnects reuse the in-flight backend result for the same caller turn, preventing duplicate tool actions. Interrupted result and error hooks are not replayed.
+- Moderation recovery starts a fresh connection without replaying the blocked conversation and drops commentary interrupted by the disconnect.
+- Pending non-interruptible commentary suppresses silence prompts, settles if delivery fails, and no longer delays caller hangup. Invalid noise-cancellation modules fail at call startup.
+- GPT Live error logs omit messages and stacks that could contain caller speech.
+- Voice eval recording uses the participants' own rooms to avoid missing audio tracks. Evidence preserves safe error fields, omits function-valued state properties, and identifies invalid JSON values by path.
+- Output coercion handles repeated union values independently instead of treating them as cycles. Output tools run even when omitted from the agent's `tools` list.
+- MCP installs process signal handlers only after an MCP server is added, leaving other hosts' shutdown handling untouched otherwise.
+
+### Migration from 0.6.1
+
+Custom implementations and mocks of `LiveVoiceControls` must implement `untilQuiet(): Promise<void>`. ADK-provided controls already implement it. Realtime consumers must use GA-compatible models and must not rely on `temperature` taking effect.
+
+## [0.6.1] - 2026-09-28
 
 Adds GPT Live, richer evaluations, self-hosted model adapters and Zod 4 support. Review the migration notes before upgrading from 0.6.0.
 

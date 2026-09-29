@@ -9,6 +9,7 @@ export type {
   ParallelConfig,
   LoopConfig,
   ToolConfig,
+  ReplyToolConfig,
   ContextNamespace,
   ToolsNamespace,
   MCPNamespace,

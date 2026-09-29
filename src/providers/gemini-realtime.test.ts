@@ -771,6 +771,21 @@ describe('GeminiRealtimeTextAdapter', () => {
   })
 
   describe('tool call handling', () => {
+    test('keeps the socket for tool results until the invocation ends', async () => {
+      responseScript = [
+        { toolCall: { functionCalls: [{ id: 'fn_end', name: 'end_call', args: {} }] } },
+        { serverContent: { turnComplete: true } },
+      ]
+      const adapter = new GeminiRealtimeTextAdapter('key', MockWS)
+      await collectStep(adapter, createMockCtx(), config)
+      const socket = lastMockWS!
+      expect(socket.readyState).toBe(1)
+      adapter.endInvocation('another-invocation')
+      expect(socket.readyState).toBe(1)
+      adapter.endInvocation('inv_test')
+      expect(socket.readyState).toBe(3)
+    })
+
     test('parses tool calls from toolCall message', async () => {
       responseScript = [
         {

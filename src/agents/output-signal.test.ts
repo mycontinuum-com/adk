@@ -152,6 +152,52 @@ describe('ctx.output() in tool execution', () => {
     ])
   })
 
+  test('a tool error that aborts the run answers the calls after it without running them', async () => {
+    const ran: string[] = []
+    const fail = app.tool({
+      name: 'fail',
+      description: 'Fails',
+      schema: z.object({}),
+      execute: () => {
+        throw new Error('broken')
+      },
+    })
+    const record = app.tool({
+      name: 'record',
+      description: 'Record something',
+      schema: z.object({}),
+      execute: () => {
+        ran.push('record')
+        return { recorded: true }
+      },
+    })
+
+    const { events } = await runTest(
+      testAgent({
+        tools: [fail, record],
+        errorHandlers: [{ handle: () => ({ action: 'abort' }) }],
+      }),
+      [
+        user('Go'),
+        model({
+          toolCalls: [
+            { name: 'fail', args: {} },
+            { name: 'record', args: {} },
+          ],
+        }),
+      ],
+    )
+
+    expect(ran).toEqual([])
+    const results = [...events]
+      .filter((e): e is ToolResultEvent => e.type === 'tool_result')
+      .map((e) => [e.name, e.error ?? e.result])
+    expect(results).toEqual([
+      ['fail', 'broken'],
+      ['record', 'Not run: fail ended the turn first.'],
+    ])
+  })
+
   test('ctx.output() with complex object value', async () => {
     const outputTool = app.tool({
       name: 'analyze',

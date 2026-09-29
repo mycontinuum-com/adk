@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { z } from 'zod'
 
 import type { AdkApp } from '../api/app'
 import type { ModelUsage } from '../types/events'
@@ -15,9 +16,12 @@ import type {
   LiveVoiceHook,
 } from './live-types'
 import type { VoiceDeps } from './livekit-types'
+import type { NoiseCancellationModule } from './noise-cancellation'
+import type { RecordingSession } from './recording'
 import type { VoiceHandlerHandle } from './types'
 
 import { summarizeModelUsage } from '../core/runner'
+import { safeErrorFields } from '../errors/safe-error'
 import {
   loadPricing,
   RESULT_PRICING_WAIT_MS,
@@ -35,6 +39,8 @@ import { createGPTLiveModel, renderLiveInstructions, requireGPTLive } from './li
 import { seedLiveState, applyLiveState } from './live-state'
 import { backendModelCalls, LiveVoiceMeter } from './live-usage'
 import { defaultVoiceDeps } from './livekit-types'
+import { loadNoiseCancellation, resolveNoiseCancellation } from './noise-cancellation'
+import { startRecordingSession } from './recording'
 import { terminateLiveKitCall } from './termination'
 
 export type LiveVoiceAppContext<S extends StateSchema> = {
@@ -52,15 +58,19 @@ interface LiveDeps {
   agents(): typeof import('@livekit/agents')
   openai(): { realtime: GPTLiveRealtime }
   livekitServer: VoiceDeps['livekitServer']
+  noiseCancellation?: () => NoiseCancellationModule
   clock?: () => number
   /** Agent quiet that ends a turn; tests shorten it. */
   lineSettleMs?: number
-  /** How long earlier commentary counts as still to be said; tests shorten it. */
-  commentaryStartMs?: number
 }
 
 type LiveKitAgents = ReturnType<LiveDeps['agents']>
 type VoiceSession = InstanceType<LiveKitAgents['voice']['AgentSession']>
+type RoomInputOptions = NonNullable<Parameters<VoiceSession['start']>[0]['inputOptions']>
+/** What a handler's `setup` gives for one call, if it has one. */
+type CallSetup<S extends StateSchema> =
+  | Awaited<ReturnType<NonNullable<LiveVoiceHandlerConfig<S>['setup']>>>
+  | undefined
 
 /** Handler configuration shared by every call the worker accepts. */
 interface LiveRuntime<S extends StateSchema, T> {
@@ -76,16 +86,61 @@ interface LiveRuntime<S extends StateSchema, T> {
   playoutTimeout: number
 }
 
+/**
+ * A backend run once it has settled: the output its connection's result hooks get, or the error its
+ * error hooks get. `delivery` is `answered` once that reached the connection it was given on, and
+ * `interrupted` when that connection was replaced while its result hooks ran.
+ */
+interface SettledRun<S extends StateSchema, T> {
+  readonly connectionId: string
+  /** Caller turns when its delegation was admitted. */
+  readonly callerTurns: number
+  readonly outcome:
+    | { readonly output: T; readonly backendSession: Session<S> }
+    | { readonly error: Error }
+  delivery: 'pending' | 'interrupted' | 'answered'
+}
+
+/** Thinking given to a reconnect's repeat of a caller turn whose result hooks were cut off. */
+const HANDLED_BEFORE_RECONNECT =
+  'The backend worked on this request before the voice connection was replaced, and its reply may not have reached the caller. Its actions are not repeated automatically: tell the caller the connection dropped and ask what they still need.'
+
 /** Longest wait for a line to be spoken before a muted caller is heard again or the call ends. */
 const PLAYOUT_TIMEOUT_MS = 30_000
 
 /**
- * How long ordinary commentary counts as still to be said. Across 587 stored commentary lines given
- * while GPT Live was quiet, speech started within 750 ms at p90 and 10.4 s at most, and 3 lines
- * were never spoken. Past this bound a line is not waited for, so an unspoken one delays the next
- * uninterruptible line by at most this long.
+ * GPT Live's moderation stopped a generation. The service closes the connection when it does; the
+ * reconnect starts without the conversation so far, whose replay would be stopped again. Given to
+ * `onError` hooks, recoverable and with no delegation, once the new connection has started. A line
+ * given with `allowInterruptions: false` and not yet said was lost with the connection: it is
+ * dropped, and the hook says what the call still needs.
  */
-const COMMENTARY_START_MS = 12_000
+export class LiveContentFilterError extends Error {
+  constructor() {
+    super('GPT Live stopped a generation for moderation')
+  }
+}
+
+const contentFilterEvent = z.object({
+  type: z.literal('error'),
+  error: z.object({ code: z.literal('content_filter') }),
+})
+
+/** What the connection after a moderation stop is told in place of the conversation. */
+const RESTARTED_AFTER_MODERATION =
+  'The connection restarted mid-call and the conversation so far is not shown. Do not greet the caller or start the conversation again: delegate what they say, and say what you are given.'
+
+/**
+ * Replaces the conversation the LiveKit plugin replays to its next connection with a note that the
+ * call is under way. The conversation is private to the plugin; a plugin that does not keep it as
+ * `history.items` replays it unchanged.
+ */
+function forgetConversation(live: GPTLiveSession): void {
+  const history: unknown = Reflect.get(live, 'history')
+  if (typeof history === 'object' && history !== null && 'items' in history)
+    Reflect.set(history, 'items', [])
+  live.appendInstructions(RESTARTED_AFTER_MODERATION, {})
+}
 
 const defaultDeps: LiveDeps = {
   agents: () => require('@livekit/agents'),
@@ -181,7 +236,13 @@ class LiveCall<S extends StateSchema, T> {
   private participantIdentity: string | undefined
   private context: LiveVoiceContext<S> | undefined
   private recorder: GPTLiveTranscript | undefined
+  /** Call audio (local file or LiveKit egress), when `recording` is configured. */
+  private audioRecording: RecordingSession | undefined
   private activeRun: { abort(): void } | undefined
+  /** Connections GPT Live's moderation closed; a line pending at one is dropped. */
+  private moderationStops = 0
+  /** The latest backend run, kept so a reconnect's repeat of its caller turn gets its outcome. */
+  private lastRun: SettledRun<S, T> | undefined
   private queue = Promise.resolve()
   private closing: Promise<void> | undefined
   private readonly seen = new Set<string>()
@@ -195,12 +256,11 @@ class LiveCall<S extends StateSchema, T> {
    * agent-requested end lets the last finish.
    */
   private uninterrupted: Promise<void> | undefined
-  /**
-   * The agent turn count and time when ordinary commentary was last given, until GPT Live starts a
-   * turn after it. That line is speech still to come, so an uninterruptible line waits for it, for
-   * at most `COMMENTARY_START_MS`.
-   */
-  private commentaryPending: { turns: number; at: number } | undefined
+  /** Resolves when the voice session closes, such as when the caller hangs up. */
+  private voiceClosed!: () => void
+  private readonly voiceClosing = new Promise<void>((resolve) => {
+    this.voiceClosed = resolve
+  })
   private readonly silence = createInactivityTimer({
     timeoutMs: () => this.runtime.config.timeouts?.inactivity,
     isActive: () => !this.stopped && this.context !== undefined,
@@ -280,8 +340,12 @@ class LiveCall<S extends StateSchema, T> {
   }
 
   private syncAgentActivity(): void {
+    // A line the muted caller is waiting to hear counts too, so no silence prompt fires before it.
     const active =
-      this.delegating > 0 || this.agentState === 'speaking' || this.agentState === 'thinking'
+      this.delegating > 0 ||
+      this.uninterrupted !== undefined ||
+      this.agentState === 'speaking' ||
+      this.agentState === 'thinking'
     if (active === this.agentActive) return
     this.agentActive = active
     if (active) this.silence.agentBecameActive()
@@ -321,8 +385,11 @@ class LiveCall<S extends StateSchema, T> {
             try {
               // react-doctor-disable-next-line react-doctor/async-await-in-loop -- lifecycle hooks run in registration order, one at a time
               if ((await hook[name]({ ...context, inactivityCount })) === false) keep = true
-            } catch {
-              this.log({ callId: context.callId }, `Live ${name} hook failed`)
+            } catch (error) {
+              this.log(
+                { callId: context.callId, ...safeErrorFields(error) },
+                `Live ${name} hook failed`,
+              )
             }
           }
         } finally {
@@ -339,10 +406,27 @@ class LiveCall<S extends StateSchema, T> {
         throw new Error('Expected GPT Live session')
       const live = duplexSession
       this.transcript.attach(live)
-      if (live.sessionId) this.meter.observeConnection(live.sessionId ?? undefined)
-      live.on('openai_server_event_received', (event) =>
-        this.meter.observeServerEvent(event, live.sessionId ?? undefined),
-      )
+      if (live.sessionId) this.meter.observeConnection(live.sessionId)
+      // Moderation closes the connection; its replacement then starts with nothing to flag, and
+      // the error hooks run once it has, so a line they give reaches a connection that can say it.
+      let contentFiltered = false
+      live.on('openai_server_event_received', (event) => {
+        this.meter.observeServerEvent(event, live.sessionId ?? undefined)
+        if (!contentFilterEvent.safeParse(event).success) return
+        contentFiltered = true
+        forgetConversation(live)
+      })
+      live.on('session_reconnected', () => {
+        if (!contentFiltered) return
+        contentFiltered = false
+        // Lines given to the closed connection were lost with it.
+        this.moderationStops++
+        this.activity.giveUp()
+        const context = liveContext(this, this.controls(live))
+        this.queue = this.queue.then(async () => {
+          if (!this.stopped) await this.reportError(new LiveContentFilterError(), context)
+        })
+      })
       const entered = liveContext(this, this.controls(live))
       this.context = entered
       if (!this.agentActive) this.silence.agentWentIdle()
@@ -361,16 +445,21 @@ class LiveCall<S extends StateSchema, T> {
     }
   }
 
-  private async start(): Promise<void> {
-    const { app, config, store } = this.runtime
-    await this.job.connect()
-    const participant = await this.job.waitForParticipant()
-    if (this.stopped) return
-    this.participantIdentity = participant.identity
-    const setup = await config.setup?.(participant)
-    if (this.stopped) return
-    if (setup?.recordingKey || setup?.noiseCancellation)
-      throw new Error('Live setup does not support recordingKey or noiseCancellation yet')
+  /** The caller's noise filter: the call setup's profile, else the handler's. */
+  private inputFilter(setup: CallSetup<S>): RoomInputOptions['noiseCancellation'] {
+    const noiseCancellation =
+      setup?.noiseCancellation ?? this.runtime.config.sound?.noiseCancellation
+    return noiseCancellation
+      ? resolveNoiseCancellation(
+          noiseCancellation,
+          (this.runtime.deps.noiseCancellation ?? loadNoiseCancellation)(),
+        )
+      : undefined
+  }
+
+  /** Creates, seeds and commits the call session. */
+  private async openCallSession(setup: CallSetup<S>): Promise<Session<S>> {
+    const { app } = this.runtime
     const callSession = await persist(() =>
       app.sessions.create({ sessionId: setup?.sessionId, scopes: setup?.scopes }),
     )
@@ -380,7 +469,43 @@ class LiveCall<S extends StateSchema, T> {
     if (setup?.initialState) seedState(callSession, setup.initialState, app.schema)
     this.callSession = callSession
     await this.commit(callSession)
+    return callSession
+  }
+
+  /**
+   * Starts the configured recording before the voice session, as the Realtime handler does, so
+   * early audio is kept. False when the call stopped meanwhile; the recording is then stopped.
+   */
+  private async startAudioRecording(
+    callSession: Session<S>,
+    setup: CallSetup<S>,
+  ): Promise<boolean> {
+    const { recording } = this.runtime.config
+    if (!recording) return true
+    this.audioRecording = await startRecordingSession(
+      this.job.room,
+      recording,
+      callSession.id,
+      setup?.recordingKey,
+      this.runtime.deps.livekitServer,
+    )
+    if (!this.stopped) return true
+    await this.audioRecording.stop()
+    return false
+  }
+
+  private async start(): Promise<void> {
+    const { config, store } = this.runtime
+    await this.job.connect()
+    const participant = await this.job.waitForParticipant()
     if (this.stopped) return
+    this.participantIdentity = participant.identity
+    const setup = await config.setup?.(participant)
+    if (this.stopped) return
+    const inputFilter = this.inputFilter(setup)
+    const callSession = await this.openCallSession(setup)
+    if (this.stopped) return
+    if (!(await this.startAudioRecording(callSession, setup))) return
     const recorder = await persist(() =>
       createGPTLiveTranscript(store, callSession.id, (error) => this.onTranscriptError(error)),
     )
@@ -405,7 +530,10 @@ class LiveCall<S extends StateSchema, T> {
     await this.voiceSession.start({
       agent,
       room: this.job.room,
-      inputOptions: { participantIdentity: this.participantIdentity },
+      inputOptions: {
+        participantIdentity: this.participantIdentity,
+        ...(inputFilter !== undefined && { noiseCancellation: inputFilter }),
+      },
     })
   }
 
@@ -424,16 +552,14 @@ class LiveCall<S extends StateSchema, T> {
       end: () => {
         if (usable()) this.requestEnd()
       },
+      untilQuiet: () => this.uninterrupted ?? Promise.resolve(),
       appendThinking: (text) => {
         if (usable()) live.appendThinking(text, { delegationId: delegation?.id })
       },
       appendCommentary: (text, options) => {
         if (!usable()) return
         if (options?.allowInterruptions === false) this.sayUninterrupted(live, text, delegation?.id)
-        else {
-          this.commentaryPending = { turns: this.activity.agentTurns, at: Date.now() }
-          live.appendCommentary(text, { delegationId: delegation?.id })
-        }
+        else live.appendCommentary(text, { delegationId: delegation?.id })
       },
       appendInstructions: (text) => {
         if (usable()) live.appendInstructions(text, { delegationId: delegation?.id })
@@ -443,21 +569,25 @@ class LiveCall<S extends StateSchema, T> {
 
   /**
    * Says a line the caller cannot talk over, from AgentSession states alone. Caller audio is
-   * silenced at once, so nothing new can start a turn. The line is given once GPT Live is quiet, no
-   * delegation is in flight and any ordinary commentary given before it has started a turn, so an
-   * earlier line's turn is not taken for this one. It counts as said when GPT Live's next speaking
-   * turn has started and ended. Lines go one at a time, so one turn never counts for two. Each wait
-   * is bounded by the playout timeout; caller audio returns when the last line has settled.
+   * silenced at once, so nothing new can start a turn. The line is given once GPT Live is quiet,
+   * and counts as said when GPT Live's next speaking turn has started and ended. Lines go one at a
+   * time, so one turn never counts for two. Each wait is bounded by the playout timeout; caller
+   * audio returns when the last line has settled.
    */
   private sayUninterrupted(live: GPTLiveSession, text: string, delegationId?: string): void {
     const previous = this.uninterrupted
     if (!previous) live.muteInput()
-    const line = this.giveUninterrupted(live, text, delegationId, previous)
+    // A line GPT Live could not be given is logged and settles, so waits on it and close go on.
+    const line = this.giveUninterrupted(live, text, delegationId, previous).catch((error) =>
+      this.log({ callId: this.context?.callId, ...safeErrorFields(error) }, 'Live line_failed'),
+    )
     this.uninterrupted = line
+    this.syncAgentActivity()
     void line.finally(() => {
       if (this.uninterrupted !== line) return
       this.uninterrupted = undefined
       live.unmuteInput()
+      this.syncAgentActivity()
     })
   }
 
@@ -469,11 +599,15 @@ class LiveCall<S extends StateSchema, T> {
     previous: Promise<void> | undefined,
   ): Promise<void> {
     const { playoutTimeout } = this.runtime
+    const stops = this.moderationStops
+    const lost = () => {
+      if (this.moderationStops === stops) return false
+      this.log({ callId: this.context?.callId }, 'Live line_lost_to_moderation')
+      return true
+    }
     await previous
-    const quiet = await this.activity.whenQuietAnd(
-      () => this.delegating === 0 && !this.commentaryStillToCome(),
-      playoutTimeout,
-    )
+    const quiet = await this.activity.whenQuietAnd(() => true, playoutTimeout)
+    if (lost()) return
     if (!quiet) this.log({ callId: this.context?.callId }, 'Live line_given_while_busy')
     const turns = this.activity.agentTurns
     live.appendCommentary(text, { delegationId })
@@ -481,23 +615,8 @@ class LiveCall<S extends StateSchema, T> {
       () => this.activity.agentTurns > turns,
       playoutTimeout,
     )
+    if (lost()) return
     if (!said) this.log({ callId: this.context?.callId }, 'Live line_unconfirmed')
-  }
-
-  /**
-   * True while ordinary commentary given earlier has not yet started an agent turn, for at most
-   * `COMMENTARY_START_MS`: a line GPT Live never speaks does not hold the next one.
-   */
-  private commentaryStillToCome(): boolean {
-    const pending = this.commentaryPending
-    if (pending === undefined) return false
-    if (
-      this.activity.agentTurns <= pending.turns &&
-      Date.now() - pending.at < (this.runtime.deps.commentaryStartMs ?? COMMENTARY_START_MS)
-    )
-      return true
-    this.commentaryPending = undefined
-    return false
   }
 
   /** Freezes the transcript snapshot synchronously, then queues the delegation. */
@@ -508,6 +627,7 @@ class LiveCall<S extends StateSchema, T> {
     if (this.seen.has(key)) return
     this.seen.add(key)
     const snapshot = this.transcript.snapshot()
+    const callerTurns = this.activity.callerTurns
     const delegation: LiveVoiceDelegation = {
       id: delegationId,
       connectionId,
@@ -518,7 +638,7 @@ class LiveCall<S extends StateSchema, T> {
     this.delegating++
     this.syncAgentActivity()
     this.queue = this.queue
-      .then(() => this.execute(live, delegation, snapshot, voice))
+      .then(() => this.execute(live, delegation, snapshot, voice, callerTurns))
       .catch((error) => this.onDelegationError(error, delegation, voice))
       .finally(() => {
         active = false
@@ -527,14 +647,35 @@ class LiveCall<S extends StateSchema, T> {
       })
   }
 
+  /**
+   * Runs the backend for a delegation and gives its outcome to the delegation's result or error
+   * hooks. A delegation on a new connection with no caller turn since the last run's delegation,
+   * whose connection was replaced before that run's outcome reached it, is the provider asking
+   * again for the same caller turn: it gets that run's outcome, and the backend does not run
+   * again.
+   */
   private async execute(
     live: GPTLiveSession,
     delegation: LiveVoiceDelegation,
     snapshot: GPTLiveTranscriptSnapshot,
     voice: LiveVoiceControls,
+    callerTurns: number,
   ): Promise<void> {
-    const { app, config, sessionService, timeout, hooks } = this.runtime
+    const { app, config, sessionService, timeout } = this.runtime
     if (this.stopped || live.sessionId !== delegation.connectionId) return
+    const earlier = this.lastRun
+    if (
+      earlier &&
+      earlier.delivery !== 'answered' &&
+      earlier.callerTurns === callerTurns &&
+      earlier.connectionId !== delegation.connectionId
+    ) {
+      if (earlier.delivery === 'pending') return this.deliver(live, delegation, voice, earlier)
+      // Its result hooks may already have acted, so they are not run again.
+      live.appendThinking(HANDLED_BEFORE_RECONNECT, { delegationId: delegation.id })
+      return
+    }
+    this.lastRun = undefined
     await persist(() => this.transcript.checkpoint())
     if (this.stopped) return
     const session = await persist(() => app.sessions.create({ scopes: this.session.scopes }))
@@ -562,22 +703,56 @@ class LiveCall<S extends StateSchema, T> {
       // A call finalized without this work keeps its ledger closed.
       if (!this.abandoned) await this.transferBackendWork(delegation, snapshot, session, workStart)
     }
+    const settled: SettledRun<S, T> = {
+      connectionId: delegation.connectionId,
+      callerTurns,
+      delivery: 'pending',
+      outcome:
+        result.status !== 'completed'
+          ? { error: new Error(`Live backend ended with ${result.status}`) }
+          : result.output.value === undefined
+            ? { error: new Error('Live backend completed without an output value') }
+            : { output: result.output.value, backendSession: session },
+    }
+    this.lastRun = settled
+    await this.deliver(live, delegation, voice, settled)
+  }
+
+  /**
+   * Gives a settled run's outcome to this delegation's hooks, unless its connection was replaced;
+   * the run then stays pending for the provider's next delegation of the same caller turn. Result
+   * and error hooks run at most once per run: a connection replaced while they run leaves it
+   * `interrupted`.
+   */
+  private async deliver(
+    live: GPTLiveSession,
+    delegation: LiveVoiceDelegation,
+    voice: LiveVoiceControls,
+    run: SettledRun<S, T>,
+  ): Promise<void> {
     if (this.stopped || live.sessionId !== delegation.connectionId) return
-    if (result.status !== 'completed') throw new Error(`Live backend ended with ${result.status}`)
-    if (result.output.value === undefined)
-      throw new Error('Live backend completed without an output value')
+    const { outcome } = run
+    run.delivery = 'interrupted'
     try {
-      for (const hook of hooks) {
-        // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onResult hooks run in registration order, one at a time
-        await hook.onResult?.({
-          ...liveContext(this, voice),
-          delegation,
-          backendSession: session,
-          output: result.output.value,
-        })
+      if ('error' in outcome) throw outcome.error
+      try {
+        for (const hook of this.runtime.hooks) {
+          // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onResult hooks run in registration order, one at a time
+          await hook.onResult?.({
+            ...liveContext(this, voice),
+            delegation,
+            backendSession: outcome.backendSession,
+            output: outcome.output,
+          })
+        }
+      } finally {
+        await this.commitQueued(this.session)
       }
+    } catch (error) {
+      // Handled here, so the run counts as answered only once its error hooks have run too.
+      await this.onDelegationError(error, delegation, voice)
     } finally {
-      await this.commitQueued(this.session)
+      if (live.sessionId === delegation.connectionId) run.delivery = 'answered'
     }
   }
 
@@ -640,7 +815,7 @@ class LiveCall<S extends StateSchema, T> {
   ): Promise<void> {
     if (this.abandoned) {
       this.log(
-        { callId: this.callId, delegationId: delegation.id },
+        { callId: this.callId, delegationId: delegation.id, ...safeErrorFields(error) },
         'Late Live backend work failed',
       )
       return
@@ -659,6 +834,7 @@ class LiveCall<S extends StateSchema, T> {
   }
 
   private onSessionClose(reason: string, error: unknown): void {
+    this.voiceClosed()
     if (error) {
       this.requestEnd('error')
       return
@@ -702,8 +878,11 @@ class LiveCall<S extends StateSchema, T> {
   }
 
   private closeInBackground(): void {
-    void this.close().catch(() =>
-      this.log({ callId: this.context?.callId }, 'Live call cleanup failed'),
+    void this.close().catch((error) =>
+      this.log(
+        { callId: this.context?.callId, ...safeErrorFields(error) },
+        'Live call cleanup failed',
+      ),
     )
   }
 
@@ -713,7 +892,9 @@ class LiveCall<S extends StateSchema, T> {
 
   private async finalize(): Promise<void> {
     this.stop()
-    if (this.endRequested && this.endReason !== 'error') await this.uninterrupted
+    // A line nobody is left to hear is not waited for.
+    if (this.endRequested && this.endReason !== 'error')
+      await Promise.race([this.uninterrupted, this.voiceClosing])
     const backendSettled = await settlesWithin(this.queue, this.runtime.timeout)
     if (!backendSettled) {
       this.abandoned = true
@@ -755,8 +936,11 @@ class LiveCall<S extends StateSchema, T> {
     if (backendSettled) return this.session
     try {
       return await this.reloadCall()
-    } catch {
-      this.log({ callId: context.callId }, 'Live call session could not be reloaded at close')
+    } catch (error) {
+      this.log(
+        { callId: context.callId, ...safeErrorFields(error) },
+        'Live call session could not be reloaded at close',
+      )
       return this.session
     }
   }
@@ -768,6 +952,8 @@ class LiveCall<S extends StateSchema, T> {
     } finally {
       this.meter.stop()
       try {
+        // Stops egress; a stop that fails is ignored, as the call is already over.
+        await this.audioRecording?.stop()
         await this.recorder?.close()
       } finally {
         if (ledger) {
@@ -819,7 +1005,12 @@ class LiveCall<S extends StateSchema, T> {
     const recoverable = !(error instanceof LivePersistenceError) && !this.stopped
     if (!recoverable) this.stop()
     this.log(
-      { callId: errorContext.callId, delegationId: errorContext.delegation?.id, recoverable },
+      {
+        callId: errorContext.callId,
+        delegationId: errorContext.delegation?.id,
+        recoverable,
+        ...safeErrorFields(error),
+      },
       'Live backend or persistence failed',
     )
     try {
@@ -833,8 +1024,11 @@ class LiveCall<S extends StateSchema, T> {
       }
       if (recoverable) await this.commitQueued(errorContext.session)
       if (!recoverable || !handled || terminate) this.requestEnd('error')
-    } catch {
-      this.log({ callId: errorContext.callId }, 'Live error recovery failed')
+    } catch (recoveryError) {
+      this.log(
+        { callId: errorContext.callId, ...safeErrorFields(recoveryError) },
+        'Live error recovery failed',
+      )
       this.requestEnd('error')
     }
   }

@@ -38,6 +38,10 @@ export function createMCPManager<S extends StateSchema>(): MCPManager<S> {
       if (existing) return existing
       const s = createMCPServer<S>(config)
       map.set(config.name, s)
+      // Only an app with a server has anything to disconnect at exit, so an app without one leaves
+      // the process's signal handling to its host, such as a LiveKit worker that drains calls.
+      disconnectFns.add(manager.disconnect)
+      registerProcessCleanup()
       return s
     },
     servers: () => [...map.values()],
@@ -91,9 +95,6 @@ export function createMCPManager<S extends StateSchema>(): MCPManager<S> {
       return allTools
     },
   }
-
-  disconnectFns.add(manager.disconnect)
-  registerProcessCleanup()
 
   return manager
 }

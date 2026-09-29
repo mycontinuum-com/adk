@@ -21,7 +21,10 @@ vi.mock('../../voice/livekit-model', () => ({ createLiveKitModel: () => ({}) }))
 vi.mock('../../voice/livekit-agent', () => ({ createLiveKitAgent: () => new SDKAgent() }))
 class LiveSession extends EventEmitter {
   sessionId = 'connection'
-  appendThinking() {}
+  thinking: Array<{ text: string; delegationId?: string }> = []
+  appendThinking(text: string, options: { delegationId?: string }) {
+    this.thinking.push({ text, delegationId: options.delegationId })
+  }
   appendInstructions() {}
   appendCommentary(text: string) {
     this.emit('openai_server_event_received', {
@@ -141,6 +144,7 @@ async function fixture() {
         return
       }
       room.emit('activeSpeakersChanged', [{ identity: 'voice-eval-agent' }])
+      this.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
       started.duplexSession.emit('openai_server_event_received', {
         type: 'session.input_transcript.delta',
         event_id: 'input',
@@ -148,6 +152,7 @@ async function fixture() {
         start_ms: 0,
         end_ms: 800,
       })
+      this.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
       await new Promise((resolve) => setTimeout(resolve, 2))
       started.duplexSession.emit('delegation_created', { id: 'delegation' })
     }
@@ -189,6 +194,7 @@ async function fixture() {
           Close: 'close',
           MetricsCollected: 'metrics_collected',
           UserInputTranscribed: 'user_input_transcribed',
+          UserStateChanged: 'user_state_changed',
         },
       },
       defineAgent: () => {},
@@ -236,6 +242,11 @@ async function fixture() {
   const result = vi.fn<(ctx: LiveVoiceResultContext<any, string>) => void>((ctx) => {
     ctx.voice.appendCommentary(ctx.output)
   })
+  const lines: string[] = []
+  const writer = {
+    appendLine: (text: string) => lines.push(text),
+    writeResult: () => {},
+  }
   const run = (extra = {}) =>
     runLiveVoiceCase(
       {
@@ -250,11 +261,12 @@ async function fixture() {
       },
       { room: { url: 'wss://test' } },
       { app, store, sessionService: sessionService(store) },
-      undefined,
+      writer,
       undefined,
       deps,
     )
   return {
+    lines,
     app,
     agent,
     backend,
@@ -749,7 +761,7 @@ test('simulates the caller on GPT Live from its instructions alone', async () =>
   }
 })
 
-test('fails the run when the GPT Live caller delegates', async () => {
+test("answers the GPT Live caller's own delegation and scores the run", async () => {
   const f = await fixture()
   try {
     f.callerDelegates()
@@ -760,10 +772,16 @@ test('fails the run when the GPT Live caller delegates', async () => {
         context: [f.app.context.system('Ask for the opening hours.')],
       }),
     })
-    expect(run.status).toBe('error')
-    expect(run.error?.message).toBe(
-      'The GPT Live caller delegated, but a simulated caller has no backend',
-    )
+    expect(run.error).toBeUndefined()
+    expect(run.status).toBe('completed')
+    expect(f.result).toHaveBeenCalledOnce()
+    expect(f.rooms[1]!.started!.duplexSession.thinking).toEqual([
+      {
+        text: 'Nothing was looked up: there is no one else on this call to ask, and you are the caller.',
+        delegationId: 'caller',
+      },
+    ])
+    expect(f.lines).toContain('The simulated caller delegated (caller); answered with no lookup.')
     expect(f.deleteRoom).toHaveBeenCalledOnce()
   } finally {
     await f.app.close()

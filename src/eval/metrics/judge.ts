@@ -57,7 +57,7 @@ Rules:
 - The conversation may be in any language, or in several. Judge each requirement by its meaning in the language used. Never require English.
 - Quoted text in a requirement is a reference for meaning, unless the requirement says word for word.
 - In voice calls, \`said\` is speech recognition output. It may misspell names, split sentences or repeat fragments.
-- In voice calls, speech \`fromMs\` and \`toMs\` are audio offsets, and \`atMs\` on tool entries and in \`callerHeard\` is time from the start of the run. The two clocks differ, so use timeline order, not times, to decide whether speech came before or after tool use.
+- In voice calls, every \`atMs\` (speech, tool entries and \`callerHeard\`) is time from the start of the run, on one clock. The timeline is in that order: an entry listed after another came after it.
 - Judge a requirement about what the caller heard from \`callerHeard\` only.
 - Fail a requirement when the evidence is missing or ambiguous, and say what is missing.
 - Judge each requirement on its own.

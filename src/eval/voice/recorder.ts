@@ -1,10 +1,3 @@
-import type {
-  Room,
-  RemoteTrack,
-  RemoteTrackPublication,
-  RemoteParticipant,
-} from '@livekit/rtc-node' with { 'resolution-mode': 'import' }
-
 import { mkdirSync, createWriteStream } from 'node:fs'
 import { join } from 'node:path'
 
@@ -17,33 +10,61 @@ export interface RecordingHandle {
   stop(): Promise<string>
 }
 
-export interface RecorderHandle extends RecordingHandle {
-  disconnect(): Promise<void>
+interface RecordedParticipant {
+  readonly identity: string
 }
 
-export interface RecorderConfig {
-  roomUrl: string
-  token: string
+interface RecordedPublication<Track> {
+  readonly sid?: string
+  /** Audio is `1` or `'AUDIO'`, on the publication or its track. */
+  readonly kind?: unknown
+  readonly track?: Track
+}
+
+type TrackSubscribed<Track> = (
+  track: Track,
+  publication: RecordedPublication<Track>,
+  participant: RecordedParticipant,
+) => void
+type ActiveSpeakersChanged = (speakers: RecordedParticipant[]) => void
+
+/** What the recorder reads of a room; a connected `@livekit/rtc-node` `Room` is one. */
+export interface RecordingRoom<Track> {
+  on(event: 'trackSubscribed', listener: TrackSubscribed<Track>): unknown
+  on(event: 'activeSpeakersChanged', listener: ActiveSpeakersChanged): unknown
+  off(event: 'trackSubscribed', listener: TrackSubscribed<Track>): unknown
+  off(event: 'activeSpeakersChanged', listener: ActiveSpeakersChanged): unknown
+  readonly remoteParticipants: ReadonlyMap<
+    string,
+    RecordedParticipant & {
+      readonly trackPublications: ReadonlyMap<string, RecordedPublication<Track>>
+    }
+  >
+}
+
+/** The audio reader the recorder uses: `@livekit/rtc-node`'s `AudioStream`. */
+export interface RecordingSdk<Track> {
+  AudioStream: new (
+    track: Track,
+    sampleRate: number,
+    numChannels: number,
+  ) => ReadableStream<{ readonly data: Int16Array }>
+}
+interface RecordingConfig {
   agentIdentity: string
   userIdentity: string
   recordingDir: string
   caseName: string
 }
 
-type RecordingRoom = Pick<Room, 'on' | 'off' | 'remoteParticipants'>
-type RecordingConfig = Pick<
-  RecorderConfig,
-  'agentIdentity' | 'userIdentity' | 'recordingDir' | 'caseName'
->
-type RecorderSDK = Pick<
-  typeof import('@livekit/rtc-node', { with: { 'resolution-mode': 'import' } }),
-  'Room' | 'AudioStream'
->
-
-/** Record remote audio already subscribed by these rooms; their owner controls connection lifetime. */
-export function recordRooms(
-  config: RecordingConfig & { rooms: readonly RecordingRoom[] },
-  sdk: Pick<RecorderSDK, 'AudioStream'>,
+/**
+ * Records remote audio already subscribed by these rooms; their owner controls connection lifetime.
+ * Pass the call's own participant rooms: a separate subscribe-only participant is not reliably
+ * subscribed (on rtc-node 0.13.34 LiveKit left about a third of such recorders with no tracks).
+ */
+export function recordRooms<Track extends { readonly sid?: string }>(
+  config: RecordingConfig & { rooms: readonly RecordingRoom<Track>[] },
+  sdk: RecordingSdk<Track>,
 ): RecordingHandle {
   mkdirSync(config.recordingDir, { recursive: true })
   const tracker = createSpeakerTracker(config.agentIdentity, config.userIdentity)
@@ -53,13 +74,9 @@ export function recordRooms(
   const trackPaths: string[] = []
   const trackStreams: ReturnType<typeof createWriteStream>[] = []
   const cleanups: Array<() => void | Promise<void>> = []
-  const captured = new Set<string | RemoteTrack>()
+  const captured = new Set<string | Track>()
 
-  const subscribe = (
-    track: RemoteTrack,
-    publication: RemoteTrackPublication,
-    participant: RemoteParticipant,
-  ) => {
+  const subscribe: TrackSubscribed<Track> = (track, publication, participant) => {
     if (!active || !isAudioPub(publication)) return
     const identity = participant.identity
     if (identity !== config.agentIdentity && identity !== config.userIdentity) return
@@ -102,7 +119,7 @@ export function recordRooms(
     }
   }
   const timingRoom = config.rooms[0]
-  const speakers = (participants: Array<{ identity: string }>) => {
+  const speakers: ActiveSpeakersChanged = (participants) => {
     tracker.onActiveSpeakersChanged(participants.map((participant) => participant.identity))
   }
   timingRoom?.on('activeSpeakersChanged', speakers)
@@ -131,19 +148,4 @@ export function recordRooms(
       })())
     },
   }
-}
-
-/**
- * Joins `config.roomUrl` as a separate participant and records the room's remote audio.
- *
- * @returns The recording handle plus `disconnect()`, which leaves the room.
- */
-export async function connectRecorder(
-  config: RecorderConfig,
-  sdk: RecorderSDK,
-): Promise<RecorderHandle> {
-  const room = new sdk.Room()
-  await room.connect(config.roomUrl, config.token, { autoSubscribe: true, dynacast: false })
-  const recording = recordRooms({ ...config, rooms: [room] }, sdk)
-  return { ...recording, disconnect: () => room.disconnect() }
 }

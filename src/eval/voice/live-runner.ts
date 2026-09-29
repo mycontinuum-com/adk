@@ -316,11 +316,9 @@ class LiveVoiceCaseRun<S extends StateSchema> {
       agent: evalCase.userAgent,
       session: this.session,
       meter: this.callerMeter,
-      onDelegation: () =>
-        this.finish(
-          'error',
-          new Error('The GPT Live caller delegated, but a simulated caller has no backend'),
-        ),
+      // Answered by the caller itself; the run goes on and is scored, and the report says so.
+      onDelegation: (id) =>
+        writer?.appendLine(`The simulated caller delegated (${id}); answered with no lookup.`),
     })
     if (this.stopping) return
     writer?.appendLine('Starting caller and Live handler.')

@@ -59,15 +59,15 @@ class MockWebSocket extends EventEmitter {
 
 const MockWS = MockWebSocket as unknown as WSConstructor
 
-/** The subset of the OpenAI Realtime wire protocol the adapter sends and these tests inspect. */
+/** The subset of the OpenAI Realtime GA wire protocol the adapter sends and these tests inspect. */
 interface SentMessage {
   type: string
   session?: {
-    modalities: string[]
-    turn_detection: null
+    type: 'realtime'
+    output_modalities: string[]
+    audio: { input: { turn_detection: null }; output?: { voice: string } }
     instructions?: string
-    temperature?: number
-    max_response_output_tokens?: number
+    max_output_tokens?: number
     tools: {
       type: string
       name: string
@@ -155,10 +155,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
       await collectStep(adapter, createMockCtx(), config)
 
       expect(currentWS().url).toBe('wss://api.openai.com/v1/realtime?model=gpt-4o-realtime')
-      expect(currentWS().opts?.headers).toEqual({
-        Authorization: 'Bearer test-api-key',
-        'OpenAI-Beta': 'realtime=v1',
-      })
+      expect(currentWS().opts?.headers).toEqual({ Authorization: 'Bearer test-api-key' })
     })
 
     test('URL-encodes model names', async () => {
@@ -173,19 +170,26 @@ describe('OpenAIRealtimeTextAdapter', () => {
       expect(currentWS().url).toContain('model=gpt-4o%20realtime%2Fpreview')
     })
 
-    test('sends session.update with text modality and null turn detection', async () => {
+    test('sends the GA session.update: realtime type, text output and no turn detection', async () => {
       responseScript = [{ type: 'response.done', response: { usage: {} } }]
 
       const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
       await collectStep(adapter, createMockCtx(), config)
 
       const sessionUpdate = findSessionUpdate()
-      expect(sessionUpdate.session.modalities).toEqual(['text'])
-      expect(sessionUpdate.session.turn_detection).toBeNull()
-      expect(sessionUpdate.session.instructions).toBe('You are a helpful assistant.')
+      expect(sessionUpdate).toEqual({
+        type: 'session.update',
+        session: {
+          type: 'realtime',
+          output_modalities: ['text'],
+          instructions: 'You are a helpful assistant.',
+          tools: [],
+          audio: { input: { turn_detection: null } },
+        },
+      })
     })
 
-    test('passes temperature and maxTokens from model config', async () => {
+    test('sends maxTokens as max_output_tokens and never sends temperature', async () => {
       responseScript = [{ type: 'response.done', response: { usage: {} } }]
 
       const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
@@ -196,19 +200,45 @@ describe('OpenAIRealtimeTextAdapter', () => {
       })
 
       const sessionUpdate = findSessionUpdate()
-      expect(sessionUpdate.session.temperature).toBe(0.7)
-      expect(sessionUpdate.session.max_response_output_tokens).toBe(500)
+      expect(sessionUpdate.session.max_output_tokens).toBe(500)
+      expect(Object.keys(sessionUpdate.session).sort()).toEqual([
+        'audio',
+        'instructions',
+        'max_output_tokens',
+        'output_modalities',
+        'tools',
+        'type',
+      ])
     })
 
-    test('omits temperature and maxTokens when not set', async () => {
+    test('puts a realtime voice under audio.output', async () => {
       responseScript = [{ type: 'response.done', response: { usage: {} } }]
 
       const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
-      await collectStep(adapter, createMockCtx(), config)
+      await collectStep(
+        adapter,
+        createMockCtx({
+          agent: {
+            name: 'test-agent',
+            kind: 'agent',
+            model: {
+              realtime: true,
+              name: 'gpt-realtime',
+              model: { provider: 'openai', name: 'gpt-realtime' },
+              voice: 'marin',
+            },
+            context: [],
+            tools: [],
+          } satisfies Agent,
+        }),
+        config,
+      )
 
       const sessionUpdate = findSessionUpdate()
-      expect(sessionUpdate.session.temperature).toBeUndefined()
-      expect(sessionUpdate.session.max_response_output_tokens).toBeUndefined()
+      expect(sessionUpdate.session.audio).toEqual({
+        input: { turn_detection: null },
+        output: { voice: 'marin' },
+      })
     })
   })
 
@@ -266,7 +296,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
       expect(items[1]).toEqual({
         type: 'message',
         role: 'assistant',
-        content: [{ type: 'text', text: 'Hi there!' }],
+        content: [{ type: 'output_text', text: 'Hi there!' }],
       })
       expect(items[2]).toEqual({
         type: 'message',
@@ -383,8 +413,8 @@ describe('OpenAIRealtimeTextAdapter', () => {
   describe('text response streaming', () => {
     test('yields assistant_delta events and returns accumulated text', async () => {
       responseScript = [
-        { type: 'response.text.delta', delta: 'Hello' },
-        { type: 'response.text.delta', delta: ' world' },
+        { type: 'response.output_text.delta', delta: 'Hello' },
+        { type: 'response.output_text.delta', delta: ' world' },
         {
           type: 'response.done',
           response: {
@@ -508,6 +538,27 @@ describe('OpenAIRealtimeTextAdapter', () => {
   })
 
   describe('tool call handling', () => {
+    test('keeps the socket for tool results until the invocation ends', async () => {
+      responseScript = [
+        {
+          type: 'response.output_item.added',
+          item: { id: 'item_1', type: 'function_call', call_id: 'call_end', name: 'end_call' },
+        },
+        { type: 'response.function_call_arguments.done', item_id: 'item_1', arguments: '{}' },
+        { type: 'response.done', response: { usage: {} } },
+      ]
+      const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
+      await collectStep(adapter, createMockCtx(), config)
+      const socket = currentWS()
+      expect(socket.readyState).toBe(1)
+      adapter.endInvocation('another-invocation')
+      expect(socket.readyState).toBe(1)
+      adapter.endInvocation('inv_test')
+      expect(socket.readyState).toBe(3)
+      adapter.endInvocation('inv_test')
+      expect(socket.readyState).toBe(3)
+    })
+
     test('parses tool calls from function_call events', async () => {
       responseScript = [
         {
@@ -630,7 +681,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
 
     test('handles mixed text and tool calls', async () => {
       responseScript = [
-        { type: 'response.text.delta', delta: 'Let me check...' },
+        { type: 'response.output_text.delta', delta: 'Let me check...' },
         {
           type: 'response.output_item.added',
           item: {
@@ -745,7 +796,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
   describe('abort handling', () => {
     test('closes WebSocket on abort during response processing', async () => {
       // Script with one delta but no response.done — adapter will wait for more events
-      responseScript = [{ type: 'response.text.delta', delta: 'Hello' }]
+      responseScript = [{ type: 'response.output_text.delta', delta: 'Hello' }]
 
       const controller = new AbortController()
       const adapter = new OpenAIRealtimeTextAdapter('key', MockWS)
@@ -770,7 +821,7 @@ describe('OpenAIRealtimeTextAdapter', () => {
   describe('invocation context', () => {
     test('assistant events include correct invocationId and agentName', async () => {
       responseScript = [
-        { type: 'response.text.delta', delta: 'Hi' },
+        { type: 'response.output_text.delta', delta: 'Hi' },
         { type: 'response.done', response: { usage: {} } },
       ]
 

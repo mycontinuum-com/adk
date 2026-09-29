@@ -51,4 +51,21 @@ describe('default LiveKit dependencies', () => {
     expect(openAIModel.llm).toBeInstanceOf(openai.realtime.RealtimeModel)
     expect(googleModel.llm).toBeInstanceOf(google.beta.realtime.RealtimeModel)
   })
+
+  test('keep the GPT Live conversation a reconnect replays where a moderation stop empties it', async () => {
+    const agents = defaultVoiceDeps.agents()
+    agents.initializeLogger({ pretty: false, level: 'silent' })
+    const { GPTLiveModel } = defaultVoiceDeps.openai().realtime
+    const session = new GPTLiveModel({
+      apiKey: 'test-key',
+      baseURL: 'http://127.0.0.1:9/v1',
+      connOptions: { maxRetry: 0, timeoutMs: 100, retryIntervalMs: 0 },
+    }).session()
+    try {
+      // live-handler.ts `forgetConversation` relies on this private field.
+      expect(Reflect.get(Reflect.get(session, 'history'), 'items')).toEqual([])
+    } finally {
+      await (session as unknown as { closeConnection(): Promise<void> }).closeConnection()
+    }
+  })
 })

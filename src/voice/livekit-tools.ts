@@ -24,6 +24,7 @@ import {
   isRunnable,
   safeParseToolArgs,
 } from '../core/tools'
+import { safeErrorFields } from '../errors/safe-error'
 import { zodToToolSchema } from '../providers/zodToJsonSchema'
 import { createCallId } from '../session'
 import { renderToolRequiredInstructions } from './forced-tool-gate'
@@ -515,7 +516,7 @@ async function appendEvents(bridgeCtx: ToolBridgeContext, events: Event[]): Prom
       // react-doctor-disable-next-line react-doctor/async-await-in-loop -- tool events are appended to the session in order
       await bridgeCtx.sessionService.appendEvent(bridgeCtx.session, event)
     } catch (err) {
-      console.error('[adk/voice] Failed to append event:', err)
+      console.error('[adk/voice] Failed to append event:', safeErrorFields(err))
     }
     bridgeCtx.hook?.onEvent?.(event)
   }

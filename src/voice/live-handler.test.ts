@@ -12,6 +12,7 @@ import type {
   LiveVoiceContext,
   LiveVoiceHook,
 } from './live-types'
+import type { NoiseCancellationType, RecordingConfig } from './types'
 
 import { adk } from '../api'
 import { openai } from '../providers/models'
@@ -21,7 +22,7 @@ import { InMemoryStore } from '../session/memory'
 import { sessionService } from '../session/service'
 import { useTestPricing } from '../test-support/pricing-registry'
 import { UsageReportingAdapter } from '../test-support/usage-adapter'
-import { createLiveVoiceHandler } from './live-handler'
+import { createLiveVoiceHandler, LiveContentFilterError } from './live-handler'
 
 const cleanup: Array<() => Promise<unknown> | void> = []
 afterEach(async () => {
@@ -96,6 +97,10 @@ async function fixture(
   options: {
     gates?: Record<string, ReturnType<typeof gate>>
     failResult?: boolean | 'once'
+    /** The result hook's error message. */
+    failMessage?: string
+    /** The error hook waits for this before it decides. */
+    errorGate?: ReturnType<typeof gate>
     errorAction?: 'continue' | 'end'
     omitResult?: boolean
     invalidContext?: boolean
@@ -119,6 +124,14 @@ async function fixture(
     speakingAgent?: boolean
     timeouts?: { inactivity?: number; expiry?: number }
     lifecycle?: Pick<LiveVoiceHook, 'onInactivity' | 'onExpiry'>
+    recording?: RecordingConfig
+    sound?: { noiseCancellation?: NoiseCancellationType }
+    /** Per-call recording and noise settings returned by `setup`. */
+    callSetup?: { recordingKey?: string; noiseCancellation?: NoiseCancellationType }
+    /** The egress client's stopEgress rejects. */
+    failEgressStop?: boolean
+    /** The egress client's startRoomCompositeEgress rejects with this error. */
+    failEgressStart?: Error
   } = {},
 ) {
   const store = new InMemoryStore()
@@ -200,6 +213,11 @@ async function fixture(
   const renderStarted = vi.fn<() => void>()
   const entryErrors: unknown[] = []
   const shutdowns: Array<() => Promise<void>> = []
+  /** Start of the egress and of the voice session, and egress stops, in order. */
+  const order: string[] = []
+  const startOptions: Array<{ inputOptions?: Record<string, unknown> }> = []
+  const egressStarts: Array<Record<string, unknown>> = []
+  const egressStops: string[] = []
   class VoiceSession extends EventEmitter {
     agent?: VoiceAgent
     closed = false
@@ -207,8 +225,16 @@ async function fixture(
       super()
       sessions.push(this)
     }
-    async start({ agent }: { agent: VoiceAgent }) {
+    async start({
+      agent,
+      inputOptions,
+    }: {
+      agent: VoiceAgent
+      inputOptions?: Record<string, unknown>
+    }) {
       startCalls()
+      order.push('voice-start')
+      startOptions.push({ inputOptions })
       this.agent = agent
       if (options.speakingAgent) agent.duplexSession.voice = this
       const entered = agent.onEnter()
@@ -223,17 +249,24 @@ async function fixture(
       this.emit('close', { reason: 'test' })
     }
   }
-  const error = vi.fn<(ctx: LiveVoiceErrorContext) => 'continue' | 'end' | void>((ctx) => {
-    if (options.errorAction === 'continue') ctx.voice.appendCommentary('Recovered')
-    return options.errorAction
-  })
+  const error = vi.fn<(ctx: LiveVoiceErrorContext) => Promise<'continue' | 'end' | void>>(
+    async (ctx) => {
+      await options.errorGate?.promise
+      if (options.errorAction === 'continue') ctx.voice.appendCommentary('Recovered')
+      return options.errorAction
+    },
+  )
   const result = vi.fn<(ctx: LiveVoiceResultContext) => void>()
   const exited = vi.fn<(ctx: LiveVoiceExitContext) => void>()
   const entered: LiveVoiceContext[] = []
   const deleteRoom = vi.fn<(room: string) => Promise<void>>(async () => {})
   const logError = vi.fn<(data: unknown, message: string) => void>()
   const setup = vi.fn<() => Promise<{ sessionId: string; state: { answer: string } }>>(
-    async () => ({ sessionId: options.setupId!, state: { answer: 'seeded' } }),
+    async () => ({
+      sessionId: options.setupId!,
+      state: { answer: 'seeded' },
+      ...options.callSetup,
+    }),
   )
   // Only the external LiveKit transport is replaced; backend execution and persistence are real ADK.
   const deps = {
@@ -254,12 +287,49 @@ async function fixture(
     }),
     clock: options.clock,
     lineSettleMs: 10,
-    commentaryStartMs: 100,
     openai: () => ({ realtime: { GPTLiveModel: class {}, GPTLiveSession: LiveSession } }),
     livekitServer: () => ({
       RoomServiceClient: class {
         deleteRoom = deleteRoom
       },
+      EgressClient: class {
+        async startRoomCompositeEgress(
+          room: string,
+          output: { filepath: string; output: { value: { bucket: string; region: string } } },
+          opts: { audioOnly: boolean },
+        ) {
+          order.push('egress-start')
+          if (options.failEgressStart) throw options.failEgressStart
+          egressStarts.push({
+            room,
+            filepath: output.filepath,
+            bucket: output.output.value.bucket,
+            region: output.output.value.region,
+            audioOnly: opts.audioOnly,
+          })
+          return { egressId: `egress-${egressStarts.length}` }
+        }
+        async stopEgress(id: string) {
+          order.push('egress-stop')
+          egressStops.push(id)
+          if (options.failEgressStop) throw new Error('Egress stop failed')
+        }
+      },
+      EncodedFileOutput: class {
+        constructor(opts: Record<string, unknown>) {
+          Object.assign(this, opts)
+        }
+      },
+      S3Upload: class {
+        constructor(opts: Record<string, unknown>) {
+          Object.assign(this, opts)
+        }
+      },
+      EncodedFileType: { OGG: 'ogg' },
+    }),
+    noiseCancellation: () => ({
+      TelephonyBackgroundVoiceCancellation: () => ({ moduleId: 'telephony-filter', options: {} }),
+      BackgroundVoiceCancellation: () => ({ moduleId: 'general-filter', options: {} }),
     }),
   } as unknown as NonNullable<Parameters<typeof createLiveVoiceHandler>[2]>
   const handler = createLiveVoiceHandler(
@@ -282,7 +352,9 @@ async function fixture(
       backendTimeoutMs: options.backendTimeoutMs,
       playoutTimeoutMs: options.playoutTimeoutMs ?? 50,
       timeouts: options.timeouts,
-      setup: options.setupId ? setup : undefined,
+      recording: options.recording,
+      sound: options.sound,
+      setup: options.setupId || options.callSetup ? setup : undefined,
       callTermination: {
         strategy: 'deleteRoom',
         livekitUrl: 'ws://synthetic.invalid',
@@ -310,7 +382,7 @@ async function fixture(
                   options.failResult === true ||
                   (options.failResult === 'once' && result.mock.calls.length === 1)
                 )
-                  throw new Error('Result failed')
+                  throw new Error(options.failMessage ?? 'Result failed')
                 if (options.resultGate) {
                   await options.resultGate.promise
                   ctx.state.update({ answer: `late-${reply}` })
@@ -382,6 +454,10 @@ async function fixture(
     renderStarted,
     entryErrors,
     shutdowns,
+    order,
+    startOptions,
+    egressStarts,
+    egressStops,
     call,
   }
 }
@@ -637,7 +713,8 @@ describe('Live voice handler', () => {
     })
     call.live.sessionId = 'connection-two'
     call.live.fragment('user', 'Actually no', 'yes', 0, 500)
-    call.live.dispatch('overlap', 'Wait')
+    // GPT Live's caller deltas carry their own spacing; the caller's run is one message.
+    call.live.dispatch('overlap', ', wait')
     await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
     const backend = f.result.mock.calls[0]![0].backendSession
     const messages = backend.events.filter(
@@ -648,8 +725,7 @@ describe('Live voice handler', () => {
       'Which day?',
       'Is that your address, and may I send',
       'Yes',
-      'Actually no',
-      'Wait',
+      'Actually no, wait',
     ])
     expect(messages[2]).toMatchObject({
       agentName: 'lookup',
@@ -661,11 +737,10 @@ describe('Live voice handler', () => {
     expect(messages[4]).toMatchObject({
       transcriptFragment: { connection: { index: 2 }, startMs: 0, endMs: 500 },
     })
-    expect(messages[5]).toMatchObject({ transcriptFragment: { startMs: null, endMs: null } })
     const serialized = JSON.stringify(serializeContext(f.adapter.stepCalls[0]!.ctx))
     expect(serialized).toContain('2000–5000 ms] Is that your address, and may I send')
     expect(serialized).toContain('2500–2800 ms] Yes')
-    expect(serialized).toContain('connection 2; 0–500 ms] Actually no')
+    expect(serialized).toContain('connection 2; 0–500 ms] Actually no, wait')
     expect(serialized).toContain('not proof the caller heard it')
     const reloaded = await f.app.sessions.get(backend.id)
     const transcriptFacts = (events: readonly Event[]) =>
@@ -702,6 +777,176 @@ describe('Live voice handler', () => {
     expect(saved.some((row) => row!.events.some((event) => event.type === 'tool_result'))).toBe(
       true,
     )
+  })
+  test('a reconnect asking again for an in-flight caller turn gets that run, not a second one', async () => {
+    const first = gate(),
+      f = await fixture({ gates: { first } }),
+      call = await f.call()
+    call.live.dispatch('old-id', 'Book the appointment')
+    await vi.waitFor(() => expect(f.started).toEqual(['first']))
+    call.live.emit('openai_server_event_received', {
+      type: 'session.started',
+      session: { id: 'connection-two' },
+    })
+    call.live.sessionId = 'connection-two'
+    // The new connection delegates the same caller turn while the first run is still going.
+    call.live.emit('delegation_created', { id: 'new-id' })
+    first.release()
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    await call.shutdown()
+    expect(f.started).toEqual(['first'])
+    expect(f.adapter.stepCalls).toHaveLength(1)
+    expect(f.result.mock.calls[0]![0]).toMatchObject({
+      delegation: { id: 'new-id', connectionId: 'connection-two' },
+      output: { reply: 'first' },
+    })
+    expect(call.live.sent.at(-1)).toEqual({
+      kind: 'commentary',
+      text: 'first',
+      delegationId: 'new-id',
+    })
+    const saved = await f.app.sessions.get(f.entered[0]!.callId)
+    expect(saved!.events.filter((event) => event.type === 'tool_result')).toHaveLength(1)
+  })
+  test('after a reconnect, a delegation the caller spoke for again runs its own backend', async () => {
+    const first = gate(),
+      f = await fixture({ gates: { first } }),
+      call = await f.call()
+    call.live.dispatch('old-id', 'Book the appointment')
+    await vi.waitFor(() => expect(f.started).toEqual(['first']))
+    call.live.sessionId = 'connection-two'
+    call.session.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
+    call.session.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
+    call.live.dispatch('new-id', 'Actually, cancel it')
+    first.release()
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    await call.shutdown()
+    expect(f.started).toEqual(['first', 'second'])
+    expect(f.result.mock.calls[0]![0]).toMatchObject({
+      delegation: { id: 'new-id', connectionId: 'connection-two' },
+      output: { reply: 'second' },
+    })
+  })
+  test('result hooks cut off by a reconnect are not run again for its repeat of the caller turn', async () => {
+    const resultGate = gate(),
+      f = await fixture({ resultGate }),
+      call = await f.call()
+    cleanup.push(resultGate.release)
+    call.live.dispatch('old-id', 'Book the appointment')
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    call.live.sessionId = 'connection-two'
+    call.live.emit('delegation_created', { id: 'new-id' })
+    resultGate.release()
+    await vi.waitFor(() =>
+      expect(call.live.sent).toContainEqual({
+        kind: 'thinking',
+        text: expect.stringContaining('not repeated'),
+        delegationId: 'new-id',
+      }),
+    )
+    await call.shutdown()
+    expect(f.result).toHaveBeenCalledTimes(1)
+    expect(f.started).toEqual(['first'])
+  })
+  test('error hooks cut off by a reconnect do not let its repeat run the backend again', async () => {
+    const errorGate = gate(),
+      f = await fixture({ failResult: true, errorAction: 'continue', errorGate }),
+      call = await f.call()
+    cleanup.push(errorGate.release)
+    call.live.dispatch('old-id', 'Book the appointment')
+    await vi.waitFor(() => expect(f.error).toHaveBeenCalledTimes(1))
+    call.live.sessionId = 'connection-two'
+    call.live.emit('delegation_created', { id: 'new-id' })
+    errorGate.release()
+    await vi.waitFor(() =>
+      expect(call.live.sent).toContainEqual({
+        kind: 'thinking',
+        text: expect.stringContaining('not repeated'),
+        delegationId: 'new-id',
+      }),
+    )
+    await call.shutdown()
+    expect(f.started).toEqual(['first'])
+    expect(f.result).toHaveBeenCalledTimes(1)
+    expect(f.error).toHaveBeenCalledTimes(1)
+  })
+  test('a delegation answered on its own connection is not given again after a reconnect', async () => {
+    const f = await fixture(),
+      call = await f.call()
+    call.live.dispatch('old-id', 'Book the appointment')
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    call.live.sessionId = 'connection-two'
+    call.live.emit('delegation_created', { id: 'new-id' })
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(2))
+    await call.shutdown()
+    expect(f.started).toEqual(['first', 'second'])
+  })
+  test('a moderation stop reconnects without the conversation, then goes to the error hooks', async () => {
+    const f = await fixture({ errorAction: 'continue' }),
+      call = await f.call()
+    const history = { items: ['Original question', 'Which day?'] }
+    Object.assign(call.live, { history })
+    // A reconnect for any other reason is not a moderation stop.
+    call.live.emit('session_reconnected', {})
+    call.live.emit('openai_server_event_received', {
+      type: 'error',
+      error: { type: 'content_filter', code: 'content_filter' },
+    })
+    expect(history.items).toEqual([])
+    expect(call.live.sent.at(-1)).toEqual({
+      kind: 'instructions',
+      text: expect.stringContaining('Do not greet the caller'),
+    })
+    expect(f.error).not.toHaveBeenCalled()
+    call.live.sessionId = 'connection-two'
+    call.live.emit('session_reconnected', {})
+    await vi.waitFor(() => expect(f.error).toHaveBeenCalledTimes(1))
+    const [ctx] = f.error.mock.calls[0]!
+    expect(ctx.error).toBeInstanceOf(LiveContentFilterError)
+    expect(ctx.recoverable).toBe(true)
+    expect(ctx.delegation).toBeUndefined()
+    await vi.waitFor(() =>
+      expect(call.live.sent).toContainEqual({ kind: 'commentary', text: 'Recovered' }),
+    )
+    expect(f.sessions[0]!.closed).toBe(false)
+    await call.shutdown()
+    expect(f.error).toHaveBeenCalledTimes(1)
+  })
+  test('a line the caller cannot talk over, lost to a moderation stop, settles at the reconnect', async () => {
+    const f = await fixture({ errorAction: 'continue', playoutTimeoutMs: 10_000 }),
+      call = await f.call()
+    const voice = f.entered[0]!.voice
+    voice.appendCommentary('Handoff notice', { allowInterruptions: false })
+    const quiet = voice.untilQuiet()
+    await vi.waitFor(() =>
+      expect(call.live.sent).toContainEqual({ kind: 'commentary', text: 'Handoff notice' }),
+    )
+    call.live.emit('openai_server_event_received', {
+      type: 'error',
+      error: { type: 'content_filter', code: 'content_filter' },
+    })
+    call.live.sessionId = 'connection-two'
+    call.live.emit('session_reconnected', {})
+    const settled = await Promise.race([
+      quiet.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 1_000)),
+    ])
+    expect(settled).toBe(true)
+    expect(f.logError).toHaveBeenCalledWith(expect.anything(), 'Live line_lost_to_moderation')
+    await vi.waitFor(() => expect(f.error).toHaveBeenCalledTimes(1))
+    await call.shutdown()
+  })
+  test('logs a failed hook by its class, never its message', async () => {
+    const f = await fixture({ failResult: true, failMessage: 'Patient Okafor not found' }),
+      call = await f.call()
+    call.live.dispatch('failed-id', 'Question')
+    await vi.waitFor(() => expect(f.error).toHaveBeenCalledTimes(1))
+    await call.shutdown()
+    expect(f.logError).toHaveBeenCalledWith(
+      expect.objectContaining({ delegationId: 'failed-id', errorName: 'Error' }),
+      'Live backend or persistence failed',
+    )
+    expect(JSON.stringify(f.logError.mock.calls)).not.toContain('Okafor')
   })
   test('drains tools before transcript close and isolates calls sharing a store', async () => {
     const first = gate(),
@@ -886,51 +1131,76 @@ test('an uninterrupted line mutes the caller at once and is given once GPT Live 
   await call.shutdown()
 })
 
-test('an uninterrupted line waits for a delegation in flight', async () => {
-  const stuck = gate()
-  const f = await fixture({ gates: { first: stuck }, playoutTimeoutMs: 1_000 })
+test('a line a delegation gives does not wait for its own delegation, and untilQuiet waits for it', async () => {
+  const work = gate()
+  const f = await fixture({ gates: { first: work }, playoutTimeoutMs: 1_000 })
   const call = await f.call()
+  call.live.voice = call.session
   call.live.speak(call.session) // the greeting
-  call.live.dispatch('first-id', 'Question')
+  call.live.dispatch('first-id', 'Put me through')
   await vi.waitFor(() => expect(f.started).toEqual(['first']))
-  f.entered[0]!.voice.appendCommentary('Explain the time limit.', { allowInterruptions: false })
-  await sleep(50)
-  expect(given(call.live, 'Explain the time limit.')).toEqual([])
-  stuck.release()
-  await vi.waitFor(() => expect(given(call.live, 'Explain the time limit.')).toHaveLength(1))
+  const voice = f.toolVoices.get('first')!
+  const givenAt = Date.now()
+  voice.appendCommentary('Putting you through.', { allowInterruptions: false })
+  await voice.untilQuiet()
+  // Well inside the 1 s playout bound, which a line held by its own delegation would reach.
+  expect(Date.now() - givenAt).toBeLessThan(800)
+  expect(given(call.live, 'Putting you through.')).toHaveLength(1)
+  expect(call.live.input).toEqual(['mute', 'unmute'])
+  work.release()
   await call.shutdown()
 })
 
-test('an uninterrupted line waits for an earlier ordinary line to start its turn', async () => {
+test('a muted caller waiting for a line is not prompted for silence', async () => {
+  const prompted = vi.fn<() => boolean>(() => false)
+  const f = await fixture({
+    playoutTimeoutMs: 1_000,
+    timeouts: { inactivity: 40 },
+    lifecycle: { onInactivity: prompted },
+  })
+  const call = await f.call()
+  speaking(call.session) // GPT Live is busy, so the line waits
+  f.entered[0]!.voice.appendCommentary('Putting you through.', { allowInterruptions: false })
+  listening(call.session)
+  await sleep(200)
+  expect(prompted).not.toHaveBeenCalled()
+  await call.shutdown()
+})
+
+test('a line GPT Live cannot be given is logged, and the caller is heard again', async () => {
   const f = await fixture({ playoutTimeoutMs: 1_000 })
   const call = await f.call()
+  call.live.appendCommentary = () => {
+    throw new Error('Session closed')
+  }
   const voice = f.entered[0]!.voice
-  voice.appendCommentary('Your request has been sent.')
-  voice.appendCommentary('Say goodbye.', { allowInterruptions: false })
-  await sleep(50)
-  expect(given(call.live, 'Say goodbye.')).toEqual([])
-  call.live.speak(call.session)
-  await vi.waitFor(() => expect(given(call.live, 'Say goodbye.')).toHaveLength(1))
-  await sleep(50)
-  expect(call.live.input).toEqual(['mute'])
-  call.live.speak(call.session)
-  await vi.waitFor(() => expect(call.live.input).toEqual(['mute', 'unmute']))
+  voice.appendCommentary('Putting you through.', { allowInterruptions: false })
+  await voice.untilQuiet()
+  expect(call.live.input).toEqual(['mute', 'unmute'])
+  expect(f.logError).toHaveBeenCalledWith(
+    { callId: f.entered[0]!.callId, errorName: 'Error' },
+    'Live line_failed',
+  )
   await call.shutdown()
 })
 
-test('an earlier ordinary line GPT Live never speaks holds an uninterrupted line only briefly', async () => {
-  const f = await fixture({ playoutTimeoutMs: 5_000 })
+test('untilQuiet resolves at once when no uninterrupted line is waiting', async () => {
+  const f = await fixture()
   const call = await f.call()
-  call.live.speak(call.session) // the greeting
+  f.entered[0]!.voice.appendCommentary('How can I help?')
+  await f.entered[0]!.voice.untilQuiet()
+  await call.shutdown()
+})
+
+test('untilQuiet resolves at the playout bound when GPT Live never says the line', async () => {
+  const f = await fixture({ playoutTimeoutMs: 100 })
+  const call = await f.call()
   const voice = f.entered[0]!.voice
-  voice.appendCommentary('Your request has been sent.')
+  voice.appendCommentary('Putting you through.', { allowInterruptions: false })
   const givenAt = Date.now()
-  voice.appendCommentary('Say goodbye.', { allowInterruptions: false })
-  await vi.waitFor(() => expect(given(call.live, 'Say goodbye.')).toHaveLength(1), {
-    timeout: 1_000,
-  })
+  await voice.untilQuiet()
   expect(Date.now() - givenAt).toBeGreaterThanOrEqual(90)
-  expect(f.logError).not.toHaveBeenCalledWith(expect.anything(), 'Live line_given_while_busy')
+  expect(call.live.input).toEqual(['mute', 'unmute'])
   await call.shutdown()
 })
 
@@ -992,6 +1262,19 @@ test('end closes at the playout bound when GPT Live never says the line, and log
   await vi.waitFor(() => expect(f.deleteRoom).toHaveBeenCalledTimes(1))
   expect(Date.now() - endedAt).toBeGreaterThanOrEqual(90)
   expect(f.logError).toHaveBeenCalledWith({ callId: f.entered[0]!.callId }, 'Live line_unconfirmed')
+})
+
+test('a caller who hangs up before the goodbye is said ends the call without waiting for it', async () => {
+  const f = await fixture({ playoutTimeoutMs: 5_000 })
+  const call = await f.call()
+  const voice = f.entered[0]!.voice
+  speaking(call.session) // GPT Live is still talking, so the goodbye waits
+  voice.appendCommentary('Say goodbye.', { allowInterruptions: false })
+  voice.end()
+  const hungUpAt = Date.now()
+  call.session.emit('close', { reason: 'participant_disconnected' })
+  await vi.waitFor(() => expect(f.exited).toHaveBeenCalledTimes(1), { timeout: 1_000 })
+  expect(Date.now() - hungUpAt).toBeLessThan(1_000)
 })
 
 test('an error ends the call without waiting for an uninterrupted line', async () => {
@@ -1729,5 +2012,129 @@ describe('Live call usage', () => {
     const usage = f.exited.mock.calls[0]![0].usage
     expect(usage.backend.cost).toEqual({ basis: 'unavailable' })
     expect(usage.total).toEqual({ basis: 'unavailable' })
+  })
+})
+
+describe('call recording and noise cancellation', () => {
+  const egress = {
+    bucket: 'synthetic-calls',
+    prefix: 'recordings/',
+    region: 'eu-west-2',
+    accessKeyId: 'synthetic',
+    secretAccessKey: 'synthetic',
+    livekitUrl: 'ws://synthetic.invalid',
+    apiKey: 'synthetic',
+    apiSecret: 'synthetic',
+  }
+
+  test('starts egress at the setup key before the voice session, and stops it at close', async () => {
+    const f = await fixture({
+      recording: { egress },
+      callSetup: { recordingKey: 'org-1/call-1.ogg' },
+    })
+    const call = await f.call()
+    expect(f.egressStarts).toEqual([
+      {
+        room: 'room-1',
+        filepath: 'org-1/call-1.ogg',
+        bucket: 'synthetic-calls',
+        region: 'eu-west-2',
+        audioOnly: true,
+      },
+    ])
+    expect(f.egressStops).toEqual([])
+    await call.shutdown()
+    expect(f.egressStops).toEqual(['egress-1'])
+    expect(f.order).toEqual(['egress-start', 'voice-start', 'egress-stop'])
+  })
+
+  test('names the recording after the call session without a setup key', async () => {
+    const f = await fixture({ recording: { egress }, setupId: 'call-7' })
+    const call = await f.call()
+    expect(f.egressStarts.map(({ filepath }) => filepath)).toEqual([
+      'recordings/session_call-7.ogg',
+    ])
+    await call.shutdown()
+    expect(f.egressStops).toEqual(['egress-1'])
+  })
+
+  test('stops egress once when the call ends itself', async () => {
+    const f = await fixture({ recording: { egress } })
+    const call = await f.call()
+    call.session.emit('close', { reason: 'user-disconnected' })
+    await vi.waitFor(() => expect(f.exited).toHaveBeenCalledTimes(1))
+    await call.shutdown()
+    expect(f.egressStops).toEqual(['egress-1'])
+  })
+
+  test('a failed egress stop still closes the call and runs onExit', async () => {
+    const f = await fixture({ recording: { egress }, failEgressStop: true })
+    const call = await f.call()
+    await call.shutdown()
+    expect(f.egressStops).toEqual(['egress-1'])
+    expect(f.exited).toHaveBeenCalledTimes(1)
+    expect(f.sessions[0]!.closed).toBe(true)
+  })
+
+  test('a failed egress start logs no patient data and the call goes on unrecorded', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const f = await fixture({
+        recording: { egress },
+        callSetup: { recordingKey: 'org-1/2026-09-27_+447700900123.ogg' },
+        failEgressStart: new Error('Egress refused org-1/2026-09-27_+447700900123.ogg'),
+      })
+      const call = await f.call()
+      expect(logged.mock.calls).toEqual([
+        ['[adk/voice] Failed to start egress recording:', { errorName: 'Error' }],
+      ])
+      expect(f.order).toEqual(['egress-start', 'voice-start'])
+      await call.shutdown()
+      expect(f.egressStops).toEqual([])
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
+  test('records nothing without a recording config, even with a setup key', async () => {
+    const f = await fixture({ callSetup: { recordingKey: 'org-1/call-1.ogg' } })
+    const call = await f.call()
+    await call.shutdown()
+    expect(f.egressStarts).toEqual([])
+    expect(f.order).toEqual(['voice-start'])
+  })
+
+  test('filters caller audio with the handler noise cancellation profile', async () => {
+    const f = await fixture({ sound: { noiseCancellation: 'telephony' } })
+    const call = await f.call()
+    expect(f.startOptions).toEqual([
+      {
+        inputOptions: {
+          participantIdentity: 'synthetic-caller',
+          noiseCancellation: { moduleId: 'telephony-filter', options: {} },
+        },
+      },
+    ])
+    await call.shutdown()
+  })
+
+  test('a call setup profile overrides the handler profile', async () => {
+    const f = await fixture({
+      sound: { noiseCancellation: 'telephony' },
+      callSetup: { noiseCancellation: 'general' },
+    })
+    const call = await f.call()
+    expect(f.startOptions[0]!.inputOptions!.noiseCancellation).toEqual({
+      moduleId: 'general-filter',
+      options: {},
+    })
+    await call.shutdown()
+  })
+
+  test('starts without a noise filter when none is configured', async () => {
+    const f = await fixture()
+    const call = await f.call()
+    expect(f.startOptions).toEqual([{ inputOptions: { participantIdentity: 'synthetic-caller' } }])
+    await call.shutdown()
   })
 })

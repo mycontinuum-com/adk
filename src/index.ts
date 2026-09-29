@@ -10,6 +10,7 @@ export type {
   ParallelConfig,
   LoopConfig,
   ToolConfig,
+  ReplyToolConfig,
   ContextNamespace,
   MCPNamespace,
 } from './api'

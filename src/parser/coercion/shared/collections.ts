@@ -2,7 +2,7 @@ import type { AnyZodSchema } from '../../../types/zod'
 import type { CoercionContext } from '../context'
 
 import {
-  createContext,
+  branchContext,
   childContext,
   checkAndMarkVisited,
   addCorrection,
@@ -40,7 +40,7 @@ export function coerceArray<Schema extends AnyZodSchema>(
       if (parts.length > 1) {
         const result: unknown[] = []
         let allValid = true
-        const partialCtx = createContext(ctx.partial, ctx.visited, ctx.depth)
+        const partialCtx = branchContext(ctx)
 
         for (let i = 0; i < parts.length; i++) {
           const itemCtx = childContext(partialCtx, i)
@@ -66,7 +66,7 @@ export function coerceArray<Schema extends AnyZodSchema>(
       }
     }
 
-    const testCtx = createContext(ctx.partial, ctx.visited, ctx.depth)
+    const testCtx = branchContext(ctx)
     const coerced = coerceValue(value, elementSchema, testCtx)
 
     if (testCtx.errors.length === 0) {

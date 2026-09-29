@@ -269,12 +269,12 @@ describe('app.evaluate.judge', () => {
       evidence: {
         status: 'max_duration',
         timeline: [
-          { kind: 'agent', said: 'Dzień dobry, tu przychodnia.', fromMs: 0, toMs: 2_000 },
+          { kind: 'agent', said: 'Dzień dobry, tu przychodnia.', atMs: 900 },
           { kind: 'tool_call', name: 'end_call', args: { reason: 'limit' }, atMs: 2_100 },
           { kind: 'tool_result', name: 'end_call', result: { ended: true }, atMs: 2_200 },
-          { kind: 'agent', said: 'Czas rozmowy minął.', fromMs: 3_500, toMs: 4_200 },
-          { kind: 'caller', said: 'Dobrze, dziękuję.', fromMs: 4_500, toMs: 5_200 },
-          { kind: 'caller', said: ' Do widzenia.', fromMs: 5_300, toMs: 5_800 },
+          { kind: 'agent', said: 'Czas rozmowy minął.', atMs: 4_200 },
+          { kind: 'caller', said: 'Dobrze, dziękuję.', atMs: 5_200 },
+          { kind: 'caller', said: ' Do widzenia.', atMs: 5_800 },
         ],
         callerHeard: [
           { atMs: 2_300, text: 'Dzień dobry, tu przychodnia.' },
@@ -292,6 +292,95 @@ describe('app.evaluate.judge', () => {
       'Dobrze, dziękuję.',
       ' Do widzenia.',
     ])
+  })
+
+  it('puts Live speech on the run clock, so a line spoken after a tool result reads as after it', async () => {
+    // The lMQOO9 case-3 shape (2026-09-27): the claim's audio offset (99,800 ms) is smaller than
+    // the submit result's run time (100,653 ms), but it arrived 1.85 s after the result.
+    const adapter = new MockAdapter({ responses: [{ text: verdict('After the result.', true) }] })
+    const store = new InMemoryStore()
+    const app = adk({ name: 'judge', store, adapters: { openai: adapter } })
+    const session = await app.sessions.create({ sessionId: 'live-claim' })
+    const startedAtMs = 1_000_000
+    const base = { invocationId: 'inv', agentName: 'backend', callId: 'c1', name: 'submit_request' }
+    await sessionService(store).appendEvent(session, {
+      ...base,
+      id: 'call',
+      type: 'tool_call',
+      createdAt: startedAtMs + 100_652,
+      args: {},
+    } satisfies Event)
+    await sessionService(store).appendEvent(session, {
+      ...base,
+      id: 'result',
+      type: 'tool_result',
+      createdAt: startedAtMs + 100_653,
+      result: { status: 'accepted' },
+    } satisfies Event)
+    const spokenAt = (
+      sequence: number,
+      text: string,
+      startMs: number,
+      endMs: number,
+      receivedAfterStartMs: number,
+    ): GPTLiveTranscriptFragment => ({
+      connection: { id: 'conn-2', index: 2 },
+      speaker: 'agent',
+      text,
+      startMs,
+      endMs,
+      sequence,
+      receivedAt: startedAtMs + receivedAfterStartMs,
+    })
+    const run: VoiceRunResult = {
+      status: 'completed',
+      startedAtMs,
+      session,
+      events: session.events,
+      voiceEvents: [],
+      transcript: [],
+      liveTranscript: {
+        callId: 'live-claim',
+        receivedThrough: 2,
+        observations: [],
+        fragments: [
+          spokenAt(1, 'Okay, recording that.', 96_400, 97_600, 99_301),
+          spokenAt(
+            2,
+            ' Your request has been submitted to the practice.',
+            99_800,
+            101_800,
+            102_501,
+          ),
+        ],
+      },
+      timing: {
+        responseTimes: [],
+        silenceGaps: [],
+        interruptions: { count: 0, byAgent: 0, byUser: 0 },
+        vadResolutionMs: 0,
+      },
+      recording: { path: '/synthetic/recording.wav' },
+      durationMs: 110_000,
+    }
+
+    await app.evaluate
+      .judge({ name: 'claim', criteria, model: openai('gpt-4o-mini') })
+      .evaluate(run)
+
+    const evidence = userMessage(adapter)
+    expect(evidence).toHaveProperty('evidence.timeline', [
+      { kind: 'agent', said: 'Okay, recording that.', atMs: 99_301 },
+      { kind: 'tool_call', name: 'submit_request', args: {}, atMs: 100_652 },
+      {
+        kind: 'tool_result',
+        name: 'submit_request',
+        result: { status: 'accepted' },
+        atMs: 100_653,
+      },
+      { kind: 'agent', said: ' Your request has been submitted to the practice.', atMs: 102_501 },
+    ])
+    expect(JSON.stringify(evidence)).not.toMatch(/fromMs|toMs|99800|99_800/)
   })
 
   it('renders a Realtime run from transcript entries merged with tool use', async () => {
@@ -350,9 +439,9 @@ describe('app.evaluate.judge', () => {
       evidence: {
         status: 'completed',
         timeline: [
-          { kind: 'agent', said: 'Czy mam wysłać zgłoszenie?', fromMs: 0, toMs: 900 },
+          { kind: 'agent', said: 'Czy mam wysłać zgłoszenie?', atMs: 0 },
           { kind: 'tool_call', name: 'submit', args: { consent: true }, atMs: 2_000 },
-          { kind: 'caller', said: 'Tak, proszę.', fromMs: 3_000, toMs: 3_400 },
+          { kind: 'caller', said: 'Tak, proszę.', atMs: 3_000 },
           { kind: 'agent', said: 'Ŵyr a gŵr.' },
           { kind: 'tool_result', name: 'submit', result: { sent: true }, atMs: 3_500 },
         ],
@@ -403,9 +492,9 @@ describe('app.evaluate.judge', () => {
     expect(userMessage(adapter)).toMatchObject({
       evidence: {
         timeline: [
-          { kind: 'agent', said: 'Wysłać?', fromMs: 0, toMs: 900 },
+          { kind: 'agent', said: 'Wysłać?', atMs: 0 },
           { kind: 'tool_call', name: 'submit', args: { consent: true }, atMs: 2_000 },
-          { kind: 'caller', said: 'Tak.', toMs: 2_500 },
+          { kind: 'caller', said: 'Tak.', atMs: 2_500 },
         ],
       },
     })

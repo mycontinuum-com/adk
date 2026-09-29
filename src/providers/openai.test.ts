@@ -23,6 +23,7 @@ import {
   serializeTools,
   serializeToolChoice,
   serializePromptCacheOptions,
+  serializeParallelToolCallsOption,
   serializeOutputSchema,
   OpenAIAdapter,
 } from './openai'
@@ -751,6 +752,43 @@ describe('OpenAI prompt cache options', () => {
         promptCache: { key: 'x'.repeat(65), mode: 'explicit', ttl: '30m' },
       }),
     ).toThrow('OpenAI prompt cache key must be at most 64 characters')
+  })
+})
+
+describe('OpenAI parallel tool calls option', () => {
+  test('reaches the provider request as parallel_tool_calls: false when explicitly disabled', () => {
+    expect(
+      serializeParallelToolCallsOption({
+        provider: 'openai',
+        name: 'gpt-5.6-luna',
+        parallelToolCalls: false,
+      }),
+    ).toEqual({ parallel_tool_calls: false })
+  })
+
+  test('omits the field (provider default stays true) when left unset', () => {
+    expect(serializeParallelToolCallsOption({ provider: 'openai', name: 'gpt-5.6-luna' })).toEqual(
+      {},
+    )
+  })
+
+  test('omits the field when explicitly set to true (no reason to send the default)', () => {
+    expect(
+      serializeParallelToolCallsOption({
+        provider: 'openai',
+        name: 'gpt-5.6-luna',
+        parallelToolCalls: true,
+      }),
+    ).toEqual({})
+  })
+
+  test('does not apply to a non-OpenAI provider config', () => {
+    expect(
+      serializeParallelToolCallsOption({
+        provider: 'gemini',
+        name: 'gemini-2.5-flash',
+      }),
+    ).toEqual({})
   })
 })
 

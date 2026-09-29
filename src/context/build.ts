@@ -132,6 +132,14 @@ export function createEndEvent(options: CreateEndEventOptions): ModelEndEvent {
   }
 }
 
+/**
+ * The function tools an agent offers the model, its output tool among them, as the tool loop must
+ * run them: an output tool that is not also in `tools` is still offered, so it must still run.
+ */
+export function offeredFunctionTools(agent: Agent, functionTools: FunctionTool[]): FunctionTool[] {
+  return withOutputTool(functionTools, analyzeOutput(agent).outputTool)
+}
+
 function withOutputTool(functionTools: FunctionTool[], outputTool?: FunctionTool): FunctionTool[] {
   if (!outputTool) return functionTools
   const wrapped = ensureOutputSignal(outputTool)

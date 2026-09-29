@@ -8,7 +8,7 @@ import type { Session, SessionService } from '../../types/session'
 import type { LiveVoiceAppContext } from '../../voice/live-handler'
 import type { LifecycleHookContext, VoiceEvent, VoiceHook } from '../../voice/types'
 import type { CaseWriter } from './case-writer'
-import type { RecorderHandle } from './recorder'
+import type { RecordingHandle } from './recorder'
 import type {
   VoiceEvalCase,
   VoiceEvalOptions,
@@ -53,7 +53,7 @@ import { interceptTools } from '../interceptTools'
 import { createEvalSession } from '../session'
 import { withTimeout } from '../suite-runner'
 import { requireLiveKit } from './livekit-sdk'
-import { connectRecorder } from './recorder'
+import { recordRooms } from './recorder'
 import { emptyTiming } from './speaker-tracker'
 
 interface TranscriptSource {
@@ -290,7 +290,7 @@ async function closeVoiceSessions(lkSession: any, userLkSession: any): Promise<v
 }
 
 function mergeSessionTiming(
-  roomTiming: ReturnType<RecorderHandle['tracker']['finalize']>,
+  roomTiming: ReturnType<RecordingHandle['tracker']['finalize']>,
   sessionTracker: SessionResponseTracker,
 ) {
   return {
@@ -347,7 +347,7 @@ async function summarizeVoiceUsage(
 
 /** Stops the recorder after a failed run; keeps the previous path when stopping fails. */
 async function stopRecorderAfterFailure(
-  recorder: RecorderHandle,
+  recorder: RecordingHandle,
   recordingPath: string,
 ): Promise<string> {
   try {
@@ -359,18 +359,10 @@ async function stopRecorderAfterFailure(
 }
 
 async function teardownVoiceRooms(
-  recorder: RecorderHandle | undefined,
   agentRoom: any,
   userRoom: any,
   deleteRoom: () => Promise<unknown>,
 ): Promise<void> {
-  if (recorder) {
-    try {
-      await withTimeout(recorder.disconnect(), 5000)
-    } catch {
-      /* ignore */
-    }
-  }
   if (agentRoom) {
     try {
       await withTimeout(agentRoom.disconnect(), 5000)
@@ -450,7 +442,6 @@ export async function runVoiceCase<S extends StateSchema>(
 
   const agentIdentity = `__voice-eval-agent-${sanitize(evalCase.name)}`
   const userIdentity = `__voice-eval-user-${sanitize(evalCase.name)}`
-  const recorderIdentity = `__voice-eval-recorder`
 
   // --- Create room ---
   const svc = new serverSdk.RoomServiceClient(url, apiKey, apiSecret)
@@ -460,7 +451,7 @@ export async function runVoiceCase<S extends StateSchema>(
     departureTimeout: 30,
   })
 
-  let recorder: RecorderHandle | undefined
+  let recorder: RecordingHandle | undefined
   let agentRoom: any
   let userRoom: any
   let status: VoiceRunStatus = 'completed'
@@ -506,14 +497,9 @@ export async function runVoiceCase<S extends StateSchema>(
       return await at.toJwt()
     }
 
-    const [agentToken, userToken, recorderToken] = await Promise.all([
+    const [agentToken, userToken] = await Promise.all([
       makeToken(agentIdentity, { canPublish: true, canSubscribe: true }),
       makeToken(userIdentity, { canPublish: true, canSubscribe: true }),
-      makeToken(recorderIdentity, {
-        canPublish: false,
-        canSubscribe: true,
-        hidden: true,
-      }),
     ])
 
     // --- Build main agent ---
@@ -729,33 +715,24 @@ export async function runVoiceCase<S extends StateSchema>(
       userLkModel,
     )
 
-    // --- Connect rooms + recorder in parallel ---
+    // --- Connect rooms, then record each side from the room that hears it ---
     agentRoom = new rtc.Room()
     userRoom = new rtc.Room()
-
-    {
-      const connects: Promise<any>[] = [
-        agentRoom.connect(url, agentToken, { autoSubscribe: true }),
-        userRoom.connect(url, userToken, { autoSubscribe: true }),
-      ]
-      if (options.output && recordingDir) {
-        connects.push(
-          connectRecorder(
-            {
-              roomUrl: url,
-              token: recorderToken,
-              agentIdentity,
-              userIdentity,
-              recordingDir,
-              caseName: evalCase.name,
-            },
-            rtc,
-          ).then((r) => {
-            recorder = r
-          }),
-        )
-      }
-      await Promise.all(connects)
+    await Promise.all([
+      agentRoom.connect(url, agentToken, { autoSubscribe: true }),
+      userRoom.connect(url, userToken, { autoSubscribe: true }),
+    ])
+    if (options.output && recordingDir) {
+      recorder = recordRooms(
+        {
+          rooms: [agentRoom, userRoom],
+          agentIdentity,
+          userIdentity,
+          recordingDir,
+          caseName: evalCase.name,
+        },
+        rtc,
+      )
     }
 
     agentRoom.on('activeSpeakersChanged', (speakers: any[]) => {
@@ -1077,7 +1054,7 @@ export async function runVoiceCase<S extends StateSchema>(
   } finally {
     // --- Teardown ---
     unbindEvalControl?.()
-    await teardownVoiceRooms(recorder, agentRoom, userRoom, () => svc.deleteRoom(roomName))
+    await teardownVoiceRooms(agentRoom, userRoom, () => svc.deleteRoom(roomName))
   }
 
   return {

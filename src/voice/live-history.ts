@@ -10,31 +10,67 @@ const backendEventTypes = new Set<Event['type']>([
   'tool_result',
 ])
 
-/** Projects transcript fragments into user and assistant events, in receipt order. */
+/**
+ * Projects transcript fragments into user and assistant events, in receipt order. The caller's
+ * consecutive fragments on one connection are one event, up to the next delegation: GPT Live
+ * transcribes the caller in word-sized deltas that carry their own spacing, and a spelled name
+ * given to the backend one letter per message was misread. A joined event keeps its first
+ * fragment's ID and start offset and its last fragment's sequence and end offset. Assistant
+ * fragments stay one event each, since their deltas can split a word. The backend and eval results
+ * read this one view.
+ */
 export function transcriptMessages(
   snapshot: GPTLiveTranscriptSnapshot,
   agentName: string,
 ): Array<UserEvent | AssistantEvent> {
-  return snapshot.fragments.map((fragment) => ({
-    id: `${snapshot.callId}/transcript/${fragment.sequence}`,
-    type: fragment.speaker === 'caller' ? 'user' : 'assistant',
-    text: fragment.text,
-    createdAt: fragment.receivedAt,
-    invocationId: '',
-    agentName,
-    source: 'transcript',
-    transcriptFragment: {
-      connection: fragment.connection,
-      sequence: fragment.sequence,
-      startMs: fragment.startMs,
-      endMs: fragment.endMs,
-    },
-  }))
+  const delegations = snapshot.observations
+    .filter(({ payload }) => payload.kind === 'delegation')
+    .map(({ sequence }) => sequence)
+  const messages: Array<UserEvent | AssistantEvent> = []
+  for (const fragment of snapshot.fragments) {
+    const previous = messages.at(-1)
+    const joined = previous?.transcriptFragment
+    if (
+      fragment.speaker === 'caller' &&
+      previous?.type === 'user' &&
+      joined &&
+      joined.connection.index === fragment.connection.index &&
+      !delegations.some((sequence) => sequence > joined.sequence && sequence < fragment.sequence)
+    ) {
+      messages[messages.length - 1] = {
+        ...previous,
+        text: previous.text + fragment.text,
+        transcriptFragment: {
+          ...joined,
+          sequence: fragment.sequence,
+          startMs: joined.startMs ?? fragment.startMs,
+          endMs: fragment.endMs ?? joined.endMs,
+        },
+      }
+      continue
+    }
+    messages.push({
+      id: `${snapshot.callId}/transcript/${fragment.sequence}`,
+      type: fragment.speaker === 'caller' ? 'user' : 'assistant',
+      text: fragment.text,
+      createdAt: fragment.receivedAt,
+      invocationId: '',
+      agentName,
+      source: 'transcript',
+      transcriptFragment: {
+        connection: fragment.connection,
+        sequence: fragment.sequence,
+        startMs: fragment.startMs,
+        endMs: fragment.endMs,
+      },
+    })
+  }
+  return messages
 }
 
 /**
  * Builds a delegation's backend history. Each earlier batch of backend work is placed after the
- * transcript fragments at its receipt boundary, followed by the fragments that arrived later.
+ * transcript at its receipt boundary, followed by the transcript that arrived later.
  */
 export function liveHistory(
   events: readonly Event[],

@@ -28,7 +28,12 @@ import type { Session } from '../types'
 import type { InternalRunConfig } from '../types/runtime'
 import type { AgentRunnerConfig } from './config'
 
-import { buildContext, createStartEvent, createEndEvent } from '../context/build'
+import {
+  buildContext,
+  createStartEvent,
+  createEndEvent,
+  offeredFunctionTools,
+} from '../context/build'
 import { DEFAULT_MAX_STEPS, MAX_TOOL_RETRY_ATTEMPTS } from '../core/constants'
 import { createEventId } from '../core/constants'
 import { createInvocationContext, createToolContext } from '../core/ctx'
@@ -175,7 +180,7 @@ async function* processResumedYields(
     )
     if (!toolCall) continue
 
-    const tool = agent.tools.filter(isFunctionTool).find((t) => t.name === yieldEvent.name)
+    const tool = functionToolsOf(agent).find((t) => t.name === yieldEvent.name)
     if (!tool) continue
 
     const baseToolCtx = createToolContext(
@@ -525,7 +530,7 @@ async function executeToolCall(
   }
   const scope: ToolResultScope = { base, startTime, composedHook, toolCtx }
 
-  const tool = agent.tools.filter(isFunctionTool).find((t) => t.name === toolCall.name)
+  const tool = functionToolsOf(agent).find((t) => t.name === toolCall.name)
   if (!tool) {
     return {
       event: await applyAfterTool(composedHook, toolCtx, {
@@ -766,35 +771,47 @@ async function* processToolCalls(
     if (delegateYielded) {
       return { abort: false, delegateYieldInfo: delegateYielded }
     }
-    if (transfer || outputSignal) {
-      // Providers reject a history with a call that has no result, so the
-      // calls this one cut off are answered without being run.
-      for (const skipped of toolCalls.slice(index + 1)) {
-        const skippedEvent: ToolResultEvent = {
-          id: createEventId(),
-          type: 'tool_result',
-          createdAt: Date.now(),
-          callId: skipped.callId,
-          name: skipped.name,
-          providerContext: skipped.providerContext,
-          invocationId: skipped.invocationId,
-          agentName: skipped.agentName,
-          error: `Not run: ${toolCall.name} ended the turn first.`,
-        }
-        await runnerConfig.sessionService.appendEvent(session, skippedEvent)
-        yield skippedEvent
-        config?.onStep?.([skippedEvent], session, agent)
-      }
+    if (transfer || outputSignal || abort) {
+      const skipped = toolCalls.slice(index + 1)
+      yield* answerCutOffCalls(skipped, toolCall.name, agent, runnerConfig, config, session)
+      if (abort) return { abort: true }
       return transfer
         ? { abort: false, transferInfo: transfer }
         : { abort: false, outputInfo: outputSignal }
     }
-    if (abort) {
-      return { abort: true }
-    }
   }
 
   return { abort: false }
+}
+
+/**
+ * Providers reject a history with a call that has no result, so the calls a turn-ending call cut
+ * off are answered without being run.
+ */
+async function* answerCutOffCalls(
+  skipped: ToolCallEvent[],
+  endedBy: string,
+  agent: Agent,
+  runnerConfig: AgentRunnerConfig,
+  config: InternalRunConfig | undefined,
+  session: Session,
+): AsyncGenerator<StreamEvent, void> {
+  for (const call of skipped) {
+    const skippedEvent: ToolResultEvent = {
+      id: createEventId(),
+      type: 'tool_result',
+      createdAt: Date.now(),
+      callId: call.callId,
+      name: call.name,
+      providerContext: call.providerContext,
+      invocationId: call.invocationId,
+      agentName: call.agentName,
+      error: `Not run: ${endedBy} ended the turn first.`,
+    }
+    await runnerConfig.sessionService.appendEvent(session, skippedEvent)
+    yield skippedEvent
+    config?.onStep?.([skippedEvent], session, agent)
+  }
 }
 
 interface ProcessedOutput {
@@ -1019,7 +1036,7 @@ async function* yieldToolCall(
   toolCall: ToolCallEvent,
 ): AsyncGenerator<StreamEvent, ToolYieldEvent | undefined> {
   const { agent, session, runnerConfig, ctx } = scope
-  const tool = agent.tools.filter(isFunctionTool).find((t) => t.name === toolCall.name)
+  const tool = functionToolsOf(agent).find((t) => t.name === toolCall.name)
   if (!tool) return undefined
 
   const baseToolCtx = createToolContext(
@@ -1224,7 +1241,7 @@ async function* completeModelStep(
   await runnerConfig.sessionService.appendEvent(session, endEvent)
   yield endEvent
 
-  enrichToolCallsWithYieldFlag(finalStepResult.toolCalls, agent.tools.filter(isFunctionTool))
+  enrichToolCallsWithYieldFlag(finalStepResult.toolCalls, functionToolsOf(agent))
 
   for (const event of finalStepResult.stepEvents) {
     // react-doctor-disable-next-line react-doctor/async-await-in-loop -- step events are persisted and streamed in order
@@ -1505,6 +1522,46 @@ async function* executeAgentLoop(
   }
 }
 
+/** The function tools the model is offered, so the ones the loop runs: the output tool too. */
+function functionToolsOf(agent: Agent): FunctionTool[] {
+  return offeredFunctionTools(agent, agent.tools.filter(isFunctionTool))
+}
+
+/**
+ * Lets the agent's adapter release what it kept for an invocation that has ended. A step that calls
+ * tools can leave a Realtime socket open for their results; an invocation that ends on one of those
+ * tools (an output tool, a transfer, an error) takes no further step to close it.
+ */
+async function endAdapterInvocation(
+  runnerConfig: AgentRunnerConfig,
+  agent: Agent,
+  invocationId: string,
+): Promise<void> {
+  try {
+    const adapter = await runnerConfig.getAdapter(agent.model)
+    adapter.endInvocation?.(invocationId)
+  } catch {
+    // The invocation's own outcome stands; releasing is best effort.
+  }
+}
+
+/** Runs an invocation, then lets its adapter release what it kept, unless it yielded to resume. */
+async function* releasingAdapterAtEnd(
+  run: AsyncGenerator<StreamEvent, AgentResult>,
+  runnerConfig: AgentRunnerConfig,
+  agent: Agent,
+  invocationId: string,
+): AsyncGenerator<StreamEvent, AgentResult> {
+  let result: AgentResult | undefined
+  try {
+    result = yield* run
+    return result
+  } finally {
+    // A yielded invocation is resumed later, on what its adapter kept.
+    if (result?.outcome !== 'yielded') await endAdapterInvocation(runnerConfig, agent, invocationId)
+  }
+}
+
 function composeAgentHandlers(
   agent: Agent,
   config: InternalRunConfig | undefined,
@@ -1561,26 +1618,31 @@ export async function* runAgent(
     signal,
   }
 
-  const result = yield* withInvocationBoundary(
-    agent,
-    invocationId,
-    parentInvocationId,
-    session,
-    runnerConfig.sessionService,
-    executeAgentLoop(
+  const result = yield* releasingAdapterAtEnd(
+    withInvocationBoundary(
       agent,
-      composedHooks,
-      session,
-      config,
-      signal,
       invocationId,
       parentInvocationId,
-      runnerConfig,
-      composedErrorHandler,
+      session,
+      runnerConfig.sessionService,
+      executeAgentLoop(
+        agent,
+        composedHooks,
+        session,
+        config,
+        signal,
+        invocationId,
+        parentInvocationId,
+        runnerConfig,
+        composedErrorHandler,
+        resumeContext,
+      ),
+      options,
       resumeContext,
     ),
-    options,
-    resumeContext,
+    runnerConfig,
+    agent,
+    invocationId,
   )
 
   const assistantEvents = session.events.filter((e): e is AssistantEvent => e.type === 'assistant')

@@ -133,6 +133,26 @@ const ask = app.tool({
 
 Tool options are `name`, `description`, `schema`, `yieldSchema`, `prepare`, `execute`, `finalize`, `timeout`, `retry`, and `requiresApproval`. A tool must have either `execute` or `yieldSchema`. Use `yieldSchema` for human-in-the-loop input; `requiresApproval` is metadata used by executor/workspace tools and should not replace an explicit yield contract.
 
+A model step's tool calls run in order. When one ends the run, through `ctx.output(value)`, an
+agent transfer or an aborting tool error, the calls after it in that step do not run: each gets a
+`tool_result` whose `error` is `Not run: <tool> ended the turn first.`, so the next request to the
+model never holds a call without a result. A delegate that yields still leaves the calls after it
+without a result.
+
+`app.replyTool({ name?, description, schema })` makes a tool whose call is the agent's reply: it
+calls `ctx.output(args)`, so the turn ends with the value a text reply parsed against the same
+schema gives. Pass the agent's output schema. It lets a step require a tool without forcing an
+exit: with `toolChoice: 'required'` and the reply tool among the offered tools, text cannot end the
+step, and replying is still possible. It does not write the agent's `output.key`, and the history
+holds a tool call and result instead of an assistant message.
+
+```typescript
+const reply = z.object({ message: z.string() })
+const replyTool = app.replyTool({ description: 'Say this to the caller.', schema: reply })
+// In a step where only a tool may answer:
+// app.context.toolChoice('required'), with replyTool and end_call offered
+```
+
 Yielding tool lifecycle:
 
 1. `prepare` transforms args and stores the prepared args in the yield event.

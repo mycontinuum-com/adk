@@ -176,7 +176,17 @@ function isLiveAgentConfig<S extends StateSchema, T>(
 
 export type { StepConfig, SequenceConfig, ParallelConfig, LoopConfig }
 
+import type { OutputSignal } from '../core/tools'
 import type { ToolConfig as SpecToolConfig } from './spec'
+
+/** `app.replyTool` configuration. */
+export interface ReplyToolConfig<T> {
+  /** Default: `reply`. */
+  name?: string
+  description: string
+  /** The agent's output schema. */
+  schema: ZodSchema<T>
+}
 export type ToolConfig<TInput, TOutput, TYield, S extends StateSchema> = SpecToolConfig<
   TInput,
   TOutput,
@@ -388,6 +398,15 @@ export interface AdkApp<S extends StateSchema> {
   tool<TInput, TOutput, TYield = never>(
     config: SpecToolConfig<TInput, TOutput, TYield, S>,
   ): FunctionTool<TInput, TOutput, TYield, S>
+
+  /**
+   * A tool whose call is the agent's reply. It ends the turn with its arguments as the output, the
+   * value a text reply parsed against the same schema gives, so pass the agent's output schema.
+   * Offer it beside the tools of a step that requires a tool (`toolChoice: 'required'`): the model
+   * must then call a tool, and replying is one of them, so text cannot end that step and requiring
+   * a tool never forces an exit. It does not write the agent's `output.key`.
+   */
+  replyTool<T>(config: ReplyToolConfig<T>): FunctionTool<T, OutputSignal, never, S>
 
   toolInputsSchema(): z.ZodArray<z.ZodTypeAny>
 
@@ -969,6 +988,15 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
         timeout: toolConfig.timeout,
         retry: toolConfig.retry,
       }
+    },
+
+    replyTool<T>(replyConfig: ReplyToolConfig<T>): FunctionTool<T, OutputSignal, never, S> {
+      return this.tool<T, OutputSignal>({
+        name: replyConfig.name ?? 'reply',
+        description: replyConfig.description,
+        schema: replyConfig.schema,
+        execute: (ctx) => ctx.output(ctx.args),
+      })
     },
 
     toolInputsSchema(): z.ZodArray<z.ZodTypeAny> {

@@ -43,6 +43,7 @@ export type {
 
 /** @internal */
 export { createLiveVoiceHandler } from './live-handler'
+export { LiveContentFilterError } from './live-handler'
 export type {
   LiveVoiceControls,
   LiveVoiceContext,

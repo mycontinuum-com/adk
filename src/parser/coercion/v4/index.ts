@@ -4,7 +4,14 @@ import type { CoercionResult, JsonishValue } from '../../types'
 import type { CoercionContext } from '../context'
 
 import { jsonishToPlain } from '../../types'
-import { createContext, addCorrection, addError, totalScore, isMaxDepthExceeded } from '../context'
+import {
+  addCorrection,
+  addError,
+  branchContext,
+  createContext,
+  isMaxDepthExceeded,
+  totalScore,
+} from '../context'
 import {
   coerceArray,
   coerceObject,
@@ -143,7 +150,7 @@ function coerceNullableValue(value: unknown, def: SchemaDef, ctx: CoercionContex
 }
 
 function coerceCatchValue(value: unknown, def: SchemaDef, ctx: CoercionContext): unknown {
-  const testCtx = createContext(ctx.partial, ctx.visited)
+  const testCtx = branchContext(ctx)
   const result = coerceValue(value, def.innerType!, testCtx)
   if (testCtx.errors.length > 0) {
     const resolvedCatch = typeof def.catchValue === 'function' ? def.catchValue() : def.catchValue

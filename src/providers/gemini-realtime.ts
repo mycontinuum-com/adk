@@ -164,6 +164,11 @@ export class GeminiRealtimeTextAdapter implements ModelAdapter {
     this.wsConstructor = wsConstructor
   }
 
+  /** Closes a socket kept for tool results when the invocation ends on a tool, not a step. */
+  endInvocation(invocationId: string): void {
+    this.cleanupSession(invocationId)
+  }
+
   private cleanupSession(key: string) {
     const session = this.activeSessions.get(key)
     if (session) {

@@ -1,6 +1,6 @@
 import type { VoiceEvent } from './types'
 
-export interface InactivityTimerOptions {
+interface InactivityTimerOptions {
   /** Read at every start, so an agent transfer can change it. Unset disables the timer. */
   timeoutMs: () => number | undefined
   isActive: () => boolean

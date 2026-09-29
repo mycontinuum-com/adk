@@ -2,7 +2,7 @@ import type { AnyZodSchema } from '../../../types/zod'
 import type { Correction } from '../../types'
 import type { CoercionContext } from '../context'
 
-import { addCorrection, addError, createContext, totalScore } from '../context'
+import { addCorrection, addError, branchContext, totalScore } from '../context'
 
 export type CoerceValueFn<Schema extends AnyZodSchema> = (
   value: unknown,
@@ -18,7 +18,7 @@ export function coerceUnion<Schema extends AnyZodSchema>(
 ): unknown {
   if (ctx.unionVariantHint !== undefined && ctx.unionVariantHint < options.length) {
     const hintedOption = options[ctx.unionVariantHint]
-    const testCtx = createContext(ctx.partial, ctx.visited, ctx.depth)
+    const testCtx = branchContext(ctx)
     const coerced = coerceValue(value, hintedOption, testCtx)
 
     if (testCtx.errors.length === 0 && totalScore(testCtx.corrections) === 0) {
@@ -45,7 +45,7 @@ export function coerceUnion<Schema extends AnyZodSchema>(
 
   for (let i = 0; i < options.length; i++) {
     const option = options[i]
-    const testCtx = createContext(ctx.partial, ctx.visited, ctx.depth)
+    const testCtx = branchContext(ctx)
     const coerced = coerceValue(value, option, testCtx)
 
     if (testCtx.errors.length === 0) {
@@ -91,8 +91,8 @@ export function coerceIntersection<Schema extends AnyZodSchema>(
   ctx: CoercionContext,
   coerceValue: CoerceValueFn<Schema>,
 ): unknown {
-  const leftCtx = createContext(ctx.partial, ctx.visited, ctx.depth)
-  const rightCtx = createContext(ctx.partial, ctx.visited, ctx.depth)
+  const leftCtx = branchContext(ctx)
+  const rightCtx = branchContext(ctx)
 
   const leftResult = coerceValue(value, left, leftCtx)
   const rightResult = coerceValue(value, right, rightCtx)

@@ -69,6 +69,15 @@ export class LiveActivity {
     })
   }
 
+  /** Resolves every wait now as not met. */
+  giveUp(): void {
+    for (const waiter of this.waiting) {
+      clearTimeout(waiter.deadline)
+      waiter.resolve(false)
+    }
+    this.waiting.clear()
+  }
+
   private scheduleCheck(): void {
     this.settle = setTimeout(() => this.check(), this.settleMs)
   }

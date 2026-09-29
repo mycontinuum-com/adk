@@ -212,6 +212,21 @@ it('rejects lossy voice metric data before worker serialization', async () => {
       }),
     ),
   ).toContain('"newValue": true')
+  // State keeps what a JSON session store would: a callback held in state is dropped.
+  expect(
+    stringifyEvidence(
+      serializeEvent({
+        id: 'change',
+        createdAt: 0,
+        type: 'state_change',
+        scope: 'session',
+        source: 'mutation',
+        changes: [
+          { key: 'transfer', oldValue: undefined, newValue: [{ line: () => 'Stay', limit: 1 }] },
+        ],
+      }),
+    ),
+  ).toContain('"limit": 1')
   expect(stringifyEvidence({ evidence: ['kept'], data: { count: 2 } })).toBe(
     '{\n  "evidence": [\n    "kept"\n  ],\n  "data": {\n    "count": 2\n  }\n}',
   )
@@ -234,6 +249,28 @@ it('records a voice worker that exits without a result as a case error and retai
     '[adk/voice-eval] case-0: Worker exited with code 1 without producing a result',
   )
   expect(result.summary.errors).toBe(1)
+})
+
+it('keeps a voice event error as its safe fields for voice worker IPC', () => {
+  const serialized = serializeWorkerResult({
+    name: 'voice',
+    status: 'passed',
+    metrics: {},
+    run: {
+      ...voiceRun(),
+      voiceEvents: [
+        { type: 'voice_error', error: new TypeError('Caller said 01 Jan 1980'), createdAt: 1 },
+      ],
+    },
+    durationMs: 1,
+  })
+  expect(JSON.parse(serialized).run.voiceEvents).toEqual([
+    {
+      type: 'voice_error',
+      error: { errorName: 'TypeError' },
+      createdAt: 1,
+    },
+  ])
 })
 
 it('rejects a non-JSON event before voice worker IPC', () => {

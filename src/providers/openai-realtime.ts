@@ -48,6 +48,11 @@ export class OpenAIRealtimeTextAdapter implements ModelAdapter {
     this.wsConstructor = wsConstructor
   }
 
+  /** Closes a socket kept for tool results when the invocation ends on a tool, not a step. */
+  endInvocation(invocationId: string): void {
+    this.cleanupSession(invocationId)
+  }
+
   private cleanupSession(key: string) {
     const session = this.activeSessions.get(key)
     if (session) {
@@ -91,12 +96,7 @@ export class OpenAIRealtimeTextAdapter implements ModelAdapter {
     }
     const WSCtor = loadWebSocket(this.wsConstructor)
     const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(config.name)}`
-    const ws = new WSCtor(url, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'OpenAI-Beta': 'realtime=v1',
-      },
-    })
+    const ws = new WSCtor(url, { headers: { Authorization: `Bearer ${apiKey}` } })
 
     let keepAlive = false
     const onAbort = () => ws.close()
@@ -113,20 +113,19 @@ export class OpenAIRealtimeTextAdapter implements ModelAdapter {
       const rtConfig =
         ctx.agent?.model && isRealtimeConfig(ctx.agent.model) ? ctx.agent.model : undefined
 
+      // The GA session has no temperature field, so `config.temperature` is not sent.
       send(ws, {
         type: 'session.update',
         session: {
-          modalities: ['text'],
+          type: 'realtime',
+          output_modalities: ['text'],
           instructions: extractInstructions(ctx),
           tools,
-          turn_detection: null,
-          ...(rtConfig?.voice && { voice: rtConfig.voice }),
-          ...(config.temperature != null && {
-            temperature: config.temperature,
-          }),
-          ...(config.maxTokens != null && {
-            max_response_output_tokens: config.maxTokens,
-          }),
+          audio: {
+            input: { turn_detection: null },
+            ...(rtConfig?.voice && { output: { voice: rtConfig.voice } }),
+          },
+          ...(config.maxTokens != null && { max_output_tokens: config.maxTokens }),
         },
       })
 
@@ -242,7 +241,7 @@ function createOpenAIClassifier(): RealtimeEventClassifier {
       const type = raw.type as string
 
       switch (type) {
-        case 'response.text.delta': {
+        case 'response.output_text.delta': {
           return [{ kind: 'text_delta', delta: (raw as any).delta }]
         }
 
@@ -331,7 +330,7 @@ function serializeConversation(ctx: RenderContext): Array<Record<string, unknown
         items.push({
           type: 'message',
           role: 'assistant',
-          content: [{ type: 'text', text: event.text }],
+          content: [{ type: 'output_text', text: event.text }],
         })
         break
       case 'tool_call': {
