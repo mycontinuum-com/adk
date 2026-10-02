@@ -5,6 +5,7 @@ import { z } from 'zod'
 
 import type { Event } from '../types/events'
 import type {
+  LiveVoiceActivityContext,
   LiveVoiceErrorContext,
   LiveVoiceExitContext,
   LiveVoiceResultContext,
@@ -124,6 +125,8 @@ async function fixture(
     speakingAgent?: boolean
     timeouts?: { inactivity?: number; expiry?: number }
     lifecycle?: Pick<LiveVoiceHook, 'onInactivity' | 'onExpiry'>
+    /** Further hooks after the fixture's own, such as `onVoiceActivity` hooks. */
+    extraHooks?: LiveVoiceHook[]
     recording?: RecordingConfig
     sound?: { noiseCancellation?: NoiseCancellationType }
     /** Per-call recording and noise settings returned by `setup`. */
@@ -393,6 +396,7 @@ async function fixture(
           onExit: exited,
         },
         ...(options.lifecycle ? [options.lifecycle] : []),
+        ...(options.extraHooks ?? []),
       ],
     },
     { app, store, sessionService: sessionService(store) },
@@ -1938,6 +1942,320 @@ test('a result hook that resumes after close does not write the finalized call',
   expect({ events: latest!.events, state: latest!.state }).toEqual({
     events: finalized!.events,
     state: finalized!.state,
+  })
+})
+
+/** The `activity` field of each logged `onVoiceActivity` hook failure. */
+function activityHookFailures(logError: { mock: { calls: Array<[unknown, string]> } }): unknown[] {
+  return logError.mock.calls.flatMap(([fields, message]) =>
+    message === 'Live onVoiceActivity hook failed' &&
+    typeof fields === 'object' &&
+    fields !== null &&
+    'activity' in fields
+      ? [fields.activity]
+      : [],
+  )
+}
+
+describe('voice activity hooks', () => {
+  /** A fixture whose one `onVoiceActivity` hook records each event and keeps the latest context. */
+  async function watched(options: Parameters<typeof fixture>[0] = {}) {
+    const seen: Array<{ type: string; sinceRun: string[] }> = []
+    let latest: LiveVoiceActivityContext | undefined
+    const f = await fixture({
+      ...options,
+      extraHooks: [
+        ...(options.extraHooks ?? []),
+        {
+          onVoiceActivity(ctx) {
+            latest = ctx
+            seen.push({ type: ctx.activity.type, sinceRun: ctx.sinceRun.map(({ type }) => type) })
+          },
+        },
+      ],
+    })
+    const settled = () => vi.waitFor(() => expect(seen.at(-1)?.type).toBe('run_settled'))
+    return { f, seen, settled, latest: () => latest! }
+  }
+
+  test('reports voice events in order, each with the events since the latest run', async () => {
+    const { f, seen, settled } = await watched()
+    const call = await f.call()
+    call.session.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
+    call.session.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
+    speaking(call.session)
+    listening(call.session)
+    call.live.dispatch('d1', 'Tuesday')
+    await settled()
+    // The fixture's opening transcript arrives once the call has entered.
+    const types = seen.map(({ type }) => type)
+    expect(types).toEqual([
+      'caller_transcript',
+      'agent_transcript',
+      'caller_started_speaking',
+      'caller_stopped_speaking',
+      'agent_started_speaking',
+      'agent_stopped_speaking',
+      'caller_transcript',
+      'run_started',
+      'run_settled',
+    ])
+    expect(seen[6]!.sinceRun).toEqual(types.slice(0, 7))
+    expect(seen[7]!.sinceRun).toEqual(['run_started'])
+    expect(seen[8]!.sinceRun).toEqual(['run_started', 'run_settled'])
+    await call.shutdown()
+  })
+
+  test('events since the latest run, read after later events, still end at their own event', async () => {
+    const contexts: LiveVoiceActivityContext[] = []
+    const { f, settled } = await watched({
+      extraHooks: [{ onVoiceActivity: (ctx) => void contexts.push(ctx) }],
+    })
+    const call = await f.call()
+    speaking(call.session)
+    listening(call.session)
+    call.live.dispatch('d1', 'Tuesday')
+    await settled()
+    expect(contexts.map((ctx) => ctx.sinceRun.map(({ type }) => type))).toEqual([
+      ['caller_transcript'],
+      ['caller_transcript', 'agent_transcript'],
+      ['caller_transcript', 'agent_transcript', 'agent_started_speaking'],
+      ['caller_transcript', 'agent_transcript', 'agent_started_speaking', 'agent_stopped_speaking'],
+      [
+        'caller_transcript',
+        'agent_transcript',
+        'agent_started_speaking',
+        'agent_stopped_speaking',
+        'caller_transcript',
+      ],
+      ['run_started'],
+      ['run_started', 'run_settled'],
+    ])
+    await call.shutdown()
+  })
+
+  test('a trigger runs the backend on caller speech no run has had, answering no delegation', async () => {
+    const { f, latest, settled } = await watched()
+    const call = await f.call()
+    expect(latest().runBackend()).toBe(true)
+    await vi.waitFor(() => expect(given(call.live, 'first')).toHaveLength(1))
+    expect(f.started).toEqual(['first'])
+    expect(given(call.live, 'first')[0]!.delegationId).toBeUndefined()
+    await settled()
+    await call.shutdown()
+  })
+
+  test('a trigger never runs speech a run has had', async () => {
+    const { f, latest, settled } = await watched()
+    const call = await f.call()
+    expect(latest().runBackend()).toBe(true)
+    await settled()
+    expect(latest().runBackend()).toBe(false)
+    // Nor speech GPT Live delegated.
+    call.live.dispatch('d1', 'Tuesday')
+    await settled()
+    expect(latest().runBackend()).toBe(false)
+    expect(f.started).toEqual(['first', 'second'])
+    await call.shutdown()
+  })
+
+  test('a trigger while a run is in flight runs nothing; once it settles, the later speech runs', async () => {
+    const work = gate()
+    const { f, latest, settled } = await watched({ gates: { first: work } })
+    const call = await f.call()
+    call.live.dispatch('d1', 'Book it')
+    await vi.waitFor(() => expect(f.started).toEqual(['first']))
+    call.live.fragment('user', ' and Friday', 'input-late')
+    expect(latest().runBackend()).toBe(false)
+    work.release()
+    await settled()
+    expect(latest().runBackend()).toBe(true)
+    await vi.waitFor(() => expect(f.started).toEqual(['first', 'second']))
+    await call.shutdown()
+  })
+
+  test('a trigger runs nothing once the call has stopped', async () => {
+    const { f, latest } = await watched()
+    const call = await f.call()
+    const ctx = latest()
+    await call.shutdown()
+    expect(ctx.runBackend()).toBe(false)
+    expect(f.started).toEqual([])
+  })
+
+  test('an event a hook causes reaches every hook after the one it was handling', async () => {
+    const { f, seen } = await watched({
+      extraHooks: [
+        {
+          onVoiceActivity(ctx) {
+            if (ctx.activity.type === 'caller_transcript') ctx.runBackend()
+          },
+        },
+      ],
+    })
+    const call = await f.call()
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    expect(seen.slice(0, 3)).toEqual([
+      { type: 'caller_transcript', sinceRun: ['caller_transcript'] },
+      { type: 'run_started', sinceRun: ['run_started'] },
+      { type: 'agent_transcript', sinceRun: ['run_started', 'agent_transcript'] },
+    ])
+    await call.shutdown()
+  })
+
+  test('a trigger at a silence timeout replaces its silence prompt and is not counted', async () => {
+    let silences = 0
+    const prompts: Array<{ inactivityCount: number; silences: number }> = []
+    const f = await fixture({
+      timeouts: { inactivity: 40 },
+      lifecycle: {
+        onInactivity({ inactivityCount }) {
+          prompts.push({ inactivityCount, silences })
+          return false
+        },
+      },
+      extraHooks: [
+        {
+          onVoiceActivity(ctx) {
+            if (ctx.activity.type !== 'silence_timeout') return
+            silences++
+            ctx.runBackend()
+          },
+        },
+      ],
+    })
+    const call = await f.call()
+    // GPT Live answered the opening itself, so the silence rule would prompt: the hook runs it.
+    await vi.waitFor(() => expect(prompts).toHaveLength(1), { interval: 5 })
+    // The next silence has nothing new to run, so it is the first prompted, and counted, silence.
+    expect(prompts).toEqual([{ inactivityCount: 0, silences: 2 }])
+    expect(f.started).toEqual(['first'])
+    await call.shutdown()
+  })
+
+  test('a silence waits for an async activity hook, so its later trigger still runs the backend', async () => {
+    let triggered = false
+    const runsAtPrompts: number[] = []
+    const f = await fixture({
+      timeouts: { inactivity: 40 },
+      lifecycle: {
+        onInactivity() {
+          runsAtPrompts.push(f.started.length)
+          return false
+        },
+      },
+      extraHooks: [
+        {
+          async onVoiceActivity(ctx) {
+            if (ctx.activity.type !== 'silence_timeout' || triggered) return
+            triggered = true
+            await new Promise((resolve) => setTimeout(resolve, 20))
+            ctx.runBackend()
+          },
+        },
+      ],
+    })
+    const call = await f.call()
+    // GPT Live answered the opening itself, so the silence rule alone would prompt without a run.
+    await vi.waitFor(() => expect(runsAtPrompts).toHaveLength(1), { interval: 5 })
+    expect(f.started).toEqual(['first'])
+    expect(runsAtPrompts).toEqual([1])
+    await call.shutdown()
+  })
+
+  test('a GPT Live delegation while silence hooks wait answers that silence', async () => {
+    const hookWait = gate()
+    const work = gate()
+    let silences = 0
+    const prompts: number[] = []
+    const f = await fixture({
+      gates: { first: work },
+      timeouts: { inactivity: 40 },
+      lifecycle: {
+        onInactivity() {
+          prompts.push(silences)
+          return false
+        },
+      },
+      extraHooks: [
+        {
+          async onVoiceActivity(ctx) {
+            if (ctx.activity.type !== 'silence_timeout') return
+            silences++
+            if (silences === 1) await hookWait.promise
+          },
+        },
+      ],
+    })
+    const call = await f.call()
+    await vi.waitFor(() => expect(silences).toBe(1), { interval: 5 })
+    call.live.dispatch('d1', 'Tuesday')
+    await vi.waitFor(() => expect(f.started).toEqual(['first']))
+    // The silence is decided while the delegation's run is in flight.
+    hookWait.release()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    work.release()
+    await vi.waitFor(() => expect(prompts).toHaveLength(1), { interval: 5 })
+    // The silence the delegation answered is not prompted; the next one is.
+    expect(prompts).toEqual([2])
+    await call.shutdown()
+  })
+
+  test('no silence fires while an earlier one waits for its hooks', async () => {
+    let silences = 0
+    const prompts: Array<{ inactivityCount: number; runs: number }> = []
+    const f = await fixture({
+      timeouts: { inactivity: 40 },
+      lifecycle: {
+        onInactivity({ inactivityCount }) {
+          prompts.push({ inactivityCount, runs: f.started.length })
+          return false
+        },
+      },
+      extraHooks: [
+        {
+          async onVoiceActivity(ctx) {
+            if (ctx.activity.type !== 'silence_timeout' || ++silences > 1) return
+            // Longer than a silence, then run the backend.
+            await new Promise((resolve) => setTimeout(resolve, 120))
+            ctx.runBackend()
+          },
+        },
+      ],
+    })
+    const call = await f.call()
+    await vi.waitFor(() => expect(prompts).toHaveLength(1), { interval: 5 })
+    // The first silence was answered by the run and not counted.
+    expect(prompts).toEqual([{ inactivityCount: 0, runs: 1 }])
+    await call.shutdown()
+  })
+
+  test('a failing activity hook is logged without its message and changes nothing', async () => {
+    const { f, seen, settled } = await watched({
+      extraHooks: [
+        {
+          onVoiceActivity() {
+            throw new Error('Synthetic caller words')
+          },
+        },
+        {
+          async onVoiceActivity() {
+            throw new Error('Synthetic caller words')
+          },
+        },
+      ],
+    })
+    const call = await f.call()
+    call.live.dispatch('d1', 'Tuesday')
+    await settled()
+    expect(f.result).toHaveBeenCalledTimes(1)
+    // Each event's throw and rejection are both logged, with the event.
+    await vi.waitFor(() => expect(activityHookFailures(f.logError)).toHaveLength(seen.length * 2))
+    expect(activityHookFailures(f.logError).sort()).toEqual(
+      seen.flatMap(({ type }) => [type, type]).sort(),
+    )
+    expect(JSON.stringify(f.logError.mock.calls)).not.toContain('Synthetic caller words')
+    await call.shutdown()
   })
 })
 

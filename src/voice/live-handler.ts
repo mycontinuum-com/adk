@@ -9,6 +9,8 @@ import type { GPTLiveTranscript, GPTLiveTranscriptSnapshot } from './gpt-live-tr
 import type { GPTLiveRealtime, GPTLiveSession } from './live-model'
 import type {
   LiveCallUsage,
+  LiveVoiceActivity,
+  LiveVoiceActivityContext,
   LiveVoiceContext,
   LiveVoiceControls,
   LiveVoiceDelegation,
@@ -134,6 +136,10 @@ const providerErrorEvent = z.object({
     .optional(),
 })
 
+const transcriptDelta = z.object({
+  type: z.enum(['session.input_transcript.delta', 'session.output_transcript.delta']),
+})
+
 /** What the connection after a moderation stop is told in place of the conversation. */
 const RESTARTED_AFTER_MODERATION =
   'The connection restarted mid-call and the conversation so far is not shown. Do not greet the caller or start the conversation again: delegate what they say, and say what you are given.'
@@ -229,6 +235,36 @@ function liveContext<S extends StateSchema>(
 }
 
 /**
+ * What an `onVoiceActivity` hook gets for one event. `sinceRun` is the run's event list through
+ * this event, copied only when a hook reads it, since the list grows with every transcript delta.
+ */
+class LiveActivityContext implements LiveVoiceActivityContext {
+  readonly callId: string
+  readonly voice: LiveVoiceControls
+  readonly transcript: GPTLiveTranscript
+  private readonly through: number
+  private copy: readonly LiveVoiceActivity[] | undefined
+
+  constructor(
+    context: LiveVoiceContext<StateSchema>,
+    readonly activity: LiveVoiceActivity,
+    /** The latest run's events, which later events of that run are appended to. */
+    private readonly run: readonly LiveVoiceActivity[],
+    readonly runBackend: () => boolean,
+  ) {
+    this.callId = context.callId
+    this.voice = context.voice
+    this.transcript = context.transcript
+    this.through = run.length
+  }
+
+  get sinceRun(): readonly LiveVoiceActivity[] {
+    this.copy ??= this.run.slice(0, this.through)
+    return this.copy
+  }
+}
+
+/**
  * One accepted call. Delegations run one at a time through `queue`, so the call session has a
  * single workflow-state writer. `close()` finalizes the call once.
  */
@@ -272,10 +308,7 @@ class LiveCall<S extends StateSchema, T> {
   private readonly silence = createInactivityTimer({
     timeoutMs: () => this.runtime.config.timeouts?.inactivity,
     isActive: () => !this.stopped && this.context !== undefined,
-    onTimeout: (inactivityCount, timeoutId) => {
-      if (this.delegateUnanswered()) this.silence.callerUnanswered(timeoutId)
-      else this.lifecycle('onInactivity', 'inactivity', inactivityCount, timeoutId)
-    },
+    onTimeout: (inactivityCount, timeoutId) => this.silenceTimedOut(inactivityCount, timeoutId),
     emit: () => {},
   })
   private expiry: ReturnType<typeof setTimeout> | undefined
@@ -289,6 +322,23 @@ class LiveCall<S extends StateSchema, T> {
   private readonly undelegated = new WeakSet<LiveVoiceDelegation>()
   /** Transcript receipt the latest admitted run was given, so no speech is run on twice. */
   private admittedThrough = 0
+  /** Runs admitted so far, whatever started them. */
+  private runsAdmitted = 0
+  /** Silences whose hooks have not settled yet. A silence being decided is not a new silence. */
+  private decidingSilences = 0
+  /** Voice activity since the latest run started, for `onVoiceActivity` hooks. */
+  private sinceRun: LiveVoiceActivity[] = []
+  /**
+   * Activity waiting for the hooks, so an event a hook causes follows the one it is handling, with
+   * the promises its hooks return once they have had it.
+   */
+  private readonly activityOutbox: Array<{
+    ctx: LiveActivityContext
+    pending: Array<Promise<void>>
+  }> = []
+  private dispatchingActivity = false
+  /** Transcript receipt of the latest provider event seen, so each delta is reported once. */
+  private observedThrough = 0
 
   constructor(
     private readonly runtime: LiveRuntime<S, T>,
@@ -329,11 +379,13 @@ class LiveCall<S extends StateSchema, T> {
       this.activity.userState(event.newState)
       if (event.newState === 'speaking') this.silence.callerStartedSpeaking()
       else if (event.oldState === 'speaking') this.silence.callerStoppedSpeaking()
+      this.notifySpeaking('caller', event.oldState, event.newState)
     })
     this.voiceSession.on(events.AgentStateChanged, (event) => {
       this.activity.agentState(event.newState)
       this.agentState = event.newState
       this.syncAgentActivity()
+      this.notifySpeaking('agent', event.oldState, event.newState)
     })
     this.voiceSession.on(events.SpeechCreated, () => this.silence.agentReplyCreated())
     const expiryMs = this.runtime.config.timeouts?.expiry
@@ -359,6 +411,7 @@ class LiveCall<S extends StateSchema, T> {
     // A line the muted caller is waiting to hear counts too, so no silence prompt fires before it.
     const active =
       this.delegating > 0 ||
+      this.decidingSilences > 0 ||
       this.uninterrupted !== undefined ||
       this.agentState === 'speaking' ||
       this.agentState === 'thinking'
@@ -379,6 +432,7 @@ class LiveCall<S extends StateSchema, T> {
     reason: string,
     inactivityCount = 0,
     timeoutId = 0,
+    turns = this.activity.callerTurns,
   ): void {
     const context = this.context
     if (this.stopped) return
@@ -386,7 +440,6 @@ class LiveCall<S extends StateSchema, T> {
       this.requestEnd(reason)
       return
     }
-    const turns = this.activity.callerTurns
     this.queue = this.queue
       .then(async () => {
         if (this.stopped) return
@@ -429,6 +482,7 @@ class LiveCall<S extends StateSchema, T> {
       let contentFiltered = false
       live.on('openai_server_event_received', (event) => {
         this.meter.observeServerEvent(event, live.sessionId ?? undefined)
+        this.notifyTranscript(event)
         const providerError = providerErrorEvent.safeParse(event)
         if (providerError.success)
           this.log(
@@ -655,18 +709,141 @@ class LiveCall<S extends StateSchema, T> {
    * every recorded caller turn within 3 s of their last words, so the timeout is long past that.
    */
   private delegateUnanswered(): boolean {
-    const live = this.live
-    const connectionId = live?.sessionId
-    if (!live || !connectionId || this.stopped || this.delegating > 0) return false
+    const connectionId = this.live?.sessionId
+    if (!connectionId) return false
     const latest = this.transcript
       .snapshot()
       .observations.findLast((observation) => observation.connection.id === connectionId)
-    if (latest?.payload.kind !== 'transcript' || latest.sequence <= this.admittedThrough)
-      return false
+    if (latest?.payload.kind !== 'transcript') return false
     if (latest.payload.event.type !== 'session.input_transcript.delta') return false
+    if (!this.runBackend()) return false
     this.log({ callId: this.context?.callId }, 'Live caller speech not delegated')
-    this.admit(live, `undelegated-${randomUUID()}`, false)
     return true
+  }
+
+  private silenceTimedOut(inactivityCount: number, timeoutId: number): void {
+    const runs = this.runsAdmitted
+    const turns = this.activity.callerTurns
+    const hooks = this.notify({ type: 'silence_timeout', inactivityCount, at: Date.now() })
+    this.decidingSilences++
+    void this.decideSilence(Promise.all(hooks), inactivityCount, timeoutId, runs, turns)
+  }
+
+  /**
+   * Decides what a silence calls for once its `onVoiceActivity` hooks settle, or after
+   * `backendTimeoutMs`, so a hook that awaits before `runBackend()` answers it. Until then the
+   * silence timer is held, so no later silence overlaps it. A run admitted after the silence fired,
+   * by a hook or GPT Live, answers it, as does caller speech GPT Live left unanswered. Caller
+   * speech since it fired leaves it to the lifecycle, which skips it.
+   */
+  private async decideSilence(
+    hooks: Promise<unknown>,
+    inactivityCount: number,
+    timeoutId: number,
+    runs: number,
+    turns: number,
+  ): Promise<void> {
+    try {
+      // The timer restarts once this timeout returns; hold it from then on.
+      await Promise.resolve()
+      this.syncAgentActivity()
+      await settlesWithin(hooks, this.runtime.timeout)
+      if (
+        this.runsAdmitted > runs ||
+        (this.activity.callerTurns === turns && this.delegateUnanswered())
+      )
+        this.silence.callerUnanswered(timeoutId)
+      else this.lifecycle('onInactivity', 'inactivity', inactivityCount, timeoutId, turns)
+    } finally {
+      this.decidingSilences--
+      this.syncAgentActivity()
+    }
+  }
+
+  /**
+   * Runs the backend on caller speech on the current connection that no run has been given, unless
+   * a run has not settled yet. The run answers no delegation of GPT Live's. An arrow, so a hook can
+   * call it detached from its context.
+   */
+  private readonly runBackend = (): boolean => {
+    const live = this.live
+    const connectionId = live?.sessionId
+    if (!live || !connectionId || this.stopped || this.delegating > 0) return false
+    const pending = this.transcript
+      .snapshot()
+      .fragments.some(
+        (fragment) =>
+          fragment.speaker === 'caller' &&
+          fragment.connection.id === connectionId &&
+          fragment.sequence > this.admittedThrough,
+      )
+    if (pending) this.admit(live, `undelegated-${randomUUID()}`, false)
+    return pending
+  }
+
+  private notifySpeaking(who: 'agent' | 'caller', oldState: string, newState: string): void {
+    if (newState === 'speaking') this.notify({ type: `${who}_started_speaking`, at: Date.now() })
+    else if (oldState === 'speaking')
+      this.notify({ type: `${who}_stopped_speaking`, at: Date.now() })
+  }
+
+  /** Reports a transcript delta that the recorder, which listens first, has just recorded. */
+  private notifyTranscript(event: unknown): void {
+    const sequence = this.transcript.receivedThrough
+    const recorded = sequence !== this.observedThrough
+    this.observedThrough = sequence
+    const delta = transcriptDelta.safeParse(event)
+    if (!recorded || !delta.success) return
+    const type =
+      delta.data.type === 'session.input_transcript.delta'
+        ? 'caller_transcript'
+        : 'agent_transcript'
+    this.notify({ type, sequence, at: Date.now() })
+  }
+
+  /**
+   * Gives an event to the `onVoiceActivity` hooks once the call has entered. An event raised while
+   * the hooks handle another waits until every hook has had that one. Returns the promises, which
+   * never reject, that the hooks return for this event once they have had it.
+   */
+  private notify(activity: LiveVoiceActivity): Array<Promise<void>> {
+    const pending: Array<Promise<void>> = []
+    const context = this.context
+    if (!context || this.stopped || !this.runtime.hooks.some((hook) => hook.onVoiceActivity))
+      return pending
+    if (activity.type === 'run_started') this.sinceRun = []
+    this.sinceRun.push(activity)
+    const ctx = new LiveActivityContext(context, activity, this.sinceRun, this.runBackend)
+    this.activityOutbox.push({ ctx, pending })
+    if (this.dispatchingActivity) return pending
+    this.dispatchingActivity = true
+    try {
+      for (let next = this.activityOutbox.shift(); next; next = this.activityOutbox.shift())
+        this.dispatchActivity(next.ctx, next.pending)
+    } finally {
+      this.dispatchingActivity = false
+    }
+    return pending
+  }
+
+  private dispatchActivity(ctx: LiveActivityContext, pending: Array<Promise<void>>): void {
+    for (const hook of this.runtime.hooks) {
+      if (!hook.onVoiceActivity) continue
+      try {
+        const result = hook.onVoiceActivity(ctx)
+        if (result)
+          pending.push(result.catch((error: unknown) => this.activityHookFailed(ctx, error)))
+      } catch (error) {
+        this.activityHookFailed(ctx, error)
+      }
+    }
+  }
+
+  private activityHookFailed(ctx: LiveVoiceActivityContext, error: unknown): void {
+    this.log(
+      { callId: ctx.callId, activity: ctx.activity.type, ...safeErrorFields(error) },
+      'Live onVoiceActivity hook failed',
+    )
   }
 
   /** Freezes the transcript snapshot synchronously, then queues the delegation. */
@@ -688,7 +865,9 @@ class LiveCall<S extends StateSchema, T> {
     let active = true
     const voice = this.controls(live, delegation, () => active)
     this.delegating++
+    this.runsAdmitted++
     this.syncAgentActivity()
+    this.notify({ type: 'run_started', delegation, at: Date.now() })
     this.queue = this.queue
       .then(() => this.execute(live, delegation, snapshot, voice, callerTurns))
       .catch((error) => this.onDelegationError(error, delegation, voice))
@@ -696,6 +875,7 @@ class LiveCall<S extends StateSchema, T> {
         active = false
         this.delegating--
         this.syncAgentActivity()
+        this.notify({ type: 'run_settled', delegation, at: Date.now() })
       })
   }
 

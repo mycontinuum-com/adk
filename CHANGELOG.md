@@ -31,6 +31,16 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## [0.6.3] - Unreleased
+
+### Added
+
+- `LiveVoiceHook.onVoiceActivity` — gives the app each GPT Live voice lifecycle event (`LiveVoiceActivity`): agent and caller speaking starts and stops, transcript deltas by receipt sequence, backend runs started and settled, and silence timeouts. `LiveVoiceActivityContext` holds the events since the latest run (`sinceRun`) and `runBackend()`, which runs the backend on the caller speech no run has been given, as the silence rule does. A trigger while a run is in flight runs nothing and returns `false`. The handler waits for the hooks' promises for a `silence_timeout`, up to `backendTimeoutMs` and with the silence timer held, before deciding what the silence calls for, so a hook can await before triggering at a silence; any run admitted meanwhile answers the silence.
+
+### Internal
+
+- The silence rule that runs undelegated caller speech goes through the same trigger as `runBackend()`; its behaviour is unchanged.
+
 ## [0.6.2] - Unreleased
 
 ### Added

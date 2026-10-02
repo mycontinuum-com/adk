@@ -45,6 +45,8 @@ export type {
 export { createLiveVoiceHandler } from './live-handler'
 export { LiveContentFilterError } from './live-handler'
 export type {
+  LiveVoiceActivity,
+  LiveVoiceActivityContext,
   LiveVoiceControls,
   LiveVoiceContext,
   LiveVoiceResultContext,

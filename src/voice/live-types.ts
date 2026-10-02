@@ -106,11 +106,63 @@ interface LiveVoiceInactivityContext<
   readonly inactivityCount: number
 }
 
+/**
+ * One voice lifecycle event on a GPT Live call, at `at` (epoch milliseconds). Speaking events come
+ * from LiveKit's AgentSession states. Transcript events carry the receipt `sequence` of one
+ * transcript delta, never its words.
+ */
+export type LiveVoiceActivity = { readonly at: number } & (
+  | {
+      readonly type:
+        | 'agent_started_speaking'
+        | 'agent_stopped_speaking'
+        | 'caller_started_speaking'
+        | 'caller_stopped_speaking'
+    }
+  | { readonly type: 'caller_transcript' | 'agent_transcript'; readonly sequence: number }
+  | { readonly type: 'run_started' | 'run_settled'; readonly delegation: LiveVoiceDelegation }
+  | { readonly type: 'silence_timeout'; readonly inactivityCount: number }
+)
+
+/**
+ * Given to `onVoiceActivity` for each event. It has no `session` or `state`: the hook runs as the
+ * event happens, outside the queue that keeps the call's one state writer.
+ */
+export interface LiveVoiceActivityContext {
+  readonly callId: string
+  readonly voice: LiveVoiceControls
+  readonly transcript: GPTLiveTranscript
+  readonly activity: LiveVoiceActivity
+  /**
+   * Events since the latest backend run started, in order, through this one. It restarts with each
+   * `run_started`, whatever started the run, which is its first event. Its `caller_transcript`
+   * events are the caller speech no run has been given; their words are in `transcript`.
+   */
+  readonly sinceRun: readonly LiveVoiceActivity[]
+  /**
+   * Runs the backend on the caller speech no run has been given, as a GPT Live delegation would:
+   * the run gets the transcript so far, result and error hooks run as for a delegation, and its
+   * lines answer no delegation. Returns `false`, and nothing runs, when there is no such speech on
+   * this connection, when a run has started and not settled (the trigger is not queued; call again
+   * on a later event), or when the call has stopped. So a trigger never runs speech a run has had.
+   */
+  runBackend(): boolean
+}
+
 /** `false` keeps the call. Anything else, including a throw, lets it end. */
 type LiveLifecycleHookResult = void | boolean | Promise<void | boolean>
 
 export interface LiveVoiceHook<S extends StateSchema = StateSchema, T = unknown> {
   onEnter?(ctx: LiveVoiceContext<S>): void | Promise<void>
+  /**
+   * Each voice lifecycle event from the call's entry, as it happens; hooks in registration order.
+   * An event a hook causes, such as `run_started` from `runBackend()`, reaches every hook after the
+   * current event has. A throw or rejection is logged and changes nothing. The handler waits, up to
+   * `backendTimeoutMs`, for the promises returned for a `silence_timeout`, and no other event's,
+   * before it decides what the silence calls for, so a hook can await before calling `runBackend()`
+   * at a silence.
+   */
+  onVoiceActivity?(ctx: LiveVoiceActivityContext): void | Promise<void>
   /** Each time neither the caller nor the agent has spoken for `timeouts.inactivity`. */
   onInactivity?(ctx: LiveVoiceInactivityContext<S>): LiveLifecycleHookResult
   /** Once, when the call reaches `timeouts.expiry`. */
