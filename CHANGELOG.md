@@ -36,6 +36,7 @@ Migration section:
 ### Added
 
 - `LiveVoiceHook.onVoiceActivity` — gives the app each GPT Live voice lifecycle event (`LiveVoiceActivity`): agent and caller speaking starts and stops, transcript deltas by receipt sequence, backend runs started and settled, and silence timeouts. `LiveVoiceActivityContext` holds the events since the latest run (`sinceRun`) and `runBackend()`, which runs the backend on the caller speech no run has been given, as the silence rule does. A trigger while a run is in flight runs nothing and returns `false`. The handler waits for the hooks' promises for a `silence_timeout`, up to `backendTimeoutMs` and with the silence timer held, before deciding what the silence calls for, so a hook can await before triggering at a silence; any run admitted meanwhile answers the silence.
+- GPT Live plays `sound.backgroundAudio.thinking` while a delegation is pending. It plays on under GPT Live speech during a run and stops once GPT Live starts speaking the answer. With overlapping delegations it pauses while GPT Live speaks the answer to a run that has ended and resumes for the delegations still pending. A player that fails during the call is logged as `Live thinking sound unavailable` and the call goes on without the sound. `LiveVoiceHandlerConfig.sound` is now `SoundConfig`. A voice eval's simulated caller does not hear the sound: it hears the agent's microphone track only, as before.
 
 ### Internal
 

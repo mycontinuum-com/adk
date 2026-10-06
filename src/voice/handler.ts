@@ -17,7 +17,6 @@ import type { Session, SessionService } from '../types/session'
 import type {
   LKAgentSession,
   LKBackgroundAudioPlayer,
-  LKPlayHandle,
   LKImports,
   VoiceDeps,
   JobContext,
@@ -33,6 +32,7 @@ import type {
   LifecycleHookResult,
   VoiceEvent,
   NoiseCancellationType,
+  SoundConfig,
 } from './types'
 
 import { buildContextAsync } from '../context/build'
@@ -55,6 +55,7 @@ import {
 import { seedState, BaseSession } from '../session'
 import { isSystemEvent } from '../types/events'
 import { applySchemaDefaults } from '../types/schema'
+import { createThinkingSound, preloadAudioFrames, type ThinkingSound } from './background-audio'
 import {
   createForcedToolGate,
   ForcedToolCallError,
@@ -231,6 +232,19 @@ async function startBackgroundAudio(
     /* best-effort */
   }
   return bgAudio
+}
+
+/** The configured thinking sound on the background audio player, when both are available. */
+async function loadThinkingSound(
+  lk: LKImports,
+  bgAudio: LKBackgroundAudioPlayer | undefined,
+  sound: SoundConfig | undefined,
+): Promise<ThinkingSound | undefined> {
+  const thinkingCfg = sound?.backgroundAudio?.thinking
+  if (!thinkingCfg) return undefined
+  const frames = await preloadAudioFrames(lk, thinkingCfg.source)
+  if (!bgAudio || !frames) return undefined
+  return createThinkingSound(bgAudio, frames, thinkingCfg.volume ?? 1)
 }
 
 // --- Entry function factory ---
@@ -895,36 +909,16 @@ function createEntryFunction<S extends StateSchema>(
       // the sound bridges tool completion to follow-up speech.
       const SPEECH_WAIT_MS = 1000
 
-      const thinkingCfg = config.sound?.backgroundAudio?.thinking
       let bgAudio: LKBackgroundAudioPlayer | undefined
-      let thinkingHandle: LKPlayHandle | undefined
       let speechWaitTimer: ReturnType<typeof setTimeout> | undefined
-      let cachedThinkingFrames: unknown[] | undefined
 
       if (lk.voice.BackgroundAudioPlayer) {
         bgAudio = await startBackgroundAudio(lk, ctx.room, voiceSession)
       }
 
-      if (thinkingCfg) {
-        cachedThinkingFrames = await preloadAudioFrames(lk, thinkingCfg.source)
-      }
-
-      const playThinking = () => {
-        if (!bgAudio || !cachedThinkingFrames) return
-        if (thinkingHandle && !thinkingHandle.done()) return
-        thinkingHandle = bgAudio.play(
-          {
-            source: loopFrames(cachedThinkingFrames),
-            volume: thinkingCfg!.volume ?? 1,
-          },
-          false,
-        )
-      }
-
-      const stopThinking = () => {
-        thinkingHandle?.stop()
-        thinkingHandle = undefined
-      }
+      const thinking = await loadThinkingSound(lk, bgAudio, config.sound)
+      const playThinking = () => thinking?.play()
+      const stopThinking = () => thinking?.stop()
 
       const cancelSpeechWait = () => {
         if (speechWaitTimer) {
@@ -1636,28 +1630,6 @@ export function runComposedLifecycleHook(
       lifecycle.tryEnd(reason)
     }
   })()
-}
-
-// --- Audio preloading ---
-
-async function preloadAudioFrames(lk: LKImports, source: string): Promise<unknown[] | undefined> {
-  try {
-    const frames: unknown[] = []
-    for await (const frame of lk.audioFramesFromFile(source)) {
-      frames.push(frame)
-    }
-    return frames.length > 0 ? frames : undefined
-  } catch {
-    return undefined
-  }
-}
-
-async function* loopFrames(frames: readonly unknown[]): AsyncGenerator<unknown> {
-  while (true) {
-    for (const frame of frames) {
-      yield frame
-    }
-  }
 }
 
 // --- afterTurn helper ---

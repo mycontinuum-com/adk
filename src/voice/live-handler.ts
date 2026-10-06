@@ -5,6 +5,7 @@ import type { AdkApp } from '../api/app'
 import type { ModelUsage } from '../types/events'
 import type { StateSchema } from '../types/schema'
 import type { Session, SessionService, SessionStore } from '../types/session'
+import type { ThinkingSound } from './background-audio'
 import type { GPTLiveTranscript, GPTLiveTranscriptSnapshot } from './gpt-live-transcript'
 import type { GPTLiveRealtime, GPTLiveSession } from './live-model'
 import type {
@@ -33,6 +34,7 @@ import {
 } from '../providers/pricing'
 import { seedState } from '../session/seedState'
 import { applySchemaDefaults } from '../types/schema'
+import { createThinkingSound, preloadAudioFrames } from './background-audio'
 import { createGPTLiveTranscript } from './gpt-live-transcript'
 import { createInactivityTimer } from './inactivity'
 import { LiveActivity } from './live-activity'
@@ -68,6 +70,7 @@ interface LiveDeps {
 
 type LiveKitAgents = ReturnType<LiveDeps['agents']>
 type VoiceSession = InstanceType<LiveKitAgents['voice']['AgentSession']>
+type BackgroundAudioPlayer = InstanceType<LiveKitAgents['voice']['BackgroundAudioPlayer']>
 type RoomInputOptions = NonNullable<Parameters<VoiceSession['start']>[0]['inputOptions']>
 /** What a handler's `setup` gives for one call, if it has one. */
 type CallSetup<S extends StateSchema> =
@@ -322,6 +325,21 @@ class LiveCall<S extends StateSchema, T> {
   private readonly undelegated = new WeakSet<LiveVoiceDelegation>()
   /** Transcript receipt the latest admitted run was given, so no speech is run on twice. */
   private admittedThrough = 0
+  /** Plays `sound.backgroundAudio.thinking`, once started. */
+  private thinkingPlayer: BackgroundAudioPlayer | undefined
+  private thinkingSound: ThinkingSound | undefined
+  /**
+   * GPT Live has started speaking the answer: it spoke while no backend run was active, after the
+   * latest delegation or run start. The thinking sound stays off until the next.
+   */
+  private replying = false
+  /**
+   * A backend run has ended and GPT Live has not started speaking since, so what it says next is
+   * that run's answer, even when a later run is active by then.
+   */
+  private answerDue = false
+  /** GPT Live is speaking a run's answer. The thinking sound waits for it to finish. */
+  private answering = false
   /** Runs admitted so far, whatever started them. */
   private runsAdmitted = 0
   /** Silences whose hooks have not settled yet. A silence being decided is not a new silence. */
@@ -384,7 +402,13 @@ class LiveCall<S extends StateSchema, T> {
     this.voiceSession.on(events.AgentStateChanged, (event) => {
       this.activity.agentState(event.newState)
       this.agentState = event.newState
+      if (event.newState === 'speaking') {
+        this.answering = this.answerDue
+        this.answerDue = false
+        if (!this.activeRun) this.replying = true
+      } else this.answering = false
       this.syncAgentActivity()
+      this.syncThinkingSound()
       this.notifySpeaking('agent', event.oldState, event.newState)
     })
     this.voiceSession.on(events.SpeechCreated, () => this.silence.agentReplyCreated())
@@ -402,6 +426,7 @@ class LiveCall<S extends StateSchema, T> {
 
   stop(): void {
     this.stopped = true
+    this.syncThinkingSound()
     this.activeRun?.abort()
     this.silence.stop()
     clearTimeout(this.expiry)
@@ -419,6 +444,49 @@ class LiveCall<S extends StateSchema, T> {
     this.agentActive = active
     if (active) this.silence.agentBecameActive()
     else this.silence.agentWentIdle()
+  }
+
+  /**
+   * Plays the thinking sound while backend work is pending and GPT Live has not started the answer.
+   * It plays on under what GPT Live says during a run, so a filler word does not restart the clip,
+   * and pauses while GPT Live speaks an earlier run's answer; caller speech never starts it. A
+   * player that fails is logged and not used again, and the call goes on.
+   */
+  private syncThinkingSound(): void {
+    const sound = this.thinkingSound
+    if (!sound) return
+    try {
+      if (this.delegating > 0 && !this.replying && !this.answering && !this.stopped) sound.play()
+      else sound.stop()
+    } catch (error) {
+      this.thinkingSound = undefined
+      this.log(
+        { callId: this.context?.callId, ...safeErrorFields(error) },
+        'Live thinking sound unavailable',
+      )
+    }
+  }
+
+  /** Starts the configured thinking sound. Best effort: a call without it goes on. */
+  private async startThinkingSound(): Promise<void> {
+    const thinking = this.runtime.config.sound?.backgroundAudio?.thinking
+    if (!thinking) return
+    const { agents } = this.runtime
+    try {
+      const frames = await preloadAudioFrames(agents, thinking.source)
+      if (!frames) throw new Error('Thinking sound has no audio')
+      if (this.stopped) return
+      const player = new agents.voice.BackgroundAudioPlayer()
+      this.thinkingPlayer = player
+      await player.start({ room: this.job.room })
+      this.thinkingSound = createThinkingSound(player, frames, thinking.volume)
+      this.syncThinkingSound()
+    } catch (error) {
+      this.log(
+        { callId: this.context?.callId, ...safeErrorFields(error) },
+        'Live thinking sound unavailable',
+      )
+    }
   }
 
   /**
@@ -616,6 +684,7 @@ class LiveCall<S extends StateSchema, T> {
         ...(inputFilter !== undefined && { noiseCancellation: inputFilter }),
       },
     })
+    await this.startThinkingSound()
   }
 
   private controls(
@@ -864,9 +933,14 @@ class LiveCall<S extends StateSchema, T> {
     this.admittedThrough = snapshot.receivedThrough
     let active = true
     const voice = this.controls(live, delegation, () => active)
+    // With nothing pending, an answer GPT Live has not started is no longer expected. It may have
+    // run into it from a filler word, and what it says next is then this delegation's filler word.
+    if (this.delegating === 0) this.answerDue = false
     this.delegating++
+    this.replying = false
     this.runsAdmitted++
     this.syncAgentActivity()
+    this.syncThinkingSound()
     this.notify({ type: 'run_started', delegation, at: Date.now() })
     this.queue = this.queue
       .then(() => this.execute(live, delegation, snapshot, voice, callerTurns))
@@ -875,6 +949,7 @@ class LiveCall<S extends StateSchema, T> {
         active = false
         this.delegating--
         this.syncAgentActivity()
+        this.syncThinkingSound()
         this.notify({ type: 'run_settled', delegation, at: Date.now() })
       })
   }
@@ -923,6 +998,8 @@ class LiveCall<S extends StateSchema, T> {
     const workStart = session.events.length
     const run = app.run(config.backend, { session, timeout, voice })
     this.activeRun = run
+    this.replying = false
+    this.syncThinkingSound()
     let result: Awaited<typeof run>
     try {
       result = await run
@@ -930,6 +1007,7 @@ class LiveCall<S extends StateSchema, T> {
       run.abort()
       await run.settled
       this.activeRun = undefined
+      this.answerDue = true
       // Usage is final once close() abandons this work; it was recorded as unknown then.
       if (!this.abandoned)
         this.backendCalls.push(...backendModelCalls(session.events.slice(workStart)))
@@ -1185,6 +1263,8 @@ class LiveCall<S extends StateSchema, T> {
       await this.voiceSession.close()
     } finally {
       this.meter.stop()
+      // The thinking sound is best effort, so a player that fails to close does not hold up close.
+      await this.thinkingPlayer?.close().catch(() => {})
       try {
         // Stops egress; a stop that fails is ignored, as the call is already over.
         await this.audioRecording?.stop()

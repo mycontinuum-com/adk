@@ -13,7 +13,7 @@ import type {
   LiveVoiceContext,
   LiveVoiceHook,
 } from './live-types'
-import type { NoiseCancellationType, RecordingConfig } from './types'
+import type { NoiseCancellationType, RecordingConfig, SoundConfig } from './types'
 
 import { adk } from '../api'
 import { openai } from '../providers/models'
@@ -128,7 +128,9 @@ async function fixture(
     /** Further hooks after the fixture's own, such as `onVoiceActivity` hooks. */
     extraHooks?: LiveVoiceHook[]
     recording?: RecordingConfig
-    sound?: { noiseCancellation?: NoiseCancellationType }
+    sound?: SoundConfig
+    /** The background audio player throws when it plays a sound, or when a sound is stopped. */
+    soundFails?: 'play' | 'stop'
     /** Per-call recording and noise settings returned by `setup`. */
     callSetup?: { recordingKey?: string; noiseCancellation?: NoiseCancellationType }
     /** The egress client's stopEgress rejects. */
@@ -221,6 +223,35 @@ async function fixture(
   const startOptions: Array<{ inputOptions?: Record<string, unknown> }> = []
   const egressStarts: Array<Record<string, unknown>> = []
   const egressStops: string[] = []
+  /** Background audio players, sound files read, and every sound played, in order. */
+  const backgroundAudio: string[] = []
+  const soundFiles: string[] = []
+  const plays: Array<{ volume: number; stopped: boolean }> = []
+  class BackgroundAudioPlayer {
+    async start() {
+      backgroundAudio.push('start')
+    }
+    play(audio: { volume: number }) {
+      if (options.soundFails === 'play') throw new Error('Synthetic player failure')
+      const play = { volume: audio.volume, stopped: false }
+      plays.push(play)
+      return {
+        done: () => play.stopped,
+        stop: () => {
+          if (options.soundFails === 'stop') throw new Error('Synthetic player failure')
+          play.stopped = true
+        },
+        waitForPlayout: async () => {},
+      }
+    }
+    async close() {
+      backgroundAudio.push('close')
+    }
+  }
+  async function* audioFramesFromFile(source: string) {
+    soundFiles.push(source)
+    yield { source }
+  }
   class VoiceSession extends EventEmitter {
     agent?: VoiceAgent
     closed = false
@@ -278,6 +309,7 @@ async function fixture(
       voice: {
         Agent: VoiceAgent,
         AgentSession: VoiceSession,
+        BackgroundAudioPlayer,
         AgentSessionEventTypes: {
           Close: 'close',
           MetricsCollected: 'metrics_collected',
@@ -287,6 +319,7 @@ async function fixture(
         },
       },
       log: () => ({ error: logError }),
+      audioFramesFromFile,
     }),
     clock: options.clock,
     lineSettleMs: 10,
@@ -462,6 +495,11 @@ async function fixture(
     startOptions,
     egressStarts,
     egressStops,
+    backgroundAudio,
+    soundFiles,
+    plays,
+    /** Volumes of the sounds playing now. */
+    playing: () => plays.filter((play) => !play.stopped).map((play) => play.volume),
     call,
   }
 }
@@ -2509,5 +2547,163 @@ describe('call recording and noise cancellation', () => {
     const call = await f.call()
     expect(f.startOptions).toEqual([{ inputOptions: { participantIdentity: 'synthetic-caller' } }])
     await call.shutdown()
+  })
+})
+
+describe('thinking sound', () => {
+  const sound = { backgroundAudio: { thinking: { source: 'thinking.ogg', volume: 0.4 } } }
+
+  test('plays while a backend run is in progress and stops when it ends', async () => {
+    const work = gate()
+    const f = await fixture({ sound, gates: { first: work } })
+    const call = await f.call()
+    expect(f.soundFiles).toEqual(['thinking.ogg'])
+    expect(f.backgroundAudio).toEqual(['start'])
+    expect(f.playing()).toEqual([])
+    call.live.dispatch('slow', 'Question')
+    await vi.waitFor(() => expect(f.started).toEqual(['first']))
+    expect(f.playing()).toEqual([0.4])
+    work.release()
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(f.playing()).toEqual([]))
+    expect(f.plays).toHaveLength(1)
+    await call.shutdown()
+    expect(f.backgroundAudio).toEqual(['start', 'close'])
+  })
+
+  test('plays on under GPT Live speech during a run, and stops when the answer starts', async () => {
+    const work = gate()
+    const answer = gate()
+    const f = await fixture({ sound, gates: { first: work }, resultGate: answer })
+    const call = await f.call()
+    call.live.dispatch('slow', 'Question')
+    await vi.waitFor(() => expect(f.started).toEqual(['first']))
+    call.session.emit('agent_state_changed', { oldState: 'listening', newState: 'speaking' })
+    expect(f.playing()).toEqual([0.4])
+    call.session.emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+    expect(f.playing()).toEqual([0.4])
+    expect(f.plays).toHaveLength(1)
+    work.release()
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    expect(f.playing()).toEqual([0.4])
+    call.session.emit('agent_state_changed', { oldState: 'listening', newState: 'speaking' })
+    call.session.emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+    expect(f.playing()).toEqual([])
+    answer.release()
+    await call.shutdown()
+    expect(f.plays).toHaveLength(1)
+  })
+
+  test('pauses while GPT Live speaks the answer to a run that has ended, under a later run', async () => {
+    const first = gate()
+    const second = gate()
+    const f = await fixture({ sound, gates: { first, second } })
+    const call = await f.call()
+    call.live.dispatch('slow', 'First question')
+    await vi.waitFor(() => expect(f.started).toEqual(['first']))
+    call.live.dispatch('fast', 'Second question')
+    first.release()
+    await vi.waitFor(() => expect(f.started).toEqual(['first', 'second']))
+    expect(f.result).toHaveBeenCalledTimes(1)
+    expect(f.playing()).toEqual([0.4])
+    call.session.emit('agent_state_changed', { oldState: 'listening', newState: 'speaking' })
+    expect(f.playing()).toEqual([])
+    call.session.emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+    expect(f.playing()).toEqual([0.4])
+    call.session.emit('agent_state_changed', { oldState: 'listening', newState: 'speaking' })
+    expect(f.playing()).toEqual([0.4])
+    call.session.emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+    second.release()
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(f.playing()).toEqual([]))
+    await call.shutdown()
+    expect(f.plays).toHaveLength(2)
+  })
+
+  test('a delegation admitted while GPT Live speaks the last answer waits for the answer to end', async () => {
+    const second = gate()
+    const f = await fixture({ sound, gates: { second } })
+    const call = await f.call()
+    call.live.dispatch('first-id', 'First question')
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(f.playing()).toEqual([]))
+    call.session.emit('agent_state_changed', { oldState: 'listening', newState: 'speaking' })
+    call.live.dispatch('second-id', 'Second question')
+    await vi.waitFor(() => expect(f.started).toEqual(['first', 'second']))
+    expect(f.playing()).toEqual([])
+    call.session.emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+    expect(f.playing()).toEqual([0.4])
+    second.release()
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(2))
+    await call.shutdown()
+    expect(f.plays).toHaveLength(2)
+  })
+
+  test('plays on under a filler word when GPT Live did not speak after the last run', async () => {
+    const second = gate()
+    const f = await fixture({ sound, gates: { second } })
+    const call = await f.call()
+    call.live.dispatch('first-id', 'First question')
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(f.playing()).toEqual([]))
+    call.live.dispatch('second-id', 'Second question')
+    await vi.waitFor(() => expect(f.started).toEqual(['first', 'second']))
+    call.session.emit('agent_state_changed', { oldState: 'listening', newState: 'speaking' })
+    expect(f.playing()).toEqual([0.4])
+    call.session.emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+    second.release()
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(2))
+    await call.shutdown()
+    expect(f.plays).toHaveLength(2)
+  })
+
+  test.each(['play', 'stop'] as const)(
+    'a player that fails to %s mid-call is dropped, and the call goes on',
+    async (soundFails) => {
+      const f = await fixture({ sound, soundFails })
+      const call = await f.call()
+      call.live.dispatch('first-id', 'First question')
+      await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+      call.live.dispatch('second-id', 'Second question')
+      await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(2))
+      await call.shutdown()
+      expect(call.live.sent.slice(3)).toEqual([
+        { kind: 'commentary', text: 'first', delegationId: 'first-id' },
+        { kind: 'commentary', text: 'second', delegationId: 'second-id' },
+      ])
+      expect(f.error).not.toHaveBeenCalled()
+      expect(f.exited).toHaveBeenCalledTimes(1)
+      expect(f.logError.mock.calls).toEqual([
+        [{ callId: f.entered[0]!.callId, errorName: 'Error' }, 'Live thinking sound unavailable'],
+      ])
+    },
+  )
+
+  test('a sound that fails to stop as the call closes does not hold up the close', async () => {
+    const work = gate()
+    const f = await fixture({ sound, soundFails: 'stop', gates: { first: work } })
+    const call = await f.call()
+    call.live.dispatch('slow', 'Question')
+    await vi.waitFor(() => expect(f.started).toEqual(['first']))
+    expect(f.playing()).toEqual([0.4])
+    const closing = call.shutdown()
+    work.release()
+    await closing
+    expect(f.exited).toHaveBeenCalledTimes(1)
+    expect(f.backgroundAudio).toEqual(['start', 'close'])
+    expect(f.logError.mock.calls).toEqual([
+      [{ callId: f.entered[0]!.callId, errorName: 'Error' }, 'Live thinking sound unavailable'],
+    ])
+  })
+
+  test('plays nothing without a thinking sound configured', async () => {
+    const f = await fixture()
+    const call = await f.call()
+    call.live.dispatch('first', 'Question')
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    await call.shutdown()
+    expect(f.soundFiles).toEqual([])
+    expect(f.backgroundAudio).toEqual([])
+    expect(f.plays).toEqual([])
   })
 })

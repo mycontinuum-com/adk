@@ -183,10 +183,11 @@ export interface LiveVoiceHandlerConfig<
 > {
   agent: LiveAgent<S>
   /**
-   * Noise cancellation on the caller's audio. A call's `setup().noiseCancellation` overrides it.
-   * The Realtime handler's `sound.backgroundAudio` is not supported here.
+   * `noiseCancellation` filters the caller's audio; a call's `setup().noiseCancellation` overrides
+   * it. `backgroundAudio.thinking` loops a sound while backend work runs, under a filler word GPT
+   * Live says meanwhile, and stops once it starts speaking an answer.
    */
-  sound?: Pick<SoundConfig, 'noiseCancellation'>
+  sound?: SoundConfig
   backend: Agent<S, T>
   hooks?: LiveVoiceHook<S, T>[]
   backendTimeoutMs?: number
