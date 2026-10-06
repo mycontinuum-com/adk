@@ -38,6 +38,7 @@ Migration section:
 - `LiveVoiceHook.onVoiceActivity` reports speaking, transcript, backend-run and silence events. Its context exposes `sinceRun` and `runBackend()` to process caller speech not yet given to a run. The trigger returns `false` when a run is active, no speech is pending, or the call has ended.
 - Silence-timeout activity hooks can await before triggering a run. The handler holds the silence timer and waits up to `backendTimeoutMs`; a run started during that wait replaces the silence response. Other activity events do not wait for hook promises.
 - GPT Live supports `sound.backgroundAudio.thinking` while delegations are pending, pausing for completed answers and resuming for remaining work. Playback failure leaves the call running without sound. Voice eval callers still hear only the agent's microphone track, not the thinking sound.
+- `LiveVoiceDelegation.startedBy` says what started a GPT Live backend run: `voice` for GPT Live's delegation, `handler` for the silence rule, `app` for a hook's `runBackend()`. Hooks read it on `ctx.delegation` and on `run_started` and `run_settled` activity, so an app can tell its own trigger's run from the silence rule's without parsing the run's ID.
 
 ### Fixed
 
@@ -48,6 +49,10 @@ Migration section:
 - The silence rule that runs undelegated caller speech goes through the same trigger as `runBackend()`; its behaviour is unchanged.
 - The ADK guide explains how to keep context prefixes stable for provider prompt caching.
 - Stream regression tests cover nested runs, parallel branches, timeouts and aborts.
+
+### Migration from 0.6.2
+
+Code that builds a `LiveVoiceDelegation` itself, such as a test double given to a hook, must set `startedBy`.
 
 ## [0.6.2] - 2026-09-30
 

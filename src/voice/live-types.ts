@@ -48,6 +48,12 @@ export interface LiveVoiceDelegation {
   readonly id: string
   readonly connectionId: string
   readonly nativeThrough: number
+  /**
+   * What started the run: GPT Live's delegation (`voice`), the handler's rule for caller speech
+   * left unanswered at a silence (`handler`), or a hook's `runBackend()` (`app`). Only a `voice`
+   * run answers a delegation of GPT Live's.
+   */
+  readonly startedBy: 'voice' | 'handler' | 'app'
 }
 
 export interface LiveVoiceResultContext<

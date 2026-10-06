@@ -321,8 +321,6 @@ class LiveCall<S extends StateSchema, T> {
   private agentActive = false
   /** The GPT Live session, once entered. */
   private live: GPTLiveSession | undefined
-  /** Runs the handler started itself, on caller speech GPT Live did not delegate. */
-  private readonly undelegated = new WeakSet<LiveVoiceDelegation>()
   /** Transcript receipt the latest admitted run was given, so no speech is run on twice. */
   private admittedThrough = 0
   /** Plays `sound.backgroundAudio.thinking`, once started. */
@@ -695,7 +693,7 @@ class LiveCall<S extends StateSchema, T> {
     const usable = () =>
       !this.stopped && active() && (!delegation || live.sessionId === delegation.connectionId)
     // A run GPT Live did not delegate has no delegation of its own to answer.
-    const delegationId = delegation && !this.undelegated.has(delegation) ? delegation.id : undefined
+    const delegationId = delegation?.startedBy === 'voice' ? delegation.id : undefined
     const activity = this.activity
     return {
       get turnCount() {
@@ -785,7 +783,7 @@ class LiveCall<S extends StateSchema, T> {
       .observations.findLast((observation) => observation.connection.id === connectionId)
     if (latest?.payload.kind !== 'transcript') return false
     if (latest.payload.event.type !== 'session.input_transcript.delta') return false
-    if (!this.runBackend()) return false
+    if (!this.runBackend('handler')) return false
     this.log({ callId: this.context?.callId }, 'Live caller speech not delegated')
     return true
   }
@@ -831,10 +829,9 @@ class LiveCall<S extends StateSchema, T> {
 
   /**
    * Runs the backend on caller speech on the current connection that no run has been given, unless
-   * a run has not settled yet. The run answers no delegation of GPT Live's. An arrow, so a hook can
-   * call it detached from its context.
+   * a run has not settled yet. The run answers no delegation of GPT Live's.
    */
-  private readonly runBackend = (): boolean => {
+  private runBackend(startedBy: 'handler' | 'app'): boolean {
     const live = this.live
     const connectionId = live?.sessionId
     if (!live || !connectionId || this.stopped || this.delegating > 0) return false
@@ -846,9 +843,12 @@ class LiveCall<S extends StateSchema, T> {
           fragment.connection.id === connectionId &&
           fragment.sequence > this.admittedThrough,
       )
-    if (pending) this.admit(live, `undelegated-${randomUUID()}`, false)
+    if (pending) this.admit(live, `undelegated-${randomUUID()}`, startedBy)
     return pending
   }
+
+  /** A hook's `runBackend()`. An arrow, so a hook can call it detached from its context. */
+  private readonly runForApp = (): boolean => this.runBackend('app')
 
   private notifySpeaking(who: 'agent' | 'caller', oldState: string, newState: string): void {
     if (newState === 'speaking') this.notify({ type: `${who}_started_speaking`, at: Date.now() })
@@ -882,7 +882,7 @@ class LiveCall<S extends StateSchema, T> {
       return pending
     if (activity.type === 'run_started') this.sinceRun = []
     this.sinceRun.push(activity)
-    const ctx = new LiveActivityContext(context, activity, this.sinceRun, this.runBackend)
+    const ctx = new LiveActivityContext(context, activity, this.sinceRun, this.runForApp)
     this.activityOutbox.push({ ctx, pending })
     if (this.dispatchingActivity) return pending
     this.dispatchingActivity = true
@@ -916,7 +916,11 @@ class LiveCall<S extends StateSchema, T> {
   }
 
   /** Freezes the transcript snapshot synchronously, then queues the delegation. */
-  private admit(live: GPTLiveSession, delegationId: string, delegated = true): void {
+  private admit(
+    live: GPTLiveSession,
+    delegationId: string,
+    startedBy: LiveVoiceDelegation['startedBy'] = 'voice',
+  ): void {
     const connectionId = live.sessionId
     if (!connectionId || this.stopped) return
     const key = `${connectionId}/${delegationId}`
@@ -928,8 +932,8 @@ class LiveCall<S extends StateSchema, T> {
       id: delegationId,
       connectionId,
       nativeThrough: snapshot.receivedThrough,
+      startedBy,
     }
-    if (!delegated) this.undelegated.add(delegation)
     this.admittedThrough = snapshot.receivedThrough
     let active = true
     const voice = this.controls(live, delegation, () => active)
@@ -980,7 +984,7 @@ class LiveCall<S extends StateSchema, T> {
       if (earlier.delivery === 'pending') return this.deliver(live, delegation, voice, earlier)
       // Its result hooks may already have acted, so they are not run again.
       live.appendThinking(HANDLED_BEFORE_RECONNECT, {
-        delegationId: this.undelegated.has(delegation) ? undefined : delegation.id,
+        delegationId: delegation.startedBy === 'voice' ? delegation.id : undefined,
       })
       return
     }

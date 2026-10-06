@@ -1404,6 +1404,7 @@ test('runs the backend on caller speech GPT Live neither delegated nor answered,
   await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
   expect(f.started).toEqual(['first'])
   expect(f.logError).toHaveBeenCalledWith(expect.anything(), 'Live caller speech not delegated')
+  expect(f.result.mock.calls[0]![0].delegation.startedBy).toBe('handler')
   // Its line answers no delegation of GPT Live's, so it carries no delegation ID.
   await vi.waitFor(() =>
     expect(call.live.sent.at(-1)).toMatchObject({ kind: 'commentary', text: 'first' }),
@@ -2080,6 +2081,27 @@ describe('voice activity hooks', () => {
     expect(f.started).toEqual(['first'])
     expect(given(call.live, 'first')[0]!.delegationId).toBeUndefined()
     await settled()
+    await call.shutdown()
+  })
+
+  test('a run says what started it, to its result hook and in its run events', async () => {
+    const started: string[] = []
+    const { f, latest, settled } = await watched({
+      extraHooks: [
+        {
+          onVoiceActivity(ctx) {
+            if (ctx.activity.type === 'run_started') started.push(ctx.activity.delegation.startedBy)
+          },
+        },
+      ],
+    })
+    const call = await f.call()
+    expect(latest().runBackend()).toBe(true)
+    await settled()
+    call.live.dispatch('d1', 'Tuesday')
+    await settled()
+    expect(started).toEqual(['app', 'voice'])
+    expect(f.result.mock.calls.map(([ctx]) => ctx.delegation.startedBy)).toEqual(['app', 'voice'])
     await call.shutdown()
   })
 
