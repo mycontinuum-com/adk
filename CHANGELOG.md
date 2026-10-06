@@ -31,18 +31,25 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
-## [0.6.3] - Unreleased
+## [0.6.3] - 2026-10-06
 
 ### Added
 
-- `LiveVoiceHook.onVoiceActivity` — gives the app each GPT Live voice lifecycle event (`LiveVoiceActivity`): agent and caller speaking starts and stops, transcript deltas by receipt sequence, backend runs started and settled, and silence timeouts. `LiveVoiceActivityContext` holds the events since the latest run (`sinceRun`) and `runBackend()`, which runs the backend on the caller speech no run has been given, as the silence rule does. A trigger while a run is in flight runs nothing and returns `false`. The handler waits for the hooks' promises for a `silence_timeout`, up to `backendTimeoutMs` and with the silence timer held, before deciding what the silence calls for, so a hook can await before triggering at a silence; any run admitted meanwhile answers the silence.
-- GPT Live plays `sound.backgroundAudio.thinking` while a delegation is pending. It plays on under GPT Live speech during a run and stops once GPT Live starts speaking the answer. With overlapping delegations it pauses while GPT Live speaks the answer to a run that has ended and resumes for the delegations still pending. A player that fails during the call is logged as `Live thinking sound unavailable` and the call goes on without the sound. `LiveVoiceHandlerConfig.sound` is now `SoundConfig`. A voice eval's simulated caller does not hear the sound: it hears the agent's microphone track only, as before.
+- `LiveVoiceHook.onVoiceActivity` reports speaking, transcript, backend-run and silence events. Its context exposes `sinceRun` and `runBackend()` to process caller speech not yet given to a run. The trigger returns `false` when a run is active, no speech is pending, or the call has ended.
+- Silence-timeout activity hooks can await before triggering a run. The handler holds the silence timer and waits up to `backendTimeoutMs`; a run started during that wait replaces the silence response. Other activity events do not wait for hook promises.
+- GPT Live supports `sound.backgroundAudio.thinking` while delegations are pending, pausing for completed answers and resuming for remaining work. Playback failure leaves the call running without sound. Voice eval callers still hear only the agent's microphone track, not the thinking sound.
+
+### Fixed
+
+- Package export verification can invoke npm on Windows.
 
 ### Internal
 
 - The silence rule that runs undelegated caller speech goes through the same trigger as `runBackend()`; its behaviour is unchanged.
+- The ADK guide explains how to keep context prefixes stable for provider prompt caching.
+- Stream regression tests cover nested runs, parallel branches, timeouts and aborts.
 
-## [0.6.2] - Unreleased
+## [0.6.2] - 2026-09-30
 
 ### Added
 

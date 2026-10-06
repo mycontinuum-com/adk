@@ -82,6 +82,31 @@ function newSession() {
   return session
 }
 
+function writtenValues(events: readonly StreamEvent[]): unknown[] {
+  return events.flatMap((e) => (e.type === 'state_change' ? e.changes.map((c) => c.newValue) : []))
+}
+
+const slowStateWrite = app.tool({
+  name: 'slow_write',
+  description: 'Write state slowly',
+  schema: z.object({}),
+  execute: async (ctx) => {
+    ctx.state.slowStart = true
+    await sleep(60)
+    ctx.state.slowEnd = true
+    return { ok: true }
+  },
+})
+
+function busyWriter(name: string) {
+  return agent({
+    name,
+    model: openai('gpt-4o-mini'),
+    context: [includeHistory()],
+    tools: [slowStateWrite],
+  })
+}
+
 async function drive(adapter: MockAdapter, runnable: Runnable, session: Session = newSession()) {
   const runner = new BaseRunner({ adapters: { openai: adapter } })
   const eventsBeforeRun = session.events.length
@@ -878,16 +903,14 @@ describe('state changes reach the hooks of the run they belong to', () => {
     adapter.addResponses('agent:alpha', recordThenReply('penicillin'))
     adapter.addResponses('agent:beta', recordThenReply('latex'))
     const session = newSession()
-    const written = (hooked: StreamEvent[]) =>
-      hooked.flatMap((e) => (e.type === 'state_change' ? e.changes.map((c) => c.newValue) : []))
 
     const [alpha, beta] = await Promise.all([
       drive(adapter, recorder('alpha'), session),
       drive(adapter, recorder('beta'), session),
     ])
 
-    expect(written(alpha.hooked)).toEqual(['penicillin', 'penicillin'])
-    expect(written(beta.hooked)).toEqual(['latex', 'latex'])
+    expect(writtenValues(alpha.hooked)).toEqual(['penicillin', 'penicillin'])
+    expect(writtenValues(beta.hooked)).toEqual(['latex', 'latex'])
   })
 
   test('a finished run leaves no state listener on its session', async () => {
@@ -1074,5 +1097,228 @@ describe('run result status', () => {
     expect(resolveRunResult(participantLeft, session, runnable, undefined).status).toBe(
       'participant_left',
     )
+  })
+})
+
+describe('stream edge cases', () => {
+  test.each([
+    { label: 'invalid input', finalizeThrows: false, input: { wrong: true } },
+    { label: 'a finalize that throws', finalizeThrows: true, input: { answer: 'ok' } },
+  ])('resuming a yield with $label streams its error result', async ({ finalizeThrows, input }) => {
+    const askStrict = app.tool({
+      name: 'ask_strict',
+      description: 'Ask for a strict answer',
+      schema: z.object({}),
+      yieldSchema: z.object({ answer: z.string() }),
+      finalize: (ctx) => {
+        if (finalizeThrows) throw new Error('finalize failed')
+        return { answer: ctx.input!.answer }
+      },
+    })
+    const strict = agent({
+      name: 'strict',
+      model: openai('gpt-4o-mini'),
+      context: [includeHistory()],
+      tools: [askStrict],
+    })
+    const adapter = new MockAdapter({
+      responses: [{ toolCalls: [{ name: 'ask_strict', args: {} }] }, { text: 'Done.' }],
+    })
+    const first = await drive(adapter, strict)
+    const yielded = first.session.events.find((e) => e.type === 'tool_yield')
+    if (yielded?.type !== 'tool_yield') throw new Error('expected a tool yield')
+    first.session.input.tool({ callId: yielded.callId, input })
+
+    const { streamed, ledger, session } = await drive(adapter, strict, first.session)
+
+    const errorResults = session.events
+      .slice(-ledger.length)
+      .filter((e) => e.type === 'tool_result' && e.callId === yielded.callId && e.error)
+    expect(errorResults).toHaveLength(1)
+    expect(streamed).toEqual(ledger)
+  })
+
+  test('concurrent runs with nested ctx.run each reach only their own child', async () => {
+    const child = recorder('nested_child')
+    const delegate = app.tool({
+      name: 'delegate_child',
+      description: 'Delegate to a child',
+      schema: z.object({}),
+      execute: async (ctx) => {
+        await ctx.run(child, 'Record')
+        return { delegated: true }
+      },
+    })
+    const adapter = new MockAdapter()
+    adapter.addResponses('agent:nested_alpha', [
+      { toolCalls: [{ name: 'record_allergy', args: { allergy: 'alpha' } }], delayMs: 30 },
+      { text: 'Alpha done.', delayMs: 60 },
+    ])
+    adapter.addResponses('agent:nested_beta', [
+      { toolCalls: [{ name: 'delegate_child', args: {} }] },
+      { text: 'Beta done.' },
+    ])
+    adapter.addResponses('agent:nested_child', recordThenReply('beta-child'))
+    const beta = agent({
+      name: 'nested_beta',
+      model: openai('gpt-4o-mini'),
+      context: [includeHistory()],
+      tools: [delegate],
+    })
+    const session = newSession()
+
+    const [alpha, second] = await Promise.all([
+      drive(adapter, recorder('nested_alpha'), session),
+      drive(adapter, beta, session),
+    ])
+
+    expect(writtenValues(alpha.hooked)).toEqual(['alpha', 'alpha'])
+    expect(writtenValues(alpha.streamedWithDeltas)).toEqual(['alpha', 'alpha'])
+    expect(writtenValues(second.hooked)).toEqual(['beta-child', 'beta-child'])
+    expect(writtenValues(second.streamedWithDeltas)).toEqual(['beta-child', 'beta-child'])
+  })
+
+  test('a timeout mid-tool stops hook delivery while the tool keeps running', async () => {
+    vi.useFakeTimers()
+    try {
+      let finished = false
+      const ignoresSignal = app.tool({
+        name: 'ignores_signal',
+        description: 'Write before and after a delay',
+        schema: z.object({}),
+        execute: async (ctx) => {
+          ctx.state.before = true
+          await sleep(80)
+          ctx.state.after = true
+          finished = true
+          return { ok: true }
+        },
+      })
+      const timed = agent({
+        name: 'timed',
+        model: openai('gpt-4o-mini'),
+        context: [includeHistory()],
+        tools: [ignoresSignal],
+      })
+      const adapter = new MockAdapter({
+        responses: [{ toolCalls: [{ name: 'ignores_signal', args: {} }] }, { text: 'Done.' }],
+      })
+      const runner = new BaseRunner({ adapters: { openai: adapter } })
+      const hooked: string[] = []
+
+      const run = runner.run(timed, newSession(), {
+        timeout: 30,
+        hooks: [
+          { onEvent: (e) => hooked.push(...(e.type === 'state_change' ? [e.changes[0].key] : [])) },
+        ],
+      })
+      const rejected = expect(run).rejects.toThrow('Timeout after 30ms')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(hooked).toEqual(['before'])
+      await vi.advanceTimersByTimeAsync(30)
+      await rejected
+      await vi.advanceTimersByTimeAsync(50)
+      await run.settled
+
+      expect(finished).toBe(true)
+      expect(hooked).toEqual(['before'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('an abort while parallel branches write stops hook delivery at once', async () => {
+    const adapter = new MockAdapter()
+    for (const name of ['busy_left', 'busy_right']) {
+      adapter.addResponses(`agent:${name}`, [
+        { toolCalls: [{ name: 'slow_write', args: {} }] },
+        { text: 'Done.' },
+      ])
+    }
+    const runner = new BaseRunner({ adapters: { openai: adapter } })
+    const hooked: string[] = []
+
+    const run = runner.run(
+      parallel({ name: 'writers', runnables: [busyWriter('busy_left'), busyWriter('busy_right')] }),
+      newSession(),
+      {
+        hooks: [
+          {
+            onEvent: (e) => {
+              if (e.type !== 'state_change') return
+              hooked.push(e.changes[0].key)
+              if (e.changes[0].key === 'slowStart') run.abort()
+            },
+          },
+        ],
+      },
+    )
+    await expect(run).rejects.toThrow('Aborted')
+    await run.settled
+
+    expect(hooked).toEqual(['slowStart'])
+  })
+
+  test('an external abort while parallel branches write delivers none of their writes', async () => {
+    vi.useFakeTimers()
+    try {
+      const adapter = new MockAdapter()
+      for (const name of ['busy_left', 'busy_right']) {
+        adapter.addResponses(`agent:${name}`, [
+          { toolCalls: [{ name: 'slow_write', args: {} }] },
+          { text: 'Done.' },
+        ])
+      }
+      const runner = new BaseRunner({ adapters: { openai: adapter } })
+      const session = newSession()
+      const hooked: string[] = []
+
+      const run = runner.run(
+        parallel({
+          name: 'writers',
+          runnables: [busyWriter('busy_left'), busyWriter('busy_right')],
+        }),
+        session,
+        {
+          hooks: [
+            {
+              onEvent: (e) => hooked.push(...(e.type === 'state_change' ? [e.changes[0].key] : [])),
+            },
+          ],
+        },
+      )
+      const rejected = expect(run).rejects.toThrow('Aborted')
+      await vi.advanceTimersByTimeAsync(20)
+      run.abort()
+      await rejected
+      await vi.advanceTimersByTimeAsync(60)
+      await run.settled
+
+      expect(session.events.some((e) => e.type === 'state_change')).toBe(true)
+      expect(hooked).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('hooks keep seeing state changes while the consumer pauses reading', async () => {
+    const runner = new BaseRunner({
+      adapters: { openai: new MockAdapter({ responses: recordThenReply('penicillin') }) },
+    })
+    const session = newSession()
+    const hooked: string[] = []
+
+    const stream = runner.run(recorder('reader'), session, {
+      hooks: [{ onEvent: (e) => hooked.push(e.type) }],
+    })
+    const iterator = stream[Symbol.asyncIterator]()
+    let next = await iterator.next()
+    while (!next.done && next.value.type !== 'model_start') next = await iterator.next()
+    await vi.waitFor(() => expect(hooked).toContain('invocation_end'))
+
+    expect(hooked.filter((type) => type === 'state_change')).toEqual([
+      'state_change',
+      'state_change',
+    ])
   })
 })

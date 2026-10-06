@@ -14,6 +14,8 @@ const packed = JSON.parse(
     env: Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !key.startsWith('npm_config_')),
     ),
+    // npm is npm.cmd on Windows, and Node refuses to spawn .cmd without a shell.
+    shell: process.platform === 'win32',
   }),
 )[0]
 
