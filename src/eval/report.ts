@@ -21,7 +21,7 @@ export interface ReportOptions<
 export function generateReport<
   S extends StateSchema = StateSchema,
   R extends BaseEvalResult<AnyEvalCaseResult<S>> = EvalResult<S>,
->(result: R, options?: ReportOptions<S, R>): string {
+>(result: R, options?: ReportOptions<S, R>, afterSummary?: string): string {
   const title = options?.title ?? 'Eval Report'
   const lines: string[] = []
 
@@ -30,6 +30,7 @@ export function generateReport<
 
   formatSummary(result, lines)
   lines.push('')
+  if (afterSummary) lines.push(afterSummary, '')
 
   formatMetrics(result, lines)
   lines.push('')

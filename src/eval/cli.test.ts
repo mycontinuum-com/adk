@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, readdir } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { resolve, join } from 'node:path'
+import { basename, resolve, join } from 'node:path'
 import { promisify } from 'node:util'
 
 const exec = promisify(execFile)
@@ -100,4 +100,118 @@ it('collects a real voice-worker setup failure without executing text again in t
   expect(await readFile(counter, 'utf8')).toBe('text\n')
   expect(result.stderr).toContain('must have a realtime model config')
   expect(document.completed).toBe(2)
+})
+
+it('runs each named case of several, in suite order, and names every unknown one', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
+  const args = ['run', '--output', root, '--case', 'greeting/voice', '--case', 'greeting/text']
+  const both = await invoke(args, { EVAL_TEST_MIXED: '1' })
+  expect(JSON.parse(both.stdout).selected).toEqual(['greeting/text', 'greeting/voice'])
+  const unknown = await invoke([...args, '--case', 'missing'])
+  expect(unknown.code).toBe(2)
+  expect(JSON.parse(unknown.stdout).error.message).toBe('Unknown case: greeting/voice, missing')
+})
+
+it('compares with pooled baselines: a regressed case, and a tool result no check looked at', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
+  const run = (args: string[], env: Record<string, string> = {}) =>
+    invoke(['run', '--repeat', '5', '--output', root, ...args], { EVAL_TEST_AGENT: '1', ...env })
+  const first = JSON.parse((await run([])).stdout)
+  const second = JSON.parse((await run([])).stdout)
+  expect(first.comparison).toBeUndefined()
+
+  const changed = await run(
+    ['--baseline', first.directory, '--baseline', join(second.directory, 'result.json')],
+    { EVAL_TEST_FAIL: '1', EVAL_TEST_LINE: 'the new line' },
+  )
+  expect(changed.code).toBe(1)
+  const document = JSON.parse(changed.stdout)
+  expect(document.baseline).toEqual(
+    [first, second].map((item) => join(item.directory, 'result.json')),
+  )
+  expect(document.comparison.cases).toEqual([
+    {
+      name: 'greeting/text',
+      baseline: { passed: 10, runs: 10 },
+      current: { passed: 0, runs: 5 },
+      p: expect.closeTo(1 / 3003, 8),
+      change: 'regressed',
+    },
+    {
+      name: 'lookup/text',
+      baseline: { passed: 10, runs: 10 },
+      current: { passed: 5, runs: 5 },
+      p: 1,
+      change: 'unchanged',
+    },
+  ])
+  expect(document.comparison.toolResults).toEqual({
+    appeared: [
+      {
+        tool: 'lookup',
+        result: '{"line":"the new line"}',
+        cases: ['lookup/text'],
+        returned: 5,
+        of: 5,
+        never: 10,
+        p: expect.closeTo(1 / 3003, 8),
+      },
+    ],
+    vanished: [
+      {
+        tool: 'lookup',
+        result: '{"line":"the old line"}',
+        cases: ['lookup/text'],
+        returned: 10,
+        of: 10,
+        never: 5,
+        p: expect.closeTo(1 / 3003, 8),
+      },
+    ],
+  })
+
+  const report = await readFile(document.report, 'utf8')
+  expect(report.indexOf('## Compared with baseline')).toBeLessThan(report.indexOf('## Metrics'))
+  expect(report).toContain(
+    `Baseline: ${[first, second].map((item) => basename(item.directory)).join(', ')}.`,
+  )
+  expect(report).toContain('| greeting/text | 10/10 (100.0%) | 0/5 (0.0%) | <0.001 |')
+  expect(report).toContain(
+    '| lookup | {"line":"the new line"} | 5/5 runs | 0/10 runs | <0.001 | lookup/text |',
+  )
+})
+
+it('keeps what each model call was given, with every distinct instruction once', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
+  const result = await invoke(['run', '--output', root, '--case', 'lookup/text'], {
+    EVAL_TEST_AGENT: '1',
+  })
+  const evidence = JSON.parse(await readFile(JSON.parse(result.stdout).results[0].evidence, 'utf8'))
+  expect(evidence.instructions).toEqual([
+    'Look the line up.',
+    'Lines looked up so far: 0',
+    'Lines looked up so far: 1',
+  ])
+  expect(evidence.modelInputs).toEqual([
+    { invocationId: expect.any(String), agentName: 'looker', system: [0, 1] },
+    { invocationId: expect.any(String), agentName: 'looker', system: [0, 2] },
+  ])
+  expect(
+    evidence.events.filter((event: { type: string }) => event.type === 'model_start'),
+  ).toHaveLength(evidence.modelInputs.length)
+})
+
+it('rejects a missing or unreadable baseline before running, and run options with list', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
+  const missing = await invoke(['run', '--output', root, '--baseline', join(root, 'none')])
+  expect(missing.code).toBe(2)
+  expect(JSON.parse(missing.stdout).directory).toBeUndefined()
+  const empty = join(root, 'result.json')
+  await writeFile(empty, JSON.stringify({ summary: {} }))
+  const unread = await invoke(['run', '--output', root, '--baseline', empty])
+  expect(unread.code).toBe(2)
+  expect(JSON.parse(unread.stdout).error.message).toBe(`Baseline has no results: ${empty}`)
+  expect(await readdir(root)).toEqual(['result.json'])
+  const listed = await invoke(['list', '--baseline', root])
+  expect(listed.code).toBe(2)
 })

@@ -40,6 +40,9 @@ Migration section:
 - `DecisionsUnavailableError` rejects `app.decide` for a model no decisions endpoint serves. There is no fallback to a model call, which returns no probabilities.
 - `ModelAdapter.decide` is the optional adapter method behind it. `OpenAIAdapter` implements it without a newer `openai` SDK, and skips Azure endpoints. `app.decide` rejects answers from any adapter that do not match the questions.
 - `MockAdapter` takes `decisions`, the answer for each question name, records requests in `decideCalls`, and fails a question it has no answer for.
+- Eval CLI `--baseline <run>` (repeatable, pooled) compares a run with earlier ones — each case is `regressed`, `improved`, `unchanged` or `unclear` by a two-sided Fisher exact test on its pass counts, and tool results that one side returned and the other never did are listed. The comparison follows the summary in `report.md` and is `comparison` in `result.json`.
+- Eval CLI `--case` may repeat.
+- A text case's `case-<n>.json` has `modelInputs` and `instructions` — the system messages, `toolChoice` and `allowedTools` each model call was given.
 
 ## [0.6.3] - 2026-10-06
 
