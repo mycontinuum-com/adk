@@ -65,6 +65,20 @@ export {
 } from './events'
 
 export type {
+  Question,
+  Questions,
+  Answer,
+  PredicateAnswer,
+  ChoiceAnswer,
+  ScoreAnswer,
+  RefusalAnswer,
+  Answers,
+  DecideOpts,
+  DecisionRequest,
+  DecisionResponse,
+} from './decisions'
+
+export type {
   SessionStatus,
   StateChangeListener,
   Session,

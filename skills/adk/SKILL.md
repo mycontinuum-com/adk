@@ -45,7 +45,7 @@ Use this path for new ADK packages and refactors unless a reference explicitly s
 
 Read only the domain documents needed for the task:
 
-- [runnables.md](references/runnables.md): app/schema-first construction, agents, tools, steps, sequence, parallel, loop, orchestration, running, streaming, structured output, multimodal input.
+- [runnables.md](references/runnables.md): app/schema-first construction, agents, tools, steps, sequence, parallel, loop, orchestration, running, streaming, structured output, multimodal input, one-shot `app.ask` and `app.decide`.
 - [context-sessions.md](references/context-sessions.md): context renderers, prompt-cache-stable context and per-turn tool gating, typed prompts, session/state model, stores, yield/resume, artifacts/provenance, time travel.
 - [providers-memory.md](references/providers-memory.md): OpenAI/Gemini/Claude/EUrouter/self-hosted providers, provider profiles/options, authentication, retry/error handling, vector memory, Qdrant, pgvector, Voyage.
 - [handlers-voice-mcp.md](references/handlers-voice-mcp.md): turn/REST/AG-UI/voice handlers, MCP, stream events, terminal UI, web tools.
@@ -60,6 +60,6 @@ Prefer current local examples over stale memory or external snippets — see [ex
 ## Validation
 
 - For ADK source changes, run the smallest relevant package command from the ADK package root first, then broaden if the change crosses domains:
-  - `pnpm run test -- <path-or-pattern>`
+  - `pnpm run test <path-or-pattern>` (relative to `src/`; with `--` before the path the whole suite runs)
   - `pnpm run typecheck`
   - `pnpm run build`

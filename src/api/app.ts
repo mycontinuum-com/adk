@@ -47,6 +47,7 @@ import type {
 import type { SessionOptions } from '../session'
 import type { StateChanges } from '../session/seedState'
 import type { TerminalConfig, TerminalHandle } from '../terminal/types'
+import type { Answers, DecideOpts, Questions } from '../types/decisions'
 import type { ModelUsage } from '../types/events'
 import type {
   Agent,
@@ -106,6 +107,7 @@ import {
   message,
   transformUserMessages,
 } from '../context/prompt'
+import { DecisionStep } from '../core/decisions'
 import { BaseRunner, summarizeModelUsage } from '../core/runner'
 import { OutputParseError } from '../errors/types'
 import { createJudgeMetric } from '../eval/metrics/judge'
@@ -119,6 +121,7 @@ import { consoleHook, type ConsoleHookOptions } from '../hook/console'
 import { loggingHook, type LoggingHookOptions } from '../hook/logging'
 import { metricsHook, type MetricsHookOptions } from '../hook/metrics'
 import { createMCPManager } from '../mcp/manager'
+import { getInnerModel } from '../providers/models'
 import { loadPricing, RESULT_PRICING_WAIT_MS } from '../providers/pricing'
 import { runSimulateLoop, type SimulateOptions } from '../run/simulate'
 import { runTestLoop, type TestOptions } from '../run/test'
@@ -438,6 +441,22 @@ export interface AdkApp<S extends StateSchema> {
   ask(prompt: string): Promise<string>
   ask<T>(prompt: string, opts: AskOpts<T> & { schema: z.ZodType<T> }): Promise<T>
   ask<T = string>(prompt: string, opts?: AskOpts<T>): Promise<T>
+
+  /**
+   * One-shot, isolated answers to closed questions about `input`, from the model's decisions
+   * endpoint: a predicate's probability, one of a choice's values with a confidence, a position on
+   * a score's levels. It answers in tens of milliseconds where a model call takes most of a second.
+   * Returns one answer per question, under the question's name.
+   *
+   * The model resolves as in `app.ask`. Only a model its provider serves on a decisions endpoint
+   * can answer: any other rejects with `DecisionsUnavailableError`, because a model call returns no
+   * probabilities and so is no substitute. Provider errors and an aborted `signal` reject too.
+   *
+   * Like `app.ask`, it runs as one model step of an ephemeral agent on a fresh session: the app's
+   * hooks see that step's `model_start` and `model_end`, which carries the usage, and nothing is
+   * written to the session of a run that called it. To record a decision there, `ctx.note` it.
+   */
+  decide<const Qs extends Questions>(input: string, opts: DecideOpts<Qs>): Promise<Answers<Qs>>
 
   test<TOutput>(runnable: Agent<S, TOutput>, options: TestOptions): Promise<RunResult<S, TOutput>>
   test(runnable: Runnable<S>, options: TestOptions): Promise<RunResult<S>>
@@ -1067,6 +1086,45 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
       const outcome = await askWithUsage(prompt, opts)
       if (!outcome.ok) throw outcome.error
       return outcome.value
+    },
+
+    async decide<const Qs extends Questions>(
+      input: string,
+      opts: DecideOpts<Qs>,
+    ): Promise<Answers<Qs>> {
+      const model = opts.model ?? appDefaultModel
+      if (!model) {
+        throw new Error(
+          '[adk] app.decide: no model configured. Pass opts.model or set defaultModel in adk({ defaultModel }).',
+        )
+      }
+
+      // The decision is the one model step of an ephemeral agent on a fresh session, so the app's
+      // hooks and error handlers see it, and its usage, exactly as they see an `app.ask` call.
+      const step = new DecisionStep(
+        new BaseRunner({ adapters: appAdapters }),
+        { input, questions: opts.questions },
+        model,
+      )
+      const inner = getInnerModel(model)
+      const stream = new BaseRunner({
+        sessionService: appSessionService,
+        hooks: appHooks,
+        errorHandlers: appErrorHandlers,
+        adapters: { [inner.provider]: step },
+      }).run(
+        createAgent({ name: 'decide-ephemeral', model: inner, context: [], tools: [] }),
+        new BaseSession(appName),
+      )
+      forwardAbort(opts.signal, stream)
+      await stream.then(undefined, (error: unknown) => {
+        throw step.failure ?? error
+      })
+
+      if (!step.answers) {
+        throw new Error('[adk] app.decide: a hook answered the model step in its place')
+      }
+      return step.answers
     },
 
     test(runnable: Runnable<S>, options: TestOptions): Promise<RunResult<S>> {

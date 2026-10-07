@@ -154,6 +154,7 @@ export {
   PipelineStructureChangedError,
   OutputParseError,
   ConflictError,
+  DecisionsUnavailableError,
 } from './errors'
 
 // Parsing
@@ -337,6 +338,17 @@ export type {
   HandoffOptions,
   ModelAdapter,
   AdapterRegistry,
+  Question,
+  Questions,
+  Answer,
+  PredicateAnswer,
+  ChoiceAnswer,
+  ScoreAnswer,
+  RefusalAnswer,
+  Answers,
+  DecideOpts,
+  DecisionRequest,
+  DecisionResponse,
   StreamResult,
   RunConfig,
   CostEstimate,

@@ -1,3 +1,4 @@
+import type { Answer, DecisionRequest, DecisionResponse } from '../../types/decisions'
 import type { StreamEvent, ToolCallEvent, Event } from '../../types/events'
 import type {
   ModelAdapter,
@@ -12,6 +13,11 @@ import { createEventId, createCallId } from '../../session'
 export interface MockAdapterConfig {
   responses?: MockResponseConfig[]
   defaultResponse?: MockResponseConfig
+  /**
+   * The answer `decide` gives each question, by question name. A question with no answer here fails
+   * the call.
+   */
+  decisions?: Record<string, Answer>
 }
 
 export class MockAdapter implements ModelAdapter {
@@ -24,10 +30,14 @@ export class MockAdapter implements ModelAdapter {
   private callCount = 0
 
   public stepCalls: Array<{ ctx: RenderContext; config: ProviderModelConfig }> = []
+  /** Each request `decide` was given, in order, with the model it was asked for. */
+  public decideCalls: Array<{ request: DecisionRequest; config: ProviderModelConfig }> = []
+  private readonly decisions: Record<string, Answer>
 
   constructor(config: MockAdapterConfig = {}) {
     this.responses = config.responses ?? []
     this.fallbackResponse = config.defaultResponse ?? { text: 'Mock response' }
+    this.decisions = config.decisions ?? {}
   }
 
   reset(): void {
@@ -35,6 +45,30 @@ export class MockAdapter implements ModelAdapter {
     this.routeIndices.clear()
     this.callCount = 0
     this.stepCalls = []
+    this.decideCalls = []
+  }
+
+  /**
+   * Answers each question with its scripted answer from `decisions`. `app.decide` then checks the
+   * answers against the questions, so a scripted answer must suit its question.
+   *
+   * @throws When a question has no scripted answer, naming it, or when `signal` is aborted.
+   */
+  async decide(
+    request: DecisionRequest,
+    config: ProviderModelConfig,
+    signal?: AbortSignal,
+  ): Promise<DecisionResponse> {
+    const decisions = this.decisions
+    this.decideCalls.push({ request, config })
+    signal?.throwIfAborted()
+
+    const names = Object.keys(request.questions)
+    const unscripted = names.filter((name) => !Object.hasOwn(decisions, name))
+    if (unscripted.length > 0) {
+      throw new Error(`MockAdapter has no scripted decision for: ${unscripted.join(', ')}`)
+    }
+    return { answers: Object.fromEntries(names.map((name) => [name, decisions[name]])) }
   }
 
   setResponses(responses: MockResponseConfig[]): void {

@@ -25,6 +25,26 @@ export class OutputParseError extends Error {
   }
 }
 
+/**
+ * `app.decide` was given a model that has no decisions endpoint: its adapter has none, or the
+ * provider does not serve the model there. A model call is no substitute, because it returns no
+ * probabilities, so the call fails instead.
+ */
+export class DecisionsUnavailableError extends Error {
+  readonly provider: string
+  readonly modelName: string
+
+  constructor(model: { provider: string; name: string }, options?: ErrorOptions) {
+    super(
+      `Decisions are not available for model '${model.name}' (${model.provider}): no decisions endpoint serves it`,
+      options,
+    )
+    this.name = 'DecisionsUnavailableError'
+    this.provider = model.provider
+    this.modelName = model.name
+  }
+}
+
 export class ConflictError extends Error {
   constructor(
     public readonly sessionId: string,

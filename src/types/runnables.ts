@@ -2,6 +2,7 @@ import type { EventChannel } from '../channels'
 import type { OutputSignal, EndSignal } from '../core/tools'
 import type { ErrorHandler } from '../errors/types'
 import type { Hook } from '../hook/types'
+import type { DecisionRequest, DecisionResponse } from './decisions'
 import type { Event, ToolCallEvent, StreamEvent, ModelUsage, ModelEndEvent } from './events'
 import type { RunResult, RunConfig, Output } from './runtime'
 import type { ErasedStateSchema, StateSchema, TypedState } from './schema'
@@ -639,4 +640,15 @@ export interface ModelAdapter {
    * results of the tool calls the last step made.
    */
   endInvocation?(invocationId: string): void
+  /**
+   * Answers closed questions about an input on the provider's decisions endpoint, with exactly one
+   * answer per question. An adapter without this method has no decisions endpoint.
+   *
+   * @throws {DecisionsUnavailableError} When the provider does not serve the model there.
+   */
+  decide?(
+    request: DecisionRequest,
+    config: ProviderModelConfig,
+    signal?: AbortSignal,
+  ): Promise<DecisionResponse>
 }

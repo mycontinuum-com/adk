@@ -231,6 +231,61 @@ Run statuses include `completed`, `yielded_tool`, `yielded_message`, `error`, `s
 
 Output is available as `result.output.text`, `result.output.value`, `result.output.items`, and `result.output.media`.
 
+## One-Shot Calls
+
+`app.ask(prompt, opts?)` and `app.decide(input, opts)` each make one isolated call outside any run. They take no tools and no session, and a hook, tool or step calls them through the app. Both use `opts.model`, then the app's `defaultModel`, and throw when neither is set. Both take `opts.signal`.
+
+`app.ask` returns the assistant text, or a typed value when `opts.schema` is set. `opts.system` adds a system prompt. A reply that fails the schema is asked again up to `opts.retries` times (2 by default).
+
+`app.decide` answers closed questions about an input on the model's decisions endpoint, in tens of milliseconds where a model call takes most of a second. Questions are keyed by name in `opts.questions`, and it returns the answers under the same names:
+
+```typescript
+const { emergency, drink, severity } = await app.decide(transcript, {
+  model: openai('gpt-6-luna'),
+  questions: {
+    emergency: { type: 'predicate', instructions: 'Does the caller describe an emergency?' },
+    drink: {
+      type: 'choice',
+      instructions: 'Which drink did the caller choose?',
+      choices: [{ value: 'tea' }, { value: 'coffee' }, { value: 'none', description: 'No choice.' }],
+    },
+    severity: {
+      type: 'score',
+      instructions: 'How severe is the problem?',
+      levels: [{ label: 'Minor' }, { label: 'Serious' }, { label: 'Critical' }],
+    },
+  },
+})
+
+if (emergency.type === 'predicate' && emergency.probability >= 0.9) adviseEmergencyServices()
+if (drink.type === 'choice' && drink.confidence >= 0.9) order(drink.choice) // 'tea' | 'coffee' | 'none'
+```
+
+- A predicate's answer has a `probability`. A choice's has its `choice`, a `confidence` and a probability for each value. A score's has a `score`, the probability-weighted position on the levels from 0, and a `confidence`. Set thresholds from labelled examples of your own.
+- Any answer can be `{ type: 'refusal' }`, so narrow on `type` first.
+- Only a model its provider serves on a decisions endpoint can answer. Today that is OpenAI `gpt-6-luna`, through `POST /decisions`. Any other model, and a provider with no such endpoint, rejects with `DecisionsUnavailableError`, which names the model. There is no fallback to a model call, because a model call returns no probabilities.
+- There is no system prompt. Put shared context in the input and guidance in each question's `instructions`. Model settings the endpoint has no use for, such as reasoning effort, are ignored.
+- The questions share one request, so none can depend on another's answer. Ask a dependent question in a second call.
+- A provider error, an aborted signal and answers that do not match the questions reject. Every adapter's answers are checked: each question has one answer, a refusal or of its own type; a choice is one of the offered values with exactly one probability for each; a score lies on the levels. Catch the rejection where a slower path can take over.
+- Like `app.ask`, the call runs as the one model step of an ephemeral agent, `decide-ephemeral`, on a fresh session. The app's hooks see that step's `model_start` and `model_end`, which carries the usage and duration, and the app's error handlers apply to it. A failed call is a `model_end` with an error and no usage. Nothing is written to the session of a run that makes the call, and that run's `usage` does not count it.
+
+To record a decision in a run, note it from the hook, step or tool that made it:
+
+```typescript
+ctx.note('decision', { kind: 'mark', label: 'decision', data: { answers } })
+```
+
+The annotation is in `session.events` for evals and later code. No model sees it, because history does not render annotations. An agent that should read it needs a context renderer:
+
+```typescript
+const decisionsSoFar: ContextRenderer = (ctx) => {
+  const marks = ctx.session.events.filter(isAnnotationEvent).filter((e) => e.label === 'decision')
+  return app.context.system(`Decisions so far: ${JSON.stringify(marks.map((m) => m.data))}`)(ctx)
+}
+
+const agent = app.agent({ name: 'barista', model, context: [decisionsSoFar, app.context.history()] })
+```
+
 ## Patterns
 
 `gated(runnable, check)` runs a precondition first. `cached(runnable, { key, scope, ttlMs })` skips a runnable when cached state exists.

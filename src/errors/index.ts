@@ -7,5 +7,5 @@ export {
   defaultHandler,
 } from './handlers'
 export { PipelineStructureChangedError } from './pipeline'
-export { OutputParseError, ConflictError } from './types'
+export { OutputParseError, ConflictError, DecisionsUnavailableError } from './types'
 export type { ErrorHandler } from './types'

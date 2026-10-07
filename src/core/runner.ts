@@ -2,6 +2,7 @@ import type { WorkflowRunnerConfig } from '../agents/config'
 import type { ChannelResult, EventChannel } from '../channels/types'
 import type { ErrorHandler } from '../errors/types'
 import type { Hook } from '../hook/types'
+import type { Answers, DecisionRequest, Questions } from '../types/decisions'
 import type {
   StreamEvent,
   HandoffOrigin,
@@ -40,6 +41,7 @@ import { runSequence, type SequenceResumeContext } from '../agents/sequential'
 import { runStep, type StepResumeContext } from '../agents/step'
 import { InMemoryChannel } from '../channels/inMemory'
 import { PipelineStructureChangedError } from '../errors/pipeline'
+import { DecisionsUnavailableError } from '../errors/types'
 import { composeHooks } from '../hook/compose'
 import { isRealtimeConfig, getModelProvider, getInnerModel } from '../providers/models'
 import {
@@ -55,6 +57,7 @@ import { InMemoryStore } from '../session/memory'
 import { computeResumeContext, type RunnableResumeContext } from '../session/resume/context'
 import { sessionService } from '../session/service'
 import { ADAPTER, REALTIME_ADAPTER, getSymbol } from './adapter-symbol'
+import { assertAnswersMatch } from './decisions'
 
 /** Prevents executing against a session started with a different agent configuration. */
 function validatePipelineFingerprint(session: Session, currentFingerprint: string): void {
@@ -498,6 +501,27 @@ export class BaseRunner implements Runner {
 
   getAgent(name: string): Agent | undefined {
     return this.agentRegistry.get(name)
+  }
+
+  /**
+   * Asks the model's adapter to answer a decision on its decisions endpoint, and checks the answers
+   * against the questions.
+   *
+   * @throws {DecisionsUnavailableError} When the adapter has no decisions endpoint, or does not
+   *   serve the model there.
+   * @throws When the adapter's answers do not match the questions.
+   */
+  async decide<Qs extends Questions>(
+    request: DecisionRequest<Qs>,
+    model: ModelConfig,
+    signal?: AbortSignal,
+  ): Promise<{ answers: Answers<Qs>; usage?: ModelUsage }> {
+    const adapter = await this.getAdapter(model)
+    const config = getInnerModel(model)
+    if (!adapter.decide) throw new DecisionsUnavailableError(config)
+    const { answers, usage } = await adapter.decide(request, config, signal)
+    assertAnswersMatch(request.questions, answers)
+    return { answers, usage }
   }
 
   private async getAdapter(config: ModelConfig): Promise<ModelAdapter> {

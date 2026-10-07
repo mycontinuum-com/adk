@@ -41,6 +41,35 @@ Interception hooks:
 - `beforeTool`: return tool result to skip execution.
 - `afterTool`: return modified tool result.
 
+A `beforeModel` hook can answer an easy step itself and leave the rest to the model. Ask a fast closed question with [`app.decide`](runnables.md#one-shot-calls) and return a tool call only when the answer is confident:
+
+```typescript
+beforeModel: async (ctx, renderCtx) => {
+  const answers = await app
+    .decide(transcriptOf(renderCtx), { model: openai('gpt-6-luna'), signal: ctx.signal, questions: { option } })
+    .catch((error: unknown) => {
+      if (error instanceof DecisionsUnavailableError) throw error // a wrong model is a bug to fix
+      return undefined // a provider failure leaves the step to the model
+    })
+  const answer = answers?.option
+  if (answer) ctx.note('decision', { kind: 'mark', label: 'decision', data: { answers } })
+  if (answer?.type !== 'choice' || answer.confidence < 0.9) return
+  const call: ToolCallEvent = {
+    id: createEventId(),
+    type: 'tool_call',
+    createdAt: Date.now(),
+    invocationId: ctx.invocationId,
+    agentName: renderCtx.agentName,
+    callId: createCallId(),
+    name: 'submit_answer',
+    args: { optionId: answer.choice },
+  }
+  return { stepEvents: [call], toolCalls: [call], terminal: false }
+}
+```
+
+Put such a hook on the agent. `app.ask` and `app.decide` each run an ephemeral agent, and an app-level hook runs for that agent's model step too, so an app-level `beforeModel` that calls one of them calls itself. The `ctx.note` line records the decision in the run's session, which the call does not do by itself (`runnables.md` §One-Shot Calls).
+
 Observation hooks:
 
 - `onEvent(event)`
@@ -168,6 +197,15 @@ Matchers include:
 - `toBeUuid`
 
 Use `MockAdapter`, `testAgent`, `createTestSession`, and `collectStream` for lower-level testing utilities.
+
+`new MockAdapter({ decisions })` scripts `app.decide`: `decisions` maps each question name to the answer it gets, and a question with no entry fails the call. `app.decide` checks every adapter's answers against the questions, the mock's included, so a scripted answer must suit its question: a choice among the offered values with a probability for each, a score within the levels. `adapter.decideCalls` records each request. Pass the adapter to the app, `adk({ adapters })`: `app.ask` and `app.decide` use the app's adapters, not the one `runTest` builds.
+
+```typescript
+const adapter = new MockAdapter({
+  decisions: { urgent: { type: 'predicate', probability: 0.97 } },
+})
+const app = adk({ adapters: { openai: adapter }, defaultModel: openai('gpt-6-luna') })
+```
 
 ## Tool Mocks In Evals
 

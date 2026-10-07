@@ -7,8 +7,10 @@ import type {
   ResponseOutputMessage,
 } from 'openai/resources/responses/responses'
 
-import OpenAI, { AzureOpenAI } from 'openai'
+import OpenAI, { AzureOpenAI, NotFoundError } from 'openai'
+import { z } from 'zod'
 
+import type { Answer, DecisionRequest, DecisionResponse, Questions } from '../types/decisions'
 import type {
   Event,
   StreamEvent,
@@ -29,7 +31,9 @@ import type {
 } from '../types/runnables'
 
 import { CALL_ID_PREFIX } from '../core/constants'
+import { assertAnswersMatch } from '../core/decisions'
 import { withStreamRetry } from '../core/retry'
+import { DecisionsUnavailableError } from '../errors/types'
 import { createEventId, createCallId } from '../session'
 import { createStreamAccumulator, type RawDeltaEvent, type AccumulatedText } from './accumulator'
 import {
@@ -127,6 +131,49 @@ export class OpenAIAdapter implements ModelAdapter {
     }
 
     throw lastError ?? new Error('No endpoints configured')
+  }
+
+  /**
+   * Answers a decision on the Decisions API (`POST /decisions`) of the first OpenAI endpoint that
+   * serves the model. Azure endpoints are skipped. After a rate limit, a timeout or a server error
+   * the next endpoint is asked.
+   *
+   * @throws {DecisionsUnavailableError} When an endpoint answers 404 for the model, or every
+   *   endpoint is an Azure deployment. The input is not sent to a further endpoint after a 404.
+   * @throws The provider's error for any other failure, and an `Error` for a response that does not
+   *   answer the questions asked.
+   */
+  async decide(
+    request: DecisionRequest,
+    config: ProviderModelConfig,
+    signal?: AbortSignal,
+  ): Promise<DecisionResponse> {
+    let failure: unknown
+
+    for (const endpoint of this.endpoints) {
+      // The Decisions API is an OpenAI platform route. An Azure deployment has none.
+      if (endpoint.type === 'azure') continue
+      const { client, resolvedModel } = this.getOrCreateClient(endpoint, config.name)
+      try {
+        // The pinned SDK predates `client.decisions`, so the request goes through its generic path.
+        const body = await client.post<unknown>('/decisions', {
+          body: serializeDecisionRequest(request, resolvedModel),
+          signal,
+        })
+        return parseDecisionResponse(body, request.questions)
+      } catch (error) {
+        // 404 means this endpoint does not serve the model on its decisions route. The input is
+        // not sent on to another endpoint, which may be in another region.
+        if (error instanceof NotFoundError) {
+          throw new DecisionsUnavailableError(config, { cause: error })
+        }
+        if (!isRetryableForFallback(error)) throw error
+        failure = error
+      }
+    }
+
+    if (failure) throw failure
+    throw new DecisionsUnavailableError(config)
   }
 
   private getOrCreateClient(
@@ -582,6 +629,77 @@ function parseUsage(usage?: OpenAIUsage): ModelUsage | undefined {
     reasoningTokens: usage.output_tokens_details?.reasoning_tokens,
     outputTokens: usage.output_tokens,
   }
+}
+
+/**
+ * Builds the body of a `POST /decisions` request: each question with its name, in the order the
+ * questions were given.
+ *
+ * @param model The model name as the endpoint knows it.
+ */
+export function serializeDecisionRequest({ input, questions }: DecisionRequest, model: string) {
+  return {
+    model,
+    input,
+    questions: Object.entries(questions).map(([name, question]) => ({ name, ...question })),
+  }
+}
+
+const decisionResponseSchema = z.object({
+  answers: z.array(
+    z.discriminatedUnion('type', [
+      z.object({ type: z.literal('refusal'), name: z.string() }),
+      z.object({ type: z.literal('predicate'), name: z.string(), probability: z.number() }),
+      z.object({
+        type: z.literal('choice'),
+        name: z.string(),
+        choice: z.string(),
+        confidence: z.number(),
+        probabilities: z.array(z.object({ value: z.string(), probability: z.number() })),
+      }),
+      z.object({
+        type: z.literal('score'),
+        name: z.string(),
+        score: z.number(),
+        confidence: z.number(),
+      }),
+    ]),
+  ),
+  usage: z
+    .object({
+      input_tokens: z.number(),
+      input_tokens_details: z
+        .object({ cached_tokens: z.number().optional(), cache_write_tokens: z.number().optional() })
+        .optional(),
+      output_tokens: z.number(),
+      output_tokens_details: z.object({ reasoning_tokens: z.number().optional() }).optional(),
+    })
+    .optional(),
+})
+
+/**
+ * Parses a `POST /decisions` response body into one answer per question asked.
+ *
+ * @throws When the body is not a decisions response, answers a question twice, or its answers do
+ *   not match the questions asked (`assertAnswersMatch`).
+ */
+export function parseDecisionResponse(body: unknown, questions: Questions): DecisionResponse {
+  const parsed = decisionResponseSchema.safeParse(body)
+  if (!parsed.success) {
+    throw new Error(`OpenAI decisions response has an unrecognised shape: ${parsed.error.message}`)
+  }
+
+  const named = parsed.data.answers.map(({ name, ...answer }): [string, Answer] => [name, answer])
+  const names = named.map(([name]) => name)
+  const twice = names.find((name, index) => names.indexOf(name) !== index)
+  if (twice !== undefined) {
+    throw new Error(`OpenAI decisions response answers '${twice}' more than once`)
+  }
+  // `Object.fromEntries` makes every name an own property, a question named `__proto__` included.
+  const answers = Object.fromEntries(named)
+  assertAnswersMatch(questions, answers)
+
+  return { answers, usage: parseUsage(parsed.data.usage) }
 }
 
 function parseFinishReason(status?: string, hasToolCalls?: boolean): ModelEndEvent['finishReason'] {
