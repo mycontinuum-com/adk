@@ -35,11 +35,9 @@ Migration section:
 
 ### Added
 
-- `app.decide(input, { questions, model?, signal? })` answers closed questions about an input on the model's decisions endpoint (OpenAI `gpt-6-luna`, `POST /decisions`) in tens of milliseconds. Questions are keyed by name and are a `predicate`, a `choice` or a `score`. It returns one answer per name: a predicate's `probability`, a choice's `choice` (typed as its values) with `confidence` and `probabilities`, a score's `score` with `confidence`, or `{ type: 'refusal' }`.
-- `app.decide` behaves as `app.ask` does: the model resolves the same way, the call runs as one model step of an ephemeral agent on a fresh session, the app's hooks see its `model_start` and `model_end` with the usage, and nothing is written to a calling run's session. Record a decision there with `ctx.note`.
-- `DecisionsUnavailableError` rejects `app.decide` for a model no decisions endpoint serves. There is no fallback to a model call, which returns no probabilities.
-- `ModelAdapter.decide` is the optional adapter method behind it. `OpenAIAdapter` implements it without a newer `openai` SDK, and skips Azure endpoints. `app.decide` rejects answers from any adapter that do not match the questions.
-- `MockAdapter` takes `decisions`, the answer for each question name, records requests in `decideCalls`, and fails a question it has no answer for.
+- `app.decide(input, { questions, model?, signal? })` answers closed questions (`predicate`, `choice`, `score`) on the model's decisions endpoint, with probabilities, in tens of milliseconds. See [One-Shot Calls](docs/guide/references/runnables.md#one-shot-calls).
+- `DecisionsUnavailableError` rejects it for a model no decisions endpoint serves; today only OpenAI `gpt-6-luna` is served. There is no fallback to a model call.
+- `ModelAdapter.decide` is the optional adapter method behind it; `MockAdapter` scripts it with `decisions` and fails an unscripted question.
 - Eval CLI `--baseline <run>` (repeatable, pooled) compares a run with earlier ones — each case is `regressed`, `improved`, `unchanged` or `unclear` by a two-sided Fisher exact test on its pass counts, and tool results that one side returned and the other never did are listed. The comparison follows the summary in `report.md` and is `comparison` in `result.json`.
 - Eval CLI `--case` may repeat.
 - A text case's `case-<n>.json` has `modelInputs` and `instructions` — the system messages, `toolChoice` and `allowedTools` each model call was given.

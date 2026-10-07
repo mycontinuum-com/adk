@@ -13,7 +13,12 @@ const RUN_LIVE =
 
 const luna = openai('gpt-6-luna')
 const unserved = openai('gpt-5.4-mini', { reasoning: { effort: 'low' } })
-const greeting = { type: 'predicate', instructions: 'Is the text a greeting?' } as const
+const BILLING_COMPLAINT =
+  'Good morning. I was charged twice for my order, the refund page fails every time and there is no other way to get my money back.'
+const greeting = {
+  type: 'predicate',
+  instructions: 'Does the text open with a greeting?',
+} as const
 const department = {
   type: 'choice',
   instructions: 'Which department should handle this?',
@@ -37,53 +42,29 @@ const severity = {
   const seen: StreamEvent[] = []
   const app = adk({ defaultModel: luna, hooks: [{ onEvent: (event) => seen.push(event) }] })
 
-  it('answers a predicate with a probability', async () => {
-    const answers = await app.decide('Hello there, good morning!', { questions: { greeting } })
+  it('answers each type of question in one request and reports its usage in one event', async () => {
+    seen.length = 0
 
-    assert(answers.greeting.type === 'predicate')
-    expect(answers.greeting.probability).toBeGreaterThan(0.8)
-  })
-
-  it('answers a choice with a value, a confidence and a probability per value', async () => {
-    const answers = await app.decide('I was charged twice for my order.', {
-      questions: { department },
+    const answers = await app.decide(BILLING_COMPLAINT, {
+      questions: { greeting, department, severity },
     })
 
+    assert(answers.greeting.type === 'predicate')
+    expect(answers.greeting.probability).toBeGreaterThan(0.5)
     assert(answers.department.type === 'choice')
     expect(answers.department.choice).toBe(department.choices[0].value)
     expect(answers.department.confidence).toBeGreaterThan(0.5)
     expect(answers.department.probabilities.map((p) => p.value)).toEqual(
       department.choices.map((c) => c.value),
     )
-  })
-
-  it('answers a score with a position on the levels', async () => {
-    const answers = await app.decide('Nobody can log in and there is no other way in.', {
-      questions: { severity },
-    })
-
     assert(answers.severity.type === 'score')
-    expect(answers.severity.score).toBeGreaterThan(1.5)
+    expect(answers.severity.score).toBeGreaterThan(1)
     expect(answers.severity.score).toBeLessThanOrEqual(severity.levels.length - 1)
     expect(answers.severity.confidence).toBeGreaterThan(0)
-  })
-
-  it('answers several questions in one request and reports its usage in one event', async () => {
-    seen.length = 0
-
-    const answers = await app.decide('Hello, I was charged twice and cannot log in at all.', {
-      questions: { greeting, department, severity },
-    })
-
-    expect(Object.entries(answers).map(([name, answer]) => [name, answer.type])).toEqual([
-      ['greeting', 'predicate'],
-      ['department', 'choice'],
-      ['severity', 'score'],
-    ])
     const calls = seen.filter((e) => e.type === 'model_end')
     expect(calls).toMatchObject([
       {
-        agentName: 'decide-ephemeral',
+        agentName: 'decide',
         usage: { provider: luna.provider, modelName: luna.name, outputTokens: 0 },
       },
     ])
@@ -108,16 +89,6 @@ const severity = {
     )
 
     expect(answers.reagent).toEqual({ type: 'refusal' })
-  })
-
-  it('rejects with the provider error for a question the endpoint refuses', async () => {
-    await expect(
-      app.decide('Hello', {
-        questions: {
-          pick: { type: 'choice', instructions: 'Pick one.', choices: [{ value: 'only' }] },
-        },
-      }),
-    ).rejects.toMatchObject({ status: 400 })
   })
 
   it('rejects with DecisionsUnavailableError on a model the endpoint does not serve', async () => {

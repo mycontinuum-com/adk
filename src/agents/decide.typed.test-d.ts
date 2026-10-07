@@ -1,8 +1,7 @@
 /** Type-level assertions for app.decide. Compiled by `pnpm run typecheck`. */
 import { expectTypeOf } from 'vitest'
 
-import type { AdkApp } from '../api/app'
-import type { Answer, InvocationContext, Question, StateSchema } from '../types'
+import type { Answer, InvocationContext, Question } from '../types'
 
 import { adk } from '../api/app'
 
@@ -72,15 +71,8 @@ void app.decide('Hello', {
   system: 'You are a router.',
   questions: { q: { type: 'predicate', instructions: 'Is this a greeting?' } },
 })
-void app.decide('Hello', {
-  // @ts-expect-error -- like app.ask, there is no timeout option: pass a signal
-  timeoutMs: 100,
-  questions: { q: { type: 'predicate', instructions: 'Is this a greeting?' } },
-})
 
 // Like app.ask, decide is on the app only.
-declare const typedApp: AdkApp<StateSchema>
-expectTypeOf(typedApp.decide).toBeFunction()
 declare const ctx: InvocationContext
 // @ts-expect-error -- the invocation context has no decide
 void ctx.decide

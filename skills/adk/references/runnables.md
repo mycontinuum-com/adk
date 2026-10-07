@@ -267,7 +267,8 @@ if (drink.type === 'choice' && drink.confidence >= 0.9) order(drink.choice) // '
 - There is no system prompt. Put shared context in the input and guidance in each question's `instructions`. Model settings the endpoint has no use for, such as reasoning effort, are ignored.
 - The questions share one request, so none can depend on another's answer. Ask a dependent question in a second call.
 - A provider error, an aborted signal and answers that do not match the questions reject. Every adapter's answers are checked: each question has one answer, a refusal or of its own type; a choice is one of the offered values with exactly one probability for each; a score lies on the levels. Catch the rejection where a slower path can take over.
-- Like `app.ask`, the call runs as the one model step of an ephemeral agent, `decide-ephemeral`, on a fresh session. The app's hooks see that step's `model_start` and `model_end`, which carries the usage and duration, and the app's error handlers apply to it. A failed call is a `model_end` with an error and no usage. Nothing is written to the session of a run that makes the call, and that run's `usage` does not count it.
+- Like `app.ask`, the call joins no run. Nothing is written to the session of a run that makes it, and that run's `usage` does not count it. The app's hooks see it as one `model_start` and one `model_end` under the agent name `decide`. The `model_end` carries the usage and duration, or the error and no usage.
+- Unlike `app.ask`, no agent runs. Of the app's hooks only `onEvent` sees the call. No `before` or `after` hook and no `onStep` runs for it, and the app's error handlers do not apply, so a failed call rejects once and the caller decides whether to try again.
 
 To record a decision in a run, note it from the hook, step or tool that made it:
 

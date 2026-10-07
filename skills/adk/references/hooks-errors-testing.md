@@ -68,7 +68,7 @@ beforeModel: async (ctx, renderCtx) => {
 }
 ```
 
-Put such a hook on the agent. `app.ask` and `app.decide` each run an ephemeral agent, and an app-level hook runs for that agent's model step too, so an app-level `beforeModel` that calls one of them calls itself. The `ctx.note` line records the decision in the run's session, which the call does not do by itself (`runnables.md` §One-Shot Calls).
+`app.decide` runs no agent, so a hook that calls it is never entered again by the call. `app.ask` does run an ephemeral agent, and an app-level hook runs for that agent's model step too, so an app-level `beforeModel` that calls `app.ask` calls itself. Put that hook on the agent. The `ctx.note` line records the decision in the run's session, which the call does not do by itself (`runnables.md` §One-Shot Calls).
 
 Observation hooks:
 
@@ -88,6 +88,8 @@ Built-ins:
 - `app.hook.voiceLogging(options?)`
 
 Composition order: app hooks outer, agent hooks middle, call-site hooks inner. Before hooks run outer-to-inner and first non-undefined wins. After hooks run inner-to-outer.
+
+An agent created by `app.agent` without `hooks` takes the app's hooks as its agent hooks, and the run adds the app's hooks again. For that agent every app-level hook runs twice: `onEvent` receives each event twice, and a `beforeModel` that returns nothing runs twice per step. An agent given its own `hooks` runs each app-level hook once.
 
 ## Error Handlers
 

@@ -43,6 +43,15 @@ export class DecisionsUnavailableError extends Error {
     this.provider = model.provider
     this.modelName = model.name
   }
+
+  /**
+   * Matches by name. A provider entry such as `@animahealth/adk/openai` is a separate bundle with
+   * its own copy of this class, so the error its adapter throws is not built by the copy a consumer
+   * imports from `@animahealth/adk`.
+   */
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return value instanceof Error && value.name === 'DecisionsUnavailableError'
+  }
 }
 
 export class ConflictError extends Error {

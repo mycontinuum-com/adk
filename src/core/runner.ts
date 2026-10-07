@@ -2,7 +2,7 @@ import type { WorkflowRunnerConfig } from '../agents/config'
 import type { ChannelResult, EventChannel } from '../channels/types'
 import type { ErrorHandler } from '../errors/types'
 import type { Hook } from '../hook/types'
-import type { Answers, DecisionRequest, Questions } from '../types/decisions'
+import type { Answers, DecisionRequest, DecisionResponse, Questions } from '../types/decisions'
 import type {
   StreamEvent,
   HandoffOrigin,
@@ -40,6 +40,7 @@ import { runAgent } from '../agents/reasoning'
 import { runSequence, type SequenceResumeContext } from '../agents/sequential'
 import { runStep, type StepResumeContext } from '../agents/step'
 import { InMemoryChannel } from '../channels/inMemory'
+import { createEndEvent } from '../context/build'
 import { PipelineStructureChangedError } from '../errors/pipeline'
 import { DecisionsUnavailableError } from '../errors/types'
 import { composeHooks } from '../hook/compose'
@@ -57,7 +58,9 @@ import { InMemoryStore } from '../session/memory'
 import { computeResumeContext, type RunnableResumeContext } from '../session/resume/context'
 import { sessionService } from '../session/service'
 import { ADAPTER, REALTIME_ADAPTER, getSymbol } from './adapter-symbol'
+import { createEventId } from './constants'
 import { assertAnswersMatch } from './decisions'
+import { createInvocationId } from './invocation'
 
 /** Prevents executing against a session started with a different agent configuration. */
 function validatePipelineFingerprint(session: Session, currentFingerprint: string): void {
@@ -504,7 +507,7 @@ export class BaseRunner implements Runner {
   }
 
   /**
-   * Asks the model's adapter to answer a decision on its decisions endpoint, and checks the answers
+   * Answers a decision on the decisions endpoint of the model's adapter and checks the answers
    * against the questions.
    *
    * @throws {DecisionsUnavailableError} When the adapter has no decisions endpoint, or does not
@@ -515,13 +518,52 @@ export class BaseRunner implements Runner {
     request: DecisionRequest<Qs>,
     model: ModelConfig,
     signal?: AbortSignal,
-  ): Promise<{ answers: Answers<Qs>; usage?: ModelUsage }> {
+  ): Promise<Answers<Qs>> {
     const adapter = await this.getAdapter(model)
     const config = getInnerModel(model)
-    if (!adapter.decide) throw new DecisionsUnavailableError(config)
-    const { answers, usage } = await adapter.decide(request, config, signal)
-    assertAnswersMatch(request.questions, answers)
-    return { answers, usage }
+    const notify = composeHooks(this.hooks).onEvent
+    const call = { invocationId: createInvocationId(), agentName: 'decide', stepIndex: 1 }
+    const startedAt = Date.now()
+    notify?.({
+      id: createEventId(),
+      type: 'model_start',
+      createdAt: startedAt,
+      ...call,
+      messageCount: 1,
+      tools: [],
+    })
+
+    let served: DecisionResponse
+    try {
+      if (!adapter.decide) throw new DecisionsUnavailableError(config)
+      signal?.throwIfAborted()
+      served = await adapter.decide(request, config, signal)
+      signal?.throwIfAborted()
+      assertAnswersMatch(request.questions, served.answers)
+    } catch (error) {
+      notify?.(
+        createEndEvent({
+          ...call,
+          durationMs: Date.now() - startedAt,
+          finishReason: 'error',
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+      throw error
+    }
+    notify?.(
+      createEndEvent({
+        ...call,
+        durationMs: Date.now() - startedAt,
+        finishReason: 'stop',
+        usage: served.usage && {
+          ...served.usage,
+          provider: served.usage.provider ?? config.provider,
+          modelName: served.usage.modelName ?? config.name,
+        },
+      }),
+    )
+    return served.answers
   }
 
   private async getAdapter(config: ModelConfig): Promise<ModelAdapter> {

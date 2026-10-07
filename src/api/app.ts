@@ -107,7 +107,6 @@ import {
   message,
   transformUserMessages,
 } from '../context/prompt'
-import { DecisionStep } from '../core/decisions'
 import { BaseRunner, summarizeModelUsage } from '../core/runner'
 import { OutputParseError } from '../errors/types'
 import { createJudgeMetric } from '../eval/metrics/judge'
@@ -121,7 +120,6 @@ import { consoleHook, type ConsoleHookOptions } from '../hook/console'
 import { loggingHook, type LoggingHookOptions } from '../hook/logging'
 import { metricsHook, type MetricsHookOptions } from '../hook/metrics'
 import { createMCPManager } from '../mcp/manager'
-import { getInnerModel } from '../providers/models'
 import { loadPricing, RESULT_PRICING_WAIT_MS } from '../providers/pricing'
 import { runSimulateLoop, type SimulateOptions } from '../run/simulate'
 import { runTestLoop, type TestOptions } from '../run/test'
@@ -452,9 +450,10 @@ export interface AdkApp<S extends StateSchema> {
    * can answer: any other rejects with `DecisionsUnavailableError`, because a model call returns no
    * probabilities and so is no substitute. Provider errors and an aborted `signal` reject too.
    *
-   * Like `app.ask`, it runs as one model step of an ephemeral agent on a fresh session: the app's
-   * hooks see that step's `model_start` and `model_end`, which carries the usage, and nothing is
-   * written to the session of a run that called it. To record a decision there, `ctx.note` it.
+   * Like `app.ask`, it joins no run: nothing is written to the session of a run that called it. To
+   * record a decision there, `ctx.note` it. The app's hooks see the call as one `model_start` and
+   * one `model_end`, which carries the usage or the error. No agent runs, so no other hook runs for
+   * it and the app's error handlers do not apply to it.
    */
   decide<const Qs extends Questions>(input: string, opts: DecideOpts<Qs>): Promise<Answers<Qs>>
 
@@ -1099,32 +1098,11 @@ export function adk<S extends StateSchema>(config?: AdkConfig<S>): AdkApp<S> {
         )
       }
 
-      // The decision is the one model step of an ephemeral agent on a fresh session, so the app's
-      // hooks and error handlers see it, and its usage, exactly as they see an `app.ask` call.
-      const step = new DecisionStep(
-        new BaseRunner({ adapters: appAdapters }),
+      return new BaseRunner({ adapters: appAdapters, hooks: appHooks }).decide(
         { input, questions: opts.questions },
         model,
+        opts.signal,
       )
-      const inner = getInnerModel(model)
-      const stream = new BaseRunner({
-        sessionService: appSessionService,
-        hooks: appHooks,
-        errorHandlers: appErrorHandlers,
-        adapters: { [inner.provider]: step },
-      }).run(
-        createAgent({ name: 'decide-ephemeral', model: inner, context: [], tools: [] }),
-        new BaseSession(appName),
-      )
-      forwardAbort(opts.signal, stream)
-      await stream.then(undefined, (error: unknown) => {
-        throw step.failure ?? error
-      })
-
-      if (!step.answers) {
-        throw new Error('[adk] app.decide: a hook answered the model step in its place')
-      }
-      return step.answers
     },
 
     test(runnable: Runnable<S>, options: TestOptions): Promise<RunResult<S>> {

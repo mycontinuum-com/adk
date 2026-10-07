@@ -22,7 +22,7 @@ export type Question =
 export type Questions = Readonly<Record<string, Question>>
 
 /** `probability` is the model's estimate, from 0 to 1, that the condition holds. */
-export interface PredicateAnswer {
+interface PredicateAnswer {
   type: 'predicate'
   probability: number
 }
@@ -42,14 +42,14 @@ export interface ChoiceAnswer<V extends string = string> {
  * `score` is the probability-weighted position on the levels, from 0 for the first, so it can fall
  * between two levels.
  */
-export interface ScoreAnswer {
+interface ScoreAnswer {
   type: 'score'
   score: number
   confidence: number
 }
 
 /** The provider declined to answer this question. */
-export interface RefusalAnswer {
+interface RefusalAnswer {
   type: 'refusal'
 }
 
@@ -81,7 +81,11 @@ export interface DecideOpts<Qs extends Questions = Questions> {
    * ignored.
    */
   model?: ModelConfig
-  /** Aborts the provider call, which then rejects with the provider's error. */
+  /**
+   * Aborts the call. It rejects with the provider's error when the adapter aborts its request, and
+   * with the signal's `reason` when the signal was aborted before the request or the adapter did
+   * not act on it.
+   */
   signal?: AbortSignal
 }
 

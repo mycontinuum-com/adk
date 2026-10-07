@@ -59,16 +59,15 @@ export class MockAdapter implements ModelAdapter {
     config: ProviderModelConfig,
     signal?: AbortSignal,
   ): Promise<DecisionResponse> {
-    const decisions = this.decisions
     this.decideCalls.push({ request, config })
     signal?.throwIfAborted()
 
     const names = Object.keys(request.questions)
-    const unscripted = names.filter((name) => !Object.hasOwn(decisions, name))
+    const unscripted = names.filter((name) => !Object.hasOwn(this.decisions, name))
     if (unscripted.length > 0) {
       throw new Error(`MockAdapter has no scripted decision for: ${unscripted.join(', ')}`)
     }
-    return { answers: Object.fromEntries(names.map((name) => [name, decisions[name]])) }
+    return { answers: Object.fromEntries(names.map((name) => [name, this.decisions[name]])) }
   }
 
   setResponses(responses: MockResponseConfig[]): void {

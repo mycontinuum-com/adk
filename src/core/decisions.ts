@@ -1,19 +1,4 @@
-import type {
-  Answer,
-  Answers,
-  ChoiceAnswer,
-  DecisionRequest,
-  Question,
-  Questions,
-} from '../types/decisions'
-import type { ModelUsage, StreamEvent } from '../types/events'
-import type {
-  ModelAdapter,
-  ModelConfig,
-  ModelStepResult,
-  ProviderModelConfig,
-  RenderContext,
-} from '../types/runnables'
+import type { Answer, Answers, ChoiceAnswer, Question, Questions } from '../types/decisions'
 
 function isProbability(value: number): boolean {
   return value >= 0 && value <= 1
@@ -72,46 +57,5 @@ export function assertAnswersMatch<Qs extends Questions>(
     if (!Object.hasOwn(answers, name)) throw new Error(`Decision has no answer to '${name}'`)
     const problem = answerProblem(question, answers[name])
     if (problem) throw new Error(`Decision answer to '${name}' ${problem}`)
-  }
-}
-
-/** Answers a decision request, with the answers checked against its questions. */
-type Decide = <Qs extends Questions>(
-  request: DecisionRequest<Qs>,
-  model: ModelConfig,
-  signal?: AbortSignal,
-) => Promise<{ answers: Answers<Qs>; usage?: ModelUsage }>
-
-/**
- * Presents one decision as the model step of an agent, so that a run records it as a model call:
- * its usage and duration on `model_end`, its failure as a failed step. After the run, `answers`
- * holds the answers, or `failure` the error the decision rejected with.
- */
-export class DecisionStep<Qs extends Questions> implements ModelAdapter {
-  /** The checked answers, once the step has run and the decision answered. */
-  answers: Answers<Qs> | undefined
-  /** The original error. A run rejects with a copy that keeps only its name and message. */
-  failure: unknown
-
-  constructor(
-    private readonly runner: { decide: Decide },
-    private readonly request: DecisionRequest<Qs>,
-    private readonly model: ModelConfig,
-  ) {}
-
-  /** Makes the decision as this step. It emits no events and ends the agent's turn. */
-  async *step(
-    _ctx: RenderContext,
-    _config: ProviderModelConfig,
-    signal?: AbortSignal,
-  ): AsyncGenerator<StreamEvent, ModelStepResult> {
-    try {
-      const { answers, usage } = await this.runner.decide(this.request, this.model, signal)
-      this.answers = answers
-      return { stepEvents: [], toolCalls: [], terminal: true, usage }
-    } catch (error) {
-      this.failure = error
-      throw error
-    }
   }
 }

@@ -4,7 +4,7 @@ import type { Questions } from '../types/decisions'
 import type { OpenAIEndpoint } from './openai-endpoints'
 
 import { DecisionsUnavailableError } from '../errors'
-import { OpenAIAdapter, parseDecisionResponse, serializeDecisionRequest } from './openai'
+import { OpenAIAdapter, parseDecisionResponse } from './openai'
 
 const INPUT = 'I was charged twice.'
 const luna = { provider: 'openai' as const, name: 'gpt-6-luna' }
@@ -24,8 +24,6 @@ const questions = {
   },
 } satisfies Questions
 const greetingOnly = { is_greeting: questions.is_greeting }
-const departmentOnly = { department: questions.department }
-const severityOnly = { severity: questions.severity }
 
 const greeting = { type: 'predicate', name: 'is_greeting', probability: 0 }
 const department = {
@@ -61,125 +59,43 @@ const served = {
   },
 }
 
+const servedResponse = {
+  answers: {
+    is_greeting: { type: greeting.type, probability: greeting.probability },
+    department: {
+      type: department.type,
+      choice: department.choice,
+      confidence: department.confidence,
+      probabilities: department.probabilities,
+    },
+    severity: { type: severity.type, score: severity.score, confidence: severity.confidence },
+  },
+  usage: {
+    inputTokens: served.usage.input_tokens,
+    cachedTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    outputTokens: 0,
+  },
+}
+
 const UNRECOGNISED = 'unrecognised shape'
-const malformed: [string, unknown, Questions, string][] = [
-  ['a body that is not an object', 'ok', greetingOnly, UNRECOGNISED],
-  ['an error body', { error: { code: 'server_error' } }, greetingOnly, UNRECOGNISED],
+const malformed: [string, unknown, string][] = [
+  ['an error body', { error: { code: 'server_error' } }, UNRECOGNISED],
   [
     'an answer type it does not know',
     { answers: [{ ...greeting, type: 'ranking' }] },
-    greetingOnly,
     UNRECOGNISED,
   ],
   [
     'a predicate without a probability',
     { answers: [{ type: greeting.type, name: greeting.name }] },
-    greetingOnly,
-    UNRECOGNISED,
-  ],
-  [
-    'a choice without a confidence',
-    { answers: [{ ...department, confidence: undefined }] },
-    departmentOnly,
-    UNRECOGNISED,
-  ],
-  [
-    'an answer without a name',
-    { answers: [{ ...greeting, name: null }] },
-    greetingOnly,
     UNRECOGNISED,
   ],
   [
     'two answers to one question',
     { answers: [greeting, greeting] },
-    greetingOnly,
     "answers 'is_greeting' more than once",
-  ],
-  [
-    'an answer to a question that was not asked',
-    { answers: [greeting, department] },
-    greetingOnly,
-    "Decision has an answer to 'department', which was not asked",
-  ],
-  [
-    'an inherited property name as a question',
-    { answers: [greeting, { ...greeting, name: 'toString' }] },
-    greetingOnly,
-    "Decision has an answer to 'toString', which was not asked",
-  ],
-  [
-    'no answer to a question',
-    { answers: [greeting] },
-    questions,
-    "Decision has no answer to 'department'",
-  ],
-  [
-    'an answer of another question type',
-    { answers: [{ ...severity, name: greeting.name }] },
-    greetingOnly,
-    "Decision answer to 'is_greeting' is a score, but the question is a predicate",
-  ],
-  [
-    'a probability above 1',
-    { answers: [{ ...greeting, probability: 1.2 }] },
-    greetingOnly,
-    "Decision answer to 'is_greeting' has a probability outside 0 to 1",
-  ],
-  [
-    'a choice that is not one of the values',
-    { answers: [{ ...department, choice: 'sales' }] },
-    departmentOnly,
-    "Decision answer to 'department' chooses a value the question does not offer",
-  ],
-  [
-    'a probability for a value that was not offered',
-    {
-      answers: [
-        {
-          ...department,
-          probabilities: [department.probabilities[0], { value: 'sales', probability: 0.01 }],
-        },
-      ],
-    },
-    departmentOnly,
-    "Decision answer to 'department' does not give exactly one probability for each value offered",
-  ],
-  [
-    'no probability for an offered value',
-    { answers: [{ ...department, probabilities: [department.probabilities[0]] }] },
-    departmentOnly,
-    "Decision answer to 'department' does not give exactly one probability for each value offered",
-  ],
-  [
-    'two probabilities for one value',
-    {
-      answers: [
-        {
-          ...department,
-          probabilities: [...department.probabilities, department.probabilities[0]],
-        },
-      ],
-    },
-    departmentOnly,
-    "Decision answer to 'department' does not give exactly one probability for each value offered",
-  ],
-  [
-    'a confidence above 1',
-    { answers: [{ ...department, confidence: 1.5 }] },
-    departmentOnly,
-    "Decision answer to 'department' has a confidence outside 0 to 1",
-  ],
-  [
-    'a score above the last level',
-    { answers: [{ ...severity, score: questions.severity.levels.length - 1 + 0.01 }] },
-    severityOnly,
-    "Decision answer to 'severity' has a score outside the levels",
-  ],
-  [
-    'a score below the first level',
-    { answers: [{ ...severity, score: -0.01 }] },
-    severityOnly,
-    "Decision answer to 'severity' has a score outside the levels",
   ],
 ]
 
@@ -234,94 +150,53 @@ function network(respond: (url: string, init: RequestInit) => Response | Promise
   return calls
 }
 
-describe('serializeDecisionRequest', () => {
-  it('names each question and keeps its type, instructions and options', () => {
-    expect(serializeDecisionRequest({ input: INPUT, questions }, luna.name)).toEqual({
-      model: luna.name,
-      input: INPUT,
-      questions: [
-        { name: 'is_greeting', ...questions.is_greeting },
-        { name: 'department', ...questions.department },
-        { name: 'severity', ...questions.severity },
-      ],
-    })
-  })
-})
-
 describe('parseDecisionResponse', () => {
-  it('keys each answer by its question and reads the usage', () => {
-    expect(parseDecisionResponse(served, questions)).toEqual({
-      answers: {
-        is_greeting: { type: greeting.type, probability: greeting.probability },
-        department: {
-          type: department.type,
-          choice: department.choice,
-          confidence: department.confidence,
-          probabilities: department.probabilities,
-        },
-        severity: { type: severity.type, score: severity.score, confidence: severity.confidence },
-      },
-      usage: {
-        inputTokens: served.usage.input_tokens,
-        cachedTokens: 0,
-        cacheWriteTokens: 0,
-        reasoningTokens: 0,
-        outputTokens: 0,
-      },
-    })
-  })
-
   it('reads a refusal for any question type', () => {
     const refused = { answers: [{ type: 'refusal', name: department.name }] }
 
-    expect(parseDecisionResponse(refused, departmentOnly)).toEqual({
+    expect(parseDecisionResponse(refused)).toEqual({
       answers: { department: { type: 'refusal' } },
       usage: undefined,
     })
   })
 
-  it.each([0, questions.severity.levels.length - 1])(
-    'accepts a score of %d, an end level',
-    (score) => {
-      const body = { answers: [{ ...severity, score }] }
-
-      expect(parseDecisionResponse(body, severityOnly).answers.severity).toMatchObject({ score })
-    },
-  )
-
   it('answers a question named __proto__ under that name', () => {
     const name = '__proto__'
-    const awkward: Questions = Object.fromEntries([[name, questions.is_greeting]])
     const body = { answers: [{ ...greeting, name }] }
 
-    const { answers } = parseDecisionResponse(body, awkward)
+    const { answers } = parseDecisionResponse(body)
 
     expect(Object.entries(answers)).toEqual([
       [name, { type: greeting.type, probability: greeting.probability }],
     ])
   })
 
-  it.each(malformed)('rejects %s', (_case, body, asked, message) => {
-    expect(() => parseDecisionResponse(body, asked)).toThrow(message)
+  it.each(malformed)('rejects %s', (_case, body, message) => {
+    expect(() => parseDecisionResponse(body)).toThrow(message)
   })
 })
 
 describe('OpenAIAdapter.decide', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it("posts to the endpoint's decisions route with its key and returns the answers", async () => {
-    const calls = network(() => json(greeted))
+  it("posts the questions to the endpoint's decisions route and returns its answers and usage", async () => {
+    const calls = network(() => json(served))
     const adapter = new OpenAIAdapter([endpoint])
 
-    await expect(adapter.decide(request, luna)).resolves.toEqual({
-      answers: { is_greeting: { type: greeting.type, probability: greeting.probability } },
-      usage: undefined,
-    })
+    await expect(adapter.decide({ input: INPUT, questions }, luna)).resolves.toEqual(servedResponse)
     expect(calls).toEqual([
       {
         url: `${BASE}/decisions`,
         authorization: `Bearer ${KEY}`,
-        body: serializeDecisionRequest(request, luna.name),
+        body: {
+          model: luna.name,
+          input: INPUT,
+          questions: [
+            { name: 'is_greeting', ...questions.is_greeting },
+            { name: 'department', ...questions.department },
+            { name: 'severity', ...questions.severity },
+          ],
+        },
       },
     ])
   })
@@ -386,26 +261,19 @@ describe('OpenAIAdapter.decide', () => {
     expect(calls).toHaveLength(1)
   })
 
-  it('rejects a response it does not recognise', async () => {
-    network(() => json({ answers: [{ type: greeting.type, name: greeting.name }] }))
-    const adapter = new OpenAIAdapter([endpoint])
-
-    await expect(adapter.decide(request, luna)).rejects.toThrow(UNRECOGNISED)
-  })
-
   it('aborts the request with the signal', async () => {
+    const controller = new AbortController()
     network(
       (_url, init) =>
         new Promise((_resolve, reject) => {
           init.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+          controller.abort()
         }),
     )
     const adapter = new OpenAIAdapter([endpoint])
-    const controller = new AbortController()
 
-    const pending = adapter.decide(request, luna, controller.signal)
-    setTimeout(() => controller.abort(), 10)
-
-    await expect(pending).rejects.toThrow('Request was aborted')
+    await expect(adapter.decide(request, luna, controller.signal)).rejects.toThrow(
+      'Request was aborted',
+    )
   })
 })

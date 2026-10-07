@@ -10,7 +10,7 @@ import type {
 import OpenAI, { AzureOpenAI, NotFoundError } from 'openai'
 import { z } from 'zod'
 
-import type { Answer, DecisionRequest, DecisionResponse, Questions } from '../types/decisions'
+import type { Answer, DecisionRequest, DecisionResponse } from '../types/decisions'
 import type {
   Event,
   StreamEvent,
@@ -31,7 +31,6 @@ import type {
 } from '../types/runnables'
 
 import { CALL_ID_PREFIX } from '../core/constants'
-import { assertAnswersMatch } from '../core/decisions'
 import { withStreamRetry } from '../core/retry'
 import { DecisionsUnavailableError } from '../errors/types'
 import { createEventId, createCallId } from '../session'
@@ -140,8 +139,8 @@ export class OpenAIAdapter implements ModelAdapter {
    *
    * @throws {DecisionsUnavailableError} When an endpoint answers 404 for the model, or every
    *   endpoint is an Azure deployment. The input is not sent to a further endpoint after a 404.
-   * @throws The provider's error for any other failure, and an `Error` for a response that does not
-   *   answer the questions asked.
+   * @throws The provider's error for any other failure, and an `Error` for a response that is not a
+   *   decisions response.
    */
   async decide(
     request: DecisionRequest,
@@ -157,13 +156,18 @@ export class OpenAIAdapter implements ModelAdapter {
       try {
         // The pinned SDK predates `client.decisions`, so the request goes through its generic path.
         const body = await client.post<unknown>('/decisions', {
-          body: serializeDecisionRequest(request, resolvedModel),
+          body: {
+            model: resolvedModel,
+            input: request.input,
+            questions: Object.entries(request.questions).map(([name, question]) => ({
+              name,
+              ...question,
+            })),
+          },
           signal,
         })
-        return parseDecisionResponse(body, request.questions)
+        return parseDecisionResponse(body)
       } catch (error) {
-        // 404 means this endpoint does not serve the model on its decisions route. The input is
-        // not sent on to another endpoint, which may be in another region.
         if (error instanceof NotFoundError) {
           throw new DecisionsUnavailableError(config, { cause: error })
         }
@@ -631,20 +635,6 @@ function parseUsage(usage?: OpenAIUsage): ModelUsage | undefined {
   }
 }
 
-/**
- * Builds the body of a `POST /decisions` request: each question with its name, in the order the
- * questions were given.
- *
- * @param model The model name as the endpoint knows it.
- */
-export function serializeDecisionRequest({ input, questions }: DecisionRequest, model: string) {
-  return {
-    model,
-    input,
-    questions: Object.entries(questions).map(([name, question]) => ({ name, ...question })),
-  }
-}
-
 const decisionResponseSchema = z.object({
   answers: z.array(
     z.discriminatedUnion('type', [
@@ -678,12 +668,11 @@ const decisionResponseSchema = z.object({
 })
 
 /**
- * Parses a `POST /decisions` response body into one answer per question asked.
+ * Parses a `POST /decisions` response body into its answers, keyed by question name.
  *
- * @throws When the body is not a decisions response, answers a question twice, or its answers do
- *   not match the questions asked (`assertAnswersMatch`).
+ * @throws When the body is not a decisions response, or answers a question twice.
  */
-export function parseDecisionResponse(body: unknown, questions: Questions): DecisionResponse {
+export function parseDecisionResponse(body: unknown): DecisionResponse {
   const parsed = decisionResponseSchema.safeParse(body)
   if (!parsed.success) {
     throw new Error(`OpenAI decisions response has an unrecognised shape: ${parsed.error.message}`)
@@ -696,10 +685,7 @@ export function parseDecisionResponse(body: unknown, questions: Questions): Deci
     throw new Error(`OpenAI decisions response answers '${twice}' more than once`)
   }
   // `Object.fromEntries` makes every name an own property, a question named `__proto__` included.
-  const answers = Object.fromEntries(named)
-  assertAnswersMatch(questions, answers)
-
-  return { answers, usage: parseUsage(parsed.data.usage) }
+  return { answers: Object.fromEntries(named), usage: parseUsage(parsed.data.usage) }
 }
 
 function parseFinishReason(status?: string, hasToolCalls?: boolean): ModelEndEvent['finishReason'] {
