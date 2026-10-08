@@ -31,11 +31,11 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
-## [0.6.4] - Unreleased
+## [0.6.4] - 2026-10-07
 
 ### Added
 
-- `app.decide(input, { questions, model?, signal? })` answers closed questions (`predicate`, `choice`, `score`) on the model's decisions endpoint, with probabilities, in tens of milliseconds. See [One-Shot Calls](docs/guide/references/runnables.md#one-shot-calls).
+- `app.decide(input, { questions, model?, signal? })` answers closed questions (`predicate`, `choice`, `score`) on the model's decisions endpoint, with probabilities. See [One-shot calls](https://github.com/mycontinuum-com/adk/blob/main/skills/adk/references/runnables.md#one-shot-calls).
 - `DecisionsUnavailableError` rejects it for a model no decisions endpoint serves; today only OpenAI `gpt-6-luna` is served. There is no fallback to a model call.
 - `ModelAdapter.decide` is the optional adapter method behind it; `MockAdapter` scripts it with `decisions` and fails an unscripted question.
 - Eval CLI `--baseline <run>` (repeatable, pooled) compares a run with earlier ones — each case is `regressed`, `improved`, `unchanged` or `unclear` by a two-sided Fisher exact test on its pass counts, and tool results that one side returned and the other never did are listed. The comparison follows the summary in `report.md` and is `comparison` in `result.json`.
