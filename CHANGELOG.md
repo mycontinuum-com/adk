@@ -31,11 +31,11 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
-## [0.6.5] - Unreleased
+## [0.6.5] - 2026-10-08
 
 ### Added
 
-- `Hook.duringModel(ctx, renderCtx, signal)` answers a step while the model call is already in flight — a step it resolves with first cancels the call and replaces it; when it declines, rejects or answers late, the model's step stands and started no later. `signal` aborts once the hook's answer can no longer be used. The model's stream is held until the hook settles or the model's step completes. See [Hooks](https://github.com/mycontinuum-com/adk/blob/main/skills/adk/references/hooks-errors-testing.md#hooks).
+- `Hook.duringModel(ctx, renderCtx, signal)` runs alongside the model call. A hook answer that wins the race replaces the model's step and cancels the call. If the hook declines, rejects, or answers late, the model's step stands. The hook's signal aborts when its answer can no longer be used. Model events are buffered until the hook settles or the model step completes. See [Hooks](https://github.com/mycontinuum-com/adk/blob/main/skills/adk/references/hooks-errors-testing.md#hooks).
 
 ## [0.6.4] - 2026-10-07
 
