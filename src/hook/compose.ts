@@ -17,6 +17,7 @@ export function composeHooks(hooks: readonly Hook<any>[]): Hook<any> {
     beforeAgent: composeBeforeHook(hooks.map((h) => h.beforeAgent)),
     afterAgent: composeAfterHook(hooks.map((h) => h.afterAgent)),
     beforeModel: composeBeforeHook(hooks.map((h) => h.beforeModel)),
+    duringModel: composeBeforeHook(hooks.map((h) => h.duringModel)),
     afterModel: composeAfterHook(hooks.map((h) => h.afterModel)),
     beforeTool: composeBeforeHook(hooks.map((h) => h.beforeTool)),
     afterTool: composeAfterHook(hooks.map((h) => h.afterTool)),

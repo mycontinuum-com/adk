@@ -23,6 +23,8 @@ import type {
   TransferTarget,
   ParsedOutput,
   MediaPart,
+  ModelAdapter,
+  ModelStepResult,
 } from '../types'
 import type { Session } from '../types'
 import type { InternalRunConfig } from '../types/runtime'
@@ -640,6 +642,47 @@ interface ModelStepOutcome {
   synthetic?: boolean
 }
 
+async function* modelStepBesideHook(
+  callModel: (signal: AbortSignal) => ReturnType<ModelAdapter['step']>,
+  askHook: (signal: AbortSignal) => Promise<ModelStepResult | void> | undefined,
+  signal: AbortSignal,
+): AsyncGenerator<StreamEvent, { step: ModelStepResult; synthetic: boolean }> {
+  const modelCall = new AbortController()
+  const hookCall = new AbortController()
+  const stream = callModel(AbortSignal.any([signal, modelCall.signal]))
+  let next = stream.next()
+  let answer = askHook(AbortSignal.any([signal, hookCall.signal]))?.then(
+    (step) => ({ step: step || undefined }),
+    () => ({ step: undefined }),
+  )
+  const heldUntilHookSettles: StreamEvent[] = []
+  try {
+    for (;;) {
+      const settled = await (answer ? Promise.race([answer, next]) : next)
+      if ('step' in settled) {
+        answer = undefined
+        if (settled.step) {
+          modelCall.abort()
+          void stream.return(settled.step).catch(() => {})
+          signal.throwIfAborted()
+          return { step: settled.step, synthetic: true }
+        }
+        yield* heldUntilHookSettles.splice(0)
+      } else if (settled.done) {
+        if (answer) hookCall.abort()
+        yield* heldUntilHookSettles.splice(0)
+        return { step: settled.value, synthetic: false }
+      } else {
+        if (answer) heldUntilHookSettles.push(settled.value)
+        else yield settled.value
+        next = stream.next()
+      }
+    }
+  } finally {
+    if (answer) hookCall.abort()
+  }
+}
+
 async function* executeModelStep(
   mctx: ModelStepContext,
   renderCtx: import('../types').RenderContext,
@@ -673,13 +716,14 @@ async function* executeModelStep(
     signal.throwIfAborted()
     modelAttempt++
     try {
-      const stream = adapter.step(renderCtx, getInnerModel(agent.model), signal)
-      let iterResult = await stream.next()
-      while (!iterResult.done) {
-        yield iterResult.value
-        iterResult = await stream.next()
-      }
-      stepResult = iterResult.value
+      const raced = yield* modelStepBesideHook(
+        (callSignal) => adapter.step(renderCtx, getInnerModel(agent.model), callSignal),
+        (hookSignal) =>
+          modelAttempt === 1 ? composedHook.duringModel?.(ctx, renderCtx, hookSignal) : undefined,
+        signal,
+      )
+      if (raced.synthetic) return { stepResult: raced.step, shouldAbort: false, synthetic: true }
+      stepResult = raced.step
       if (!stepResult) {
         throw new Error('No step result from adapter')
       }

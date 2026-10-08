@@ -37,19 +37,25 @@ Interception hooks:
 - `beforeAgent`: return string to short-circuit or runnable to transfer.
 - `afterAgent`: return modified output.
 - `beforeModel`: return `{ stepEvents, terminal }` to skip model or runnable to transfer.
+- `duringModel`: resolve with `{ stepEvents, terminal }` while the model call runs to cancel it and use that step. Its third argument is an abort signal for the hook's own work.
 - `afterModel`: return modified model result or runnable to transfer.
 - `beforeTool`: return tool result to skip execution.
 - `afterTool`: return modified tool result.
 
-A `beforeModel` hook can answer an easy step itself and leave the rest to the model. Ask a fast closed question with [`app.decide`](runnables.md#one-shot-calls) and return a tool call only when the answer is confident:
+A hook can answer an easy step itself and leave the rest to the model. Which hook to use depends on whether the answer has to be waited for:
+
+- `beforeModel` runs first, and the model call waits for it. Use it when the hook can tell at once, from state or the transcript. A step it returns means no model call is made.
+- `duringModel` runs while the model call is already in flight. Use it when the answer takes time, such as a call to [`app.decide`](runnables.md#one-shot-calls). A step the hook declines then starts no later than it would with no hook, where a `beforeModel` hook would delay it by the time the decision took.
+
+Ask a fast closed question with `app.decide` and return a tool call only when the answer is confident:
 
 ```typescript
-beforeModel: async (ctx, renderCtx) => {
+duringModel: async (ctx, renderCtx, signal) => {
   const answers = await app
-    .decide(transcriptOf(renderCtx), { model: openai('gpt-6-luna'), signal: ctx.signal, questions: { option } })
+    .decide(transcriptOf(renderCtx), { model: openai('gpt-6-luna'), signal, questions: { option } })
     .catch((error: unknown) => {
-      if (error instanceof DecisionsUnavailableError) throw error // a wrong model is a bug to fix
-      return undefined // a provider failure leaves the step to the model
+      if (error instanceof DecisionsUnavailableError) console.error(error) // a wrong model is a bug to fix
+      return undefined // any failure leaves the step to the model
     })
   const answer = answers?.option
   if (answer) ctx.note('decision', { kind: 'mark', label: 'decision', data: { answers } })
@@ -68,7 +74,21 @@ beforeModel: async (ctx, renderCtx) => {
 }
 ```
 
-`app.decide` runs no agent, so a hook that calls it is never entered again by the call. `app.ask` does run an ephemeral agent, and an app-level hook runs for that agent's model step too, so an app-level `beforeModel` that calls `app.ask` calls itself. Put that hook on the agent. The `ctx.note` line records the decision in the run's session, which the call does not do by itself (`runnables.md` §One-Shot Calls).
+`app.decide` runs no agent, so a hook that calls it is never entered again by the call. `app.ask` does run an ephemeral agent, and an app-level hook runs for that agent's model step too, so an app-level `beforeModel` or `duringModel` that calls `app.ask` calls itself. Put that hook on the agent. The `ctx.note` line records the decision in the run's session, which the call does not do by itself (`runnables.md` §One-Shot Calls).
+
+What `duringModel` does with the hook's answer:
+
+- **A step, before the model's step is complete.** The model call's abort signal fires and the hook's step is used as a `beforeModel` step is: `model_start`, `model_end`, then the step's events, with no count against `maxSteps`. The cancelled call is not an error, so no error handler or retry runs. How soon the provider request stops is the adapter's doing, as it is when a caller aborts.
+- **Nothing, a rejection, or no answer by the time the model's step is complete.** The model's step is used. A hook that has not answered by then has its `signal` aborted. A rejection is swallowed. No error handler sees it and nothing is logged, so the hook reports for itself any failure that must be seen, as the example does. Under `beforeModel` the same throw would propagate and fail the run.
+
+The model's streamed events are held until the hook settles or the model's step completes, whichever comes first, then released in order. A cancelled call therefore leaves nothing in the stream or in `onEvent`, and the first delta arrives no sooner than the hook's answer unless the model's whole step is done before it.
+
+Limits:
+
+- Only the step's first model attempt is raced. A model error while the hook is still working goes to the error handlers as usual, the events held from that attempt are dropped, and a retry runs without the hook.
+- The hook's `signal` aborts once its answer can no longer be used: the model's step completed or failed first, or the caller aborted. It does not abort when the hook answers or declines in time. Pass it to whatever the hook waits on, as the example passes it to `app.decide`, so a hook that has lost stops there. `ctx.signal` is the run's signal and does not tell the hook this. A hook that ignores `signal` runs on. Its answer is ignored, but what it does on the way still happens, late, and the next step asks it again while that call is in flight.
+- `duringModel` cannot transfer. Return a runnable from `beforeModel` or `afterModel` for that.
+- The provider may bill the cancelled call, and the ADK never learns its usage. The step's `model_end` has no usage, so the run's cost reads `unavailable`, not free.
 
 Observation hooks:
 
@@ -87,9 +107,9 @@ Built-ins:
 - `app.hook.voice(partialVoiceHook)`
 - `app.hook.voiceLogging(options?)`
 
-Composition order: app hooks outer, agent hooks middle, call-site hooks inner. Before hooks run outer-to-inner and first non-undefined wins. After hooks run inner-to-outer.
+Composition order: app hooks outer, agent hooks middle, call-site hooks inner. Before hooks run outer-to-inner and first non-undefined wins. After hooks run inner-to-outer. `duringModel` hooks compose as before hooks do: they are asked one at a time, outer-to-inner, each once the one before has declined, and the first step wins. Within a step they do not run beside each other, only beside the model call.
 
-An agent created by `app.agent` without `hooks` takes the app's hooks as its agent hooks, and the run adds the app's hooks again. For that agent every app-level hook runs twice: `onEvent` receives each event twice, and a `beforeModel` that returns nothing runs twice per step. An agent given its own `hooks` runs each app-level hook once.
+An agent created by `app.agent` without `hooks` takes the app's hooks as its agent hooks, and the run adds the app's hooks again. For that agent every app-level hook runs twice: `onEvent` receives each event twice, and a `beforeModel` or `duringModel` that returns nothing runs twice per step. An agent given its own `hooks` runs each app-level hook once.
 
 ## Error Handlers
 

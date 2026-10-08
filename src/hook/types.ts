@@ -53,6 +53,22 @@ export interface Hook<S extends StateSchema = StateSchema> {
     renderCtx: RenderContext<S>,
   ) => ModelStepResult | Runnable<any> | void | Promise<ModelStepResult | Runnable<any> | void>
 
+  /**
+   * Runs while the model call is in flight, for an answer that takes time to work out. A step
+   * returned before the model's step completes cancels the model call and replaces it, as a
+   * `beforeModel` step would. Otherwise the model's step stands: when the hook returns nothing,
+   * rejects, or is still pending as the model finishes. The model's stream is held until the hook
+   * settles or the model's step completes. Only the first model attempt of a step is raced.
+   *
+   * `signal` aborts once the hook's answer can no longer be used: the model's step completed or
+   * failed first, or the caller aborted. Pass it to the work the hook waits on.
+   */
+  duringModel?: (
+    ctx: InvocationContext<S>,
+    renderCtx: RenderContext<S>,
+    signal: AbortSignal,
+  ) => Promise<ModelStepResult | void>
+
   afterModel?: (
     ctx: InvocationContext<S>,
     result: ModelStepResult,
