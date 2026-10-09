@@ -15,12 +15,14 @@ const returned = (name: string, result: unknown): Event => ({
   result,
 })
 
-/** `total` runs of a case, the first `passed` of them passing, each returning `results` from `tool`. */
+const TOOL = 'tool'
+
+/** `total` runs of a case, the first `passed` of them passing, each returning `results` from `TOOL`. */
 function runs(name: string, passed: number, total: number, results: unknown[] = []): ComparedRun[] {
   return Array.from({ length: total }, (_, index) => ({
     name,
     status: index < passed ? 'passed' : 'failed',
-    events: results.map((result) => returned('tool', result)),
+    events: results.map((result) => returned(TOOL, result)),
   }))
 }
 
@@ -43,11 +45,15 @@ describe('fisherExact', () => {
 describe('compareRuns', () => {
   const comparison = compareRuns(
     [
-      ...runs('broken', 10, 10),
-      ...runs('fixed', 0, 10),
-      ...runs('flaky', 4, 5),
-      ...runs('steady', 5, 5),
-      ...runs('dropped', 5, 5),
+      {
+        runs: [
+          ...runs('broken', 10, 10),
+          ...runs('fixed', 0, 10),
+          ...runs('flaky', 4, 5),
+          ...runs('steady', 5, 5),
+          ...runs('dropped', 5, 5),
+        ],
+      },
     ],
     [
       ...runs('broken', 0, 5),
@@ -84,7 +90,7 @@ describe('compareRuns', () => {
     expect(text).toContain('**Not in the baseline:** fresh')
     expect(text).toContain('**Only in the baseline:** dropped')
     const subset = compareRuns(
-      Array.from({ length: 7 }, (_, at) => runs(`case-${at}`, 1, 1)).flat(),
+      [{ runs: Array.from({ length: 7 }, (_, at) => runs(`case-${at}`, 1, 1)).flat() }],
       runs('case-0', 1, 1),
     )
     expect(formatComparison(subset, ['a'])).toContain('**Only in the baseline:** 6 cases')
@@ -94,13 +100,20 @@ describe('compareRuns', () => {
 describe('tool results that changed', () => {
   it('lists a result that passing runs returned and no baseline run did, and the one it replaced', () => {
     const { toolResults } = compareRuns(
-      [...runs('advice', 5, 5, ['the medicine line']), ...runs('other', 5, 5, ['a question'])],
+      [
+        {
+          runs: [
+            ...runs('advice', 5, 5, ['the medicine line']),
+            ...runs('other', 5, 5, ['a question']),
+          ],
+        },
+      ],
       [...runs('advice', 5, 5, ['the seriousness line']), ...runs('other', 5, 5, ['a question'])],
     )
     expect(toolResults).toEqual({
       appeared: [
         {
-          tool: 'tool',
+          tool: TOOL,
           result: '"the seriousness line"',
           cases: ['advice'],
           returned: 5,
@@ -111,7 +124,7 @@ describe('tool results that changed', () => {
       ],
       vanished: [
         {
-          tool: 'tool',
+          tool: TOOL,
           result: '"the medicine line"',
           cases: ['advice'],
           returned: 5,
@@ -125,12 +138,32 @@ describe('tool results that changed', () => {
 
   it('counts a run once however often it returned the result, over every case that returned it', () => {
     const { toolResults } = compareRuns(
-      [...runs('one', 5, 5), ...runs('two', 5, 5)],
+      [{ runs: [...runs('one', 5, 5), ...runs('two', 5, 5)] }],
       [...runs('one', 5, 5, ['new', 'new']), ...runs('two', 5, 5, ['new'])],
     )
-    expect(toolResults.appeared).toMatchObject([
+    expect(toolResults?.appeared).toMatchObject([
       { result: '"new"', cases: ['one', 'two'], returned: 10, of: 10, never: 10 },
     ])
+  })
+
+  it('compares the pass counts of a scorecard, and says that its tool results were not compared', () => {
+    const advice = 'advice'
+    const every = { passed: 5, runs: 5 }
+    const alone = compareRuns(
+      [{ cases: { [advice]: every } }],
+      runs(advice, every.passed, every.runs, ['the seriousness line']),
+    )
+    const unchanged = { baseline: every, current: every, p: 1, change: 'unchanged' }
+    expect(alone).toEqual({
+      alpha: 0.05,
+      overall: unchanged,
+      cases: [{ name: advice, ...unchanged }],
+      added: [],
+      removed: [],
+    })
+    expect(formatComparison(alone, ['scorecard.json'])).toContain(
+      'Not compared: no baseline kept its tool results.',
+    )
   })
 
   it('leaves out a result too few runs returned, one both sides returned, and unshared cases', () => {
@@ -139,9 +172,13 @@ describe('tool results that changed', () => {
     expect(
       compareRuns(
         [
-          ...varying(5),
-          ...runs('advice', 3, 3, ['the medicine line']),
-          ...runs('old', 5, 5, ['x']),
+          {
+            runs: [
+              ...varying(5),
+              ...runs('advice', 3, 3, ['the medicine line']),
+              ...runs('old', 5, 5, ['x']),
+            ],
+          },
         ],
         [
           ...varying(5).toReversed(),

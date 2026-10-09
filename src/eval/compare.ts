@@ -8,10 +8,15 @@ export interface ComparedRun {
   events: readonly Event[]
 }
 
-interface PassCount {
+export interface PassCount {
   passed: number
   runs: number
 }
+
+/** One baseline of a comparison: its runs, or only the pass counts of its cases. */
+export type Baseline =
+  | { runs: readonly ComparedRun[] }
+  | { cases: Readonly<Record<string, PassCount>> }
 
 /**
  * How a case's pass rate moved against the baseline. `unclear` means the rates differ but the run
@@ -28,7 +33,6 @@ interface CaseComparison {
   change: Change
 }
 
-/** A tool result that one side returned and the other never did, over the cases that returned it. */
 interface ToolResultChange {
   tool: string
   result: string
@@ -49,9 +53,10 @@ export interface RunComparison {
   cases: CaseComparison[]
   /**
    * What the tools returned differently, whether or not a check noticed. A tool's result is the
-   * code's doing, where a reply's wording is the model's and differs on every run.
+   * code's doing, where a reply's wording is the model's and differs on every run. Absent when no
+   * baseline kept its runs' events.
    */
-  toolResults: { appeared: ToolResultChange[]; vanished: ToolResultChange[] }
+  toolResults?: { appeared: ToolResultChange[]; vanished: ToolResultChange[] }
   /** Cases only the current run has, and cases only the baseline has. */
   added: string[]
   removed: string[]
@@ -111,10 +116,28 @@ function byCase(runs: readonly ComparedRun[]): Map<string, ComparedRun[]> {
   return cases
 }
 
-const passCount = (runs: readonly ComparedRun[]): PassCount => ({
-  passed: runs.filter((run) => run.status === 'passed').length,
-  runs: runs.length,
+const NO_RUNS: PassCount = { passed: 0, runs: 0 }
+
+const add = (a: PassCount, b: PassCount): PassCount => ({
+  passed: a.passed + b.passed,
+  runs: a.runs + b.runs,
 })
+
+const countsOf = (baseline: Baseline): Array<[string, PassCount]> =>
+  'runs' in baseline
+    ? baseline.runs.map((run) => [run.name, { passed: run.status === 'passed' ? 1 : 0, runs: 1 }])
+    : Object.entries(baseline.cases)
+
+/** Each case's pass count over every baseline, whichever kind kept it. */
+export function pooledCounts(baselines: readonly Baseline[]): Map<string, PassCount> {
+  const pooled = new Map<string, PassCount>()
+  for (const [name, count] of baselines.flatMap(countsOf))
+    pooled.set(name, add(pooled.get(name) ?? NO_RUNS, count))
+  return pooled
+}
+
+const sumOver = (counts: ReadonlyMap<string, PassCount>, names: readonly string[]): PassCount =>
+  names.reduce((sum, name) => add(sum, counts.get(name) ?? NO_RUNS), NO_RUNS)
 
 interface Returned {
   tool: string
@@ -168,36 +191,48 @@ function onlyIn(
     .toSorted((a, b) => a.p - b.p)
 }
 
-/**
- * Compares a run with a baseline. Several baseline runs are pooled by concatenating their runs. A
- * case's verdict is a significance test on its own runs, with no correction for the number of
- * cases: at `alpha` 0.05, expect one false verdict in twenty cases whose behaviour did not change.
- */
-export function compareRuns(
-  baseline: readonly ComparedRun[],
-  current: readonly ComparedRun[],
-  alpha = 0.05,
-): RunComparison {
-  const before = byCase(baseline)
-  const after = byCase(current)
+/** The tool results one side returned and the other never did, over the cases both sides ran. */
+function toolResultChanges(
+  before: Map<string, ComparedRun[]>,
+  after: Map<string, ComparedRun[]>,
+  alpha: number,
+): NonNullable<RunComparison['toolResults']> {
   const shared = [...after.keys()].filter((name) => before.has(name))
-  const counts = (cases: Map<string, ComparedRun[]>) =>
-    passCount(shared.flatMap((name) => cases.get(name) ?? []))
   const returnedBefore = toolResults(before, shared)
   const returnedAfter = toolResults(after, shared)
   return {
+    appeared: onlyIn(returnedAfter, after, returnedBefore, before, alpha),
+    vanished: onlyIn(returnedBefore, before, returnedAfter, after, alpha),
+  }
+}
+
+/**
+ * Compares a run with its baselines, pooled by adding their pass counts. A case's verdict is a
+ * significance test on its own runs, with no correction for the number of cases: at `alpha` 0.05,
+ * expect one false verdict in twenty cases whose behaviour did not change. Tool results are
+ * compared with the baselines that kept their runs' events, and not at all when none did.
+ */
+export function compareRuns(
+  baselines: readonly Baseline[],
+  current: readonly ComparedRun[],
+  alpha = 0.05,
+): RunComparison {
+  const before = pooledCounts(baselines)
+  const after = pooledCounts([{ runs: current }])
+  const shared = [...after.keys()].filter((name) => before.has(name))
+  const kept = baselines.flatMap((baseline) => ('runs' in baseline ? [baseline.runs] : []))
+  return {
     alpha,
     overall: shared.length
-      ? compare(counts(before), counts(after), alpha)
-      : { baseline: counts(before), current: counts(after), p: 1, change: 'unchanged' },
+      ? compare(sumOver(before, shared), sumOver(after, shared), alpha)
+      : { baseline: NO_RUNS, current: NO_RUNS, p: 1, change: 'unchanged' },
     cases: shared.map((name) => ({
       name,
-      ...compare(passCount(before.get(name) ?? []), passCount(after.get(name) ?? []), alpha),
+      ...compare(before.get(name) ?? NO_RUNS, after.get(name) ?? NO_RUNS, alpha),
     })),
-    toolResults: {
-      appeared: onlyIn(returnedAfter, after, returnedBefore, before, alpha),
-      vanished: onlyIn(returnedBefore, before, returnedAfter, after, alpha),
-    },
+    ...(kept.length > 0 && {
+      toolResults: toolResultChanges(byCase(kept.flat()), byCase(current), alpha),
+    }),
     added: [...after.keys()].filter((name) => !before.has(name)),
     removed: [...before.keys()].filter((name) => !after.has(name)),
   }
@@ -261,13 +296,15 @@ export function formatComparison(comparison: RunComparison, baselines: readonly 
     '',
     '### Tool results that changed',
     '',
-    results.appeared.length || results.vanished.length
-      ? `What a tool returns is the code's doing, where a reply's wording is the model's. A result one side returned and the other never did, by more than chance (p < ${alpha}), is a change in behaviour whether or not a check failed.`
-      : 'None: no tool result is on one side only by more than chance.',
+    !results
+      ? 'Not compared: no baseline kept its tool results. A scorecard records pass counts only, so compare with a run directory to see what the tools returned differently.'
+      : results.appeared.length || results.vanished.length
+        ? `What a tool returns is the code's doing, where a reply's wording is the model's. A result one side returned and the other never did, by more than chance (p < ${alpha}), is a change in behaviour whether or not a check failed.`
+        : 'None: no tool result is on one side only by more than chance.',
   )
-  if (results.appeared.length)
+  if (results?.appeared.length)
     lines.push('', '**New here:**', '', ...toolResultTable(results.appeared, 'Baseline'))
-  if (results.vanished.length) {
+  if (results?.vanished.length) {
     lines.push(
       '',
       "**No longer returned** (the baseline's count, then this run's):",

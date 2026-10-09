@@ -125,6 +125,13 @@ export interface MixedEvalOptions<S extends StateSchema = StateSchema> extends O
 > {
   voice?: Pick<VoiceEvalOptions<S>, 'room' | 'hooks' | 'metrics'>
   output?: string
+  /**
+   * The suite's committed scorecard, which only the CLI reads. `run` compares with it, and with
+   * `--record` replaces it. `path` is the file. `fingerprint` lists the files and directories the
+   * result depends on. All are relative to the working directory, in one git repository, and `path`
+   * is outside every `fingerprint` path.
+   */
+  scorecard?: { path: string; fingerprint: string[] }
   onCase?: (result: AnyEvalCaseResult<S>, index: number, total: number) => void
 }
 

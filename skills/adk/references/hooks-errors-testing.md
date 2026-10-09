@@ -149,8 +149,13 @@ Use one `concurrency` and `repeat` for the suite; put voice-specific room config
 and metrics in `options.voice`. Common metrics can inspect the session for either kind.
 
 `process.exitCode = await app.evaluate.cli(cases, options)` exposes those same cases through
-`list` and `run`, with `--case <exact-name>` (repeatable), `--repeat <n>`, `--output <directory>`
-and `--baseline <run>` to compare with earlier runs.
+`list` and `run`, with `--case <exact-name>` (repeatable), `--kind text|voice`, `--repeat <n>`,
+`--output <directory>`, `--baseline <run>` (repeatable) to compare with earlier runs, and
+`--record` to replace the suite's scorecard. `--record` needs the scorecard's `fingerprint` paths
+committed, and it leaves that file untouched when a run stopped early, or when a case ended
+`error`, `timeout` or `aborted`. A suite that sets `options.scorecard` to `{ path, fingerprint }`
+compares each run with that committed file when no `--baseline` is given.
+Keep `path` in the repository of the `fingerprint` paths, and outside them.
 It returns JSON and saves reports plus per-case evidence in a fresh run directory. Exit codes
 are 0 for complete success, 1 for failed/incomplete evaluation and 2 for invocation/export errors.
 Use silent package scripts for machine output, for example `pnpm --silent run eval:greeting list`.
