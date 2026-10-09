@@ -31,15 +31,15 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
-## [0.6.6] - Unreleased
+## [0.6.6] - 2026-10-08
 
 ### Added
 
-- `MixedEvalOptions.scorecard: { path, fingerprint }` declares a suite's committed scorecard — the last accepted result, as pass counts per case with git's id of each `fingerprint` path, the runner and the models it was measured on. `path` must be in the same repository as the `fingerprint` paths and outside them. Only the eval CLI reads it. See [app.test, app.simulate, app.evaluate](https://github.com/mycontinuum-com/adk/blob/main/skills/adk/references/hooks-errors-testing.md#apptest-appsimulate-appevaluate).
-- Eval CLI `run --record` replaces the declared scorecard with exactly the cases that ran. It fails before any case runs without a declared scorecard, and while a `fingerprint` path has an uncommitted change. A run that stopped early, in which a case ended `error`, `timeout` or `aborted`, or during which a `fingerprint` path changed, leaves the scorecard untouched. The result has `record: { file, written }`, and the exit code is 0 only when the scorecard was written.
-- Eval CLI `run` compares with the declared scorecard when its file exists and no `--baseline` is given. The comparison says when the scorecard was recorded and whether this run is on the same files — the suite declares the paths that were recorded, each has the id that was recorded, and none has an uncommitted change. A scorecard with no `cases` is rejected. A scorecard keeps no tool results — in a comparison with one, `comparison.toolResults` is absent and `report.md` says tool results were not compared.
-- Eval CLI `--kind text|voice` selects cases by kind, together with `--case`. A selection that leaves no case fails with exit code 2.
-- `result.json` has `provenance` — `fingerprint` when a scorecard is declared, `commit` and `dirty` where git can report them, `runner`, and `models` with one entry per agent, model and reasoning effort. A suite that declares no scorecard never fails because of git.
+- `MixedEvalOptions.scorecard: { path, fingerprint }` declares a committed eval CLI baseline with per-case pass counts, Git file IDs, runner, and models. Keep it in the same repository as its fingerprint paths, but outside them. See [Eval scorecards](https://github.com/mycontinuum-com/adk/blob/main/skills/adk/references/hooks-errors-testing.md#apptest-appsimulate-appevaluate).
+- Eval CLI `run --record` replaces the declared scorecard with exactly the selected cases. It requires clean fingerprint paths and preserves the scorecard if the run stops early, a case errors, times out or aborts, or fingerprinted files change during the run. `result.json` reports `record: { file, written }`; exit code 0 means the scorecard was written.
+- Eval CLI `run` compares with an existing declared scorecard unless `--baseline` is supplied, reporting its recording date and whether fingerprint paths still match. Scorecards require a `cases` field and contain no tool results, so `comparison.toolResults` is absent for these comparisons.
+- Eval CLI `--kind text|voice` filters cases alongside `--case`. An empty selection exits with code 2.
+- `result.json` includes `provenance`: runner, models, available Git commit and dirty state, and declared fingerprints. Suites without scorecards still run when Git is unavailable.
 
 ## [0.6.5] - 2026-10-08
 
