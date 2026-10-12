@@ -120,7 +120,7 @@ export class OpenAIAdapter implements ModelAdapter {
       const isLast = i === this.endpoints.length - 1
 
       try {
-        return yield* this.executeStep(ctx, config, signal, endpoint)
+        return yield* this.executeTiers(ctx, config, signal, endpoint)
       } catch (error) {
         lastError = error as Error
         if (isLast || !isRetryableForFallback(error)) {
@@ -218,11 +218,43 @@ export class OpenAIAdapter implements ModelAdapter {
     })
   }
 
+  /**
+   * A flex request first when the model asks for one, then the default tier if flex fails before
+   * any output.
+   */
+  private async *executeTiers(
+    ctx: RenderContext,
+    config: ProviderModelConfig,
+    signal: AbortSignal | undefined,
+    endpoint: OpenAIEndpoint,
+  ): AsyncGenerator<StreamEvent, ModelStepResult> {
+    if (
+      config.provider === 'openai' &&
+      config.serviceTier === 'flex' &&
+      endpoint.type !== 'azure'
+    ) {
+      const flex = this.executeStep(ctx, config, signal, endpoint, 'flex')
+      let emitted = false
+      try {
+        for (;;) {
+          const next = await flex.next()
+          if (next.done) return next.value
+          emitted = true
+          yield next.value
+        }
+      } catch (error) {
+        if (emitted || signal?.aborted) throw error
+      }
+    }
+    return yield* this.executeStep(ctx, config, signal, endpoint)
+  }
+
   private async *executeStep(
     ctx: RenderContext,
     config: ProviderModelConfig,
     signal: AbortSignal | undefined,
     endpoint: OpenAIEndpoint,
+    serviceTier?: 'flex',
   ): AsyncGenerator<StreamEvent, ModelStepResult> {
     const reasoning = config.provider === 'openai' ? config.reasoning : undefined
     const retryConfig = (config.provider === 'openai' ? config.retry : undefined) ?? {
@@ -257,6 +289,7 @@ export class OpenAIAdapter implements ModelAdapter {
         ...(serializedToolChoice && { tool_choice: serializedToolChoice }),
         ...samplingOptions(config, reasoning),
         ...serializeParallelToolCallsOption(config),
+        ...(serviceTier && { service_tier: serviceTier }),
         ...(reasoning && {
           reasoning,
           include: ['reasoning.encrypted_content'],

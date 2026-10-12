@@ -38,6 +38,11 @@ const cachedWriter = app.agent({
 openai.realtime('gpt-4o-realtime', { voice: 'alloy' })
 ```
 
+`serviceTier: 'flex'` asks for OpenAI flex processing, which costs half the standard price, runs
+slower and is sometimes unavailable. When a flex request fails before any output streams, the
+adapter sends the same request again at the default tier on the same endpoint. Azure endpoints have
+no flex tier and get the default request.
+
 OpenAI endpoint auth is resolved in this order: Azure, OpenAI EU, standard OpenAI.
 
 Common environment variables:

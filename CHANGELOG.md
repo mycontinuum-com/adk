@@ -31,6 +31,12 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## [Unreleased]
+
+### Added
+
+- `OpenAIModel.serviceTier: 'flex'` — sends OpenAI flex processing requests; a flex request that fails before any output is sent again at the default tier on the same endpoint. Azure endpoints get the default request. See [OpenAI](https://github.com/mycontinuum-com/adk/blob/main/skills/adk/references/providers-memory.md#openai).
+
 ## [0.6.6] - 2026-10-08
 
 ### Added

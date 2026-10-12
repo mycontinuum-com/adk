@@ -894,6 +894,68 @@ describe('OpenAIAdapter fallback', () => {
   })
 })
 
+describe('OpenAIAdapter flex service tier', () => {
+  const mockCtx = {
+    events: [{ id: '1', type: 'user', text: 'Hi', createdAt: Date.now() }],
+    functionTools: [],
+    providerTools: [],
+    session: {} as never,
+    agent: {} as never,
+  } as never
+  const flexConfig = {
+    provider: 'openai' as const,
+    name: 'gpt-6.1-sol',
+    serviceTier: 'flex' as const,
+  }
+
+  /** Records each request body; every stream fails before any output with the next scripted error. */
+  function recordRequests(adapter: OpenAIAdapter, errors: string[]) {
+    const requests: Record<string, unknown>[] = []
+    const client = {
+      responses: {
+        stream: (request: Record<string, unknown>) => {
+          requests.push(request)
+          throw new Error(errors[requests.length - 1] ?? 'no scripted response')
+        },
+      },
+    }
+    ;(adapter as unknown as Record<string, unknown>).getOrCreateClient = () => ({
+      client,
+      resolvedModel: 'gpt-6.1-sol',
+    })
+    return requests
+  }
+
+  async function run(adapter: OpenAIAdapter) {
+    for await (const _event of adapter.step(mockCtx, flexConfig)) {
+      // drain
+    }
+  }
+
+  it('sends the flex request, then the same request at the default tier when flex fails', async () => {
+    const adapter = OpenAIAdapter.withFallback([{ type: 'openai' }])
+    const requests = recordRequests(adapter, ['429 Resource unavailable', 'Invalid API key'])
+
+    await expect(run(adapter)).rejects.toThrow('Invalid API key')
+
+    expect(requests.map((request) => request.service_tier)).toEqual(['flex', undefined])
+    expect(requests[1]).toEqual(
+      Object.fromEntries(Object.entries(requests[0]!).filter(([key]) => key !== 'service_tier')),
+    )
+  })
+
+  it('sends Azure the default-tier request only', async () => {
+    const adapter = OpenAIAdapter.withFallback([
+      { type: 'azure', baseUrl: 'https://azure.test', apiVersion: '2025-01-01' },
+    ])
+    const requests = recordRequests(adapter, ['Invalid API key'])
+
+    await expect(run(adapter)).rejects.toThrow('Invalid API key')
+
+    expect(requests.map((request) => request.service_tier)).toEqual([undefined])
+  })
+})
+
 describe('serializeToolChoice', () => {
   it('returns undefined when no choice or allowedTools', () => {
     expect(serializeToolChoice(undefined)).toBeUndefined()
