@@ -16,7 +16,6 @@ import {
   TOOL,
   VOICE,
 } from './eval-cli-suite'
-import { VECTOR_PATHS } from './scorecard-repository'
 
 /** A model that looks the line up once, then answers: the same on every run, at any concurrency. */
 class LookupModel extends MockAdapter {
@@ -83,18 +82,12 @@ const cases =
     : process.env.EVAL_TEST_AGENT === '1'
       ? [text, lookup]
       : [text]
-const scorecard = process.env.EVAL_TEST_SCORECARD
 void app.evaluate
   .cli(cases, {
     concurrency: CONCURRENCY,
     stopOnFirstFailure: process.env.EVAL_TEST_STOP === '1',
     voice: { room: { url: 'ws://unused.invalid' } },
-    ...(scorecard && {
-      scorecard: {
-        path: scorecard,
-        fingerprint: process.env.EVAL_TEST_FINGERPRINT?.split(',') ?? VECTOR_PATHS,
-      },
-    }),
+    scorecard: process.env.EVAL_TEST_SCORECARD,
   })
   .then((code) => {
     process.exitCode = code

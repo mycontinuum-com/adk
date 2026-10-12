@@ -151,11 +151,12 @@ and metrics in `options.voice`. Common metrics can inspect the session for eithe
 `process.exitCode = await app.evaluate.cli(cases, options)` exposes those same cases through
 `list` and `run`, with `--case <exact-name>` (repeatable), `--kind text|voice`, `--repeat <n>`,
 `--output <directory>`, `--baseline <run>` (repeatable) to compare with earlier runs, and
-`--record` to replace the suite's scorecard. `--record` needs the scorecard's `fingerprint` paths
-committed, and it leaves that file untouched when a run stopped early, or when a case ended
-`error`, `timeout` or `aborted`. A suite that sets `options.scorecard` to `{ path, fingerprint }`
-compares each run with that committed file when no `--baseline` is given.
-Keep `path` in the repository of the `fingerprint` paths, and outside them.
+`--record` to replace the suite's scorecard. `--record` needs the checkout committed, and it
+leaves that file untouched when a run stopped early, or when a case ended `error`, `timeout` or
+`aborted`. A suite that sets `options.scorecard` to a path compares each run with that committed
+file when no `--baseline` is given. The path is from the top of the outermost repository that holds
+the suite, so a suite in a submodule can keep its scorecard in the repository around it. The
+scorecard records the repository and commit it measured.
 It returns JSON and saves reports plus per-case evidence in a fresh run directory. Exit codes
 are 0 for complete success, 1 for failed/incomplete evaluation and 2 for invocation/export errors.
 Use silent package scripts for machine output, for example `pnpm --silent run eval:greeting list`.

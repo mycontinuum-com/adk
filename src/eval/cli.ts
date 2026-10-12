@@ -16,12 +16,15 @@ import { compareRuns, formatComparison, pooledCounts } from './compare'
 import { omitUndefinedProperties, serializeEvent, stringifyEvidence, voiceEvidence } from './json'
 import { caseJudgeCost, generateReport, suiteCost } from './report'
 import {
-  changeSince,
+  checkoutOf,
+  describeChanges,
   distinctModels,
+  judgeModels,
   readJson,
   readScorecard,
   readSource,
   recordScorecard,
+  repositoryOf,
   runner,
   sessionModelCalls,
 } from './scorecard'
@@ -37,8 +40,8 @@ run     Evaluate all cases, or each exact --case name.
 --kind      Evaluate only text or only voice cases. It narrows --case when both are given.
 --baseline  An earlier run directory or its result.json to compare with. Repeat it to pool them.
             Without it, a suite that declares a scorecard compares with that.
---record    Replace the suite's scorecard with the result of this run. The paths it fingerprints
-            must be committed. A run that did not finish leaves the scorecard as it was.
+--record    Replace the suite's scorecard with the result of this run. The checkout must be
+            committed. A run that did not finish leaves the scorecard as it was.
 
 Results are JSON on stdout. Diagnostics go to stderr.
 Exit codes: 0 passed, 1 failed/incomplete, 2 invocation or export error.
@@ -210,36 +213,33 @@ interface BaselineSource {
   baseline: Baseline
 }
 
-type Source = Pick<Provenance, 'fingerprint' | 'commit' | 'dirty'>
+type Source = Pick<Provenance, 'commit' | 'dirty'>
 
-/** Whether two fingerprints hold the same paths with the same ids. */
-function sameIds(recorded: Scorecard['fingerprint'], now: Scorecard['fingerprint']) {
-  const paths = Object.keys(recorded)
-  return (
-    paths.length === Object.keys(now).length && paths.every((path) => recorded[path] === now[path])
-  )
-}
+/** A scorecard this CLI can compare with: one that has cases. */
+type Comparable = Scorecard & { cases: NonNullable<Scorecard['cases']> }
 
 /**
- * The label says when the scorecard was recorded and, for a suite that declares its files, whether
- * this run is on the same ones: the same paths with the same ids, and nothing uncommitted under
- * them.
+ * The suite's scorecard as this CLI compares with it, by its cases, or `undefined` when none has
+ * been recorded.
  */
-function scorecardBaseline(
-  file: string,
-  scorecard: Scorecard,
-  { fingerprint, dirty }: Source,
-): BaselineSource {
-  const files =
-    fingerprint === undefined
-      ? ''
-      : !dirty && sameIds(scorecard.fingerprint, fingerprint)
-        ? ' on these files'
-        : ' on different files'
+async function readComparable(file: string): Promise<Comparable | undefined> {
+  const scorecard = await readScorecard(file)
+  if (scorecard === undefined) return undefined
+  const { cases } = scorecard
+  if (cases === undefined)
+    throw new Error(
+      `Invalid scorecard ${file}: cases: this CLI compares cases, and the file has none`,
+    )
+  return { ...scorecard, cases }
+}
+
+/** The label names the scorecard and says when, and at which commit, it was recorded. */
+function scorecardBaseline(file: string, { recorded, commit, cases }: Comparable): BaselineSource {
+  const name = basename(file, '.json')
   return {
     file,
-    label: `${basename(file)} (recorded ${scorecard.recorded}${files})`,
-    baseline: { cases: scorecard.cases },
+    label: `${name} (recorded ${recorded} at ${commit.slice(0, 10)})`,
+    baseline: { cases },
   }
 }
 
@@ -270,8 +270,45 @@ async function readBaselines(paths: readonly string[]): Promise<BaselineSource[]
 interface StartingPoint {
   source: Source
   baselines: BaselineSource[]
-  /** With `--record`: the scorecard to replace, and how many cases it holds now if it exists. */
-  record?: { file: string; fingerprint: Scorecard['fingerprint']; held?: number }
+  /** With `--record`: where the scorecard goes, what it is measured on, and its cases now. */
+  record?: Awaited<ReturnType<typeof recordTarget>> & { held?: number }
+}
+
+const isDirectory = (path: string) =>
+  stat(path).then(
+    (found) => found.isDirectory(),
+    () => false,
+  )
+
+/**
+ * What `--record` writes and the commit it measures. It refuses before any case runs unless the
+ * scorecard's directory exists and the checkout is committed, because `HEAD` would not describe a
+ * dirty tree.
+ */
+async function recordTarget({ file, top }: { file: string; top: string }) {
+  if (!(await isDirectory(dirname(file))))
+    throw new Error(
+      `--record needs the directory ${dirname(file)}, which does not exist. Record from the checkout that keeps the scorecards.`,
+    )
+  const { commit, changes } = await checkoutOf(top)
+  if (commit === undefined) throw new Error('--record needs a commit to record against')
+  if (changes.length)
+    throw new Error(
+      `--record needs a committed checkout, and ${describeChanges(changes)}. Commit first, then record.`,
+    )
+  return { file, top, commit, repo: await repositoryOf(top) }
+}
+
+/**
+ * The suite's recorded scorecard, which a run compares with unless `--baseline` names another and
+ * which `--record` replaces, or `undefined` when there is none.
+ */
+async function readPrevious(values: CliValues, file: string | undefined) {
+  if (file === undefined || (values.baseline && !values.record)) return undefined
+  const previous = await readComparable(file)
+  if (previous === undefined)
+    process.stderr.write(`No scorecard at ${file} yet: nothing to compare with.\n`)
+  return previous
 }
 
 async function readStartingPoint<S extends StateSchema>(
@@ -280,30 +317,17 @@ async function readStartingPoint<S extends StateSchema>(
 ): Promise<StartingPoint> {
   if (values.record && !scorecard)
     throw new Error('--record needs a scorecard: set `scorecard` in the options of evaluate.cli')
-  const source = await readSource(scorecard)
-  const { fingerprint } = source
-  const file = scorecard && resolve(scorecard.path)
-  const recording = values.record && file !== undefined && fingerprint !== undefined
-  // A scorecard records its paths as they are at `HEAD`, which is not what a dirty tree measures.
-  const change = recording ? await changeSince(fingerprint) : undefined
-  if (change !== undefined)
-    throw new Error(
-      `--record needs its fingerprint paths committed, and ${change}. Commit first, then record.`,
-    )
-  const previous =
-    file !== undefined && (values.record || !values.baseline)
-      ? await readScorecard(file)
-      : undefined
+  const { source, scorecard: declared } = await readSource(scorecard)
+  const target = values.record && declared ? await recordTarget(declared) : undefined
+  const previous = await readPrevious(values, declared?.file)
   return {
     source,
     baselines: values.baseline
       ? await readBaselines(values.baseline)
-      : file !== undefined && previous
-        ? [scorecardBaseline(file, previous, source)]
+      : declared && previous
+        ? [scorecardBaseline(declared.file, previous)]
         : [],
-    ...(recording && {
-      record: { file, fingerprint, held: previous && Object.keys(previous.cases).length },
-    }),
+    ...(target && { record: { ...target, held: previous && Object.keys(previous.cases).length } }),
   }
 }
 
@@ -360,6 +384,7 @@ function provenanceOf(
         'events' in item ? [] : sessionModelCalls(item.run.session.events),
       ),
     ]),
+    judges: judgeModels(results),
   }
 }
 
@@ -384,12 +409,13 @@ function unfinishedReason(
   return `${statuses.length} of ${expected} runs ended without a verdict (${distinct})`
 }
 
-/** Why the files are no longer the ones the run started on, or `undefined` when they still are. */
-async function changedDuringRun(fingerprint: Scorecard['fingerprint']) {
-  const change = await changeSince(fingerprint).catch((error: Error) => error.message)
-  return change === undefined
-    ? undefined
-    : `the fingerprint paths changed during the run, and ${change}`
+/** Why the checkout is no longer the one the run started on, or `undefined` when it still is. */
+async function changedDuringRun(top: string, commit: string) {
+  const now = await checkoutOf(top)
+  if (now.commit !== commit) return `HEAD moved from ${commit.slice(0, 10)} during the run`
+  return now.changes.length
+    ? `the checkout changed during the run, and ${describeChanges(now.changes)}`
+    : undefined
 }
 
 /** What `--record` did to the scorecard at `file`. */
@@ -404,7 +430,7 @@ interface Recording {
  * why.
  */
 async function record(
-  { file, fingerprint, held }: NonNullable<StartingPoint['record']>,
+  { file, top, repo, commit, held }: NonNullable<StartingPoint['record']>,
   provenance: Provenance,
   repeat: number,
   results: readonly AnyEvalCaseResult[],
@@ -414,11 +440,13 @@ async function record(
   const { total } = suiteCost(results)
   const why =
     unfinishedReason(results, expected) ??
-    (await changedDuringRun(fingerprint)) ??
+    (await changedDuringRun(top, commit).catch((error: Error) => error.message)) ??
     (await recordScorecard(file, {
-      fingerprint,
+      repo,
+      commit,
       runner: provenance.runner,
       models: provenance.models,
+      judges: provenance.judges,
       repeat,
       ...(total.basis !== 'unavailable' && { costUsd: Math.round(total.totalCost * 100) / 100 }),
       cases,

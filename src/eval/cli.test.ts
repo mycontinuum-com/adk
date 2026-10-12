@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, resolve, join } from 'node:path'
@@ -17,11 +17,11 @@ import {
 import {
   commitAll,
   git,
-  VECTOR_EDIT,
-  VECTOR_IDS,
-  VECTOR_OUTSIDE,
-  VECTOR_PATHS,
-  vectorRepository,
+  head,
+  TEST_FILE,
+  TEST_ORIGIN,
+  TEST_REPOSITORY,
+  testRepository,
 } from '../test-support/scorecard-repository'
 
 const exec = promisify(execFile)
@@ -242,21 +242,21 @@ it('rejects a missing or unreadable baseline before running, and run options wit
 const MIXED = { EVAL_TEST_MIXED: '1' }
 const AGENT = { EVAL_TEST_AGENT: '1' }
 const FAILING = { EVAL_TEST_FAIL: '1' }
-/** Where the suite keeps its scorecard: outside the paths it fingerprints. */
-const SCORECARD = 'scorecard.json'
+/** Where the suite keeps its scorecard, from the top of the outermost repository. */
+const SCORECARD = 'scorecards/greeting.json'
 const DECLARED = { ...AGENT, EVAL_TEST_SCORECARD: SCORECARD }
-/** A scorecard that another runner wrote, without its fingerprint and its results. */
+/** A scorecard that another runner wrote, without its results. */
 const HEADER = {
-  version: 1,
+  version: 2,
   recorded: '2026-10-09T14:03:22Z',
+  repo: TEST_REPOSITORY,
+  commit: '0123456789abcdef0123456789abcdef01234567',
   runner: 'evals-harness',
   models: [{ model: 'gpt-5-mini' }],
 }
 const MEASURES = { 'answer_key.f1': { value: 0.578, n: 256 } }
 const RECORDED = expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/)
 const NOT_COMPARED = 'Not compared: no baseline kept its tool results.'
-const ON_THESE_FILES = 'on these files'
-const ON_DIFFERENT_FILES = 'on different files'
 
 /** The name, kind and status of each result in the document a run printed. */
 function outcomes(stdout: string) {
@@ -283,27 +283,17 @@ function record(
   return invoke(['run', '--record', '--output', root, ...args], env, repository)
 }
 
-/** The provenance and the report of a run of the declared suite in `repository`, with no `--record`. */
-async function plainRun(root: string, repository: string) {
-  const result = await invoke(['run', '--output', root], DECLARED, repository)
-  const { provenance, report } = JSON.parse(result.stdout)
-  return { provenance, report: await readFile(report, 'utf8') }
-}
-
 /** Writes `scorecard` where the suite declares its own, and gives how a run in `repository` failed. */
 async function rejectedDeclared(root: string, repository: string, file: string, scorecard: object) {
   await writeFile(file, JSON.stringify(scorecard))
   return failure(['--output', root], DECLARED, repository)
 }
 
-/** A committed repository for the suite, and the file its scorecard goes to. */
+/** A committed repository for the suite with the directory of its scorecard, and that file. */
 async function suiteRepository() {
-  const repository = await vectorRepository()
+  const repository = await testRepository()
+  await mkdir(join(repository, dirname(SCORECARD)))
   return { repository, file: join(repository, SCORECARD) }
-}
-
-async function head(repository: string) {
-  return (await git(repository, 'rev-parse', 'HEAD')).stdout.trim()
 }
 
 async function runner() {
@@ -335,7 +325,7 @@ it('runs only the cases of one kind, with --case narrowing them further', async 
 })
 
 describe('scorecard', () => {
-  it('records exactly the run, a failing case included, and replaces the file whole on the next record', async () => {
+  it('records exactly the run and the commit it ran on, a failing case included, and replaces the file whole on the next record', async () => {
     const { repository, file } = await suiteRepository()
     const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
     const suite = [GREETING, LOOKUP]
@@ -344,82 +334,127 @@ describe('scorecard', () => {
     expect(first.code).toBe(0)
     const text = await readFile(file, 'utf8')
     const scorecard = JSON.parse(text)
-    const writer = { fingerprint: VECTOR_IDS, runner: await runner() }
+    const commit = await head(repository)
+    const writer = { repo: TEST_REPOSITORY, commit, runner: await runner() }
     const every = { passed: repeat, runs: repeat }
     expect(scorecard).toEqual({
-      version: 1,
+      version: 2,
       recorded: RECORDED,
       ...writer,
       models: [LOOKER],
+      judges: [],
       repeat,
       cases: { [GREETING]: every, [LOOKUP]: every },
     })
-    const keys = ['version', 'recorded', 'fingerprint', 'runner', 'models', 'repeat', 'cases']
-    expect(Object.keys(scorecard)).toEqual(keys)
+    const keys = ['version', 'recorded', 'repo', 'commit', 'runner', 'models', 'judges', 'repeat']
+    expect(Object.keys(scorecard)).toEqual([...keys, 'cases'])
     expect(text).toBe(`${JSON.stringify(scorecard, null, 2)}\n`)
     const document = JSON.parse(first.stdout)
     expect(document.provenance).toEqual({
-      ...writer,
-      commit: await head(repository),
+      commit,
       dirty: false,
+      runner: writer.runner,
       models: [LOOKER],
+      judges: [],
     })
     expect(document.record).toEqual({ file, written: true })
     expect(first.stderr).toContain(
       `Recorded ${file}. Cases: ${suite.length} now, no file before.\n`,
     )
 
+    // The scorecard is in the checkout it measures here, so it is committed before the next record.
+    await commitAll(repository)
     const second = await record(root, repository, { ...DECLARED, ...FAILING }, ['--case', GREETING])
     expect(second.code).toBe(1)
     expect(JSON.parse(second.stdout).record).toEqual({ file, written: true })
     const replaced = JSON.parse(await readFile(file, 'utf8'))
     expect(replaced).toEqual({
-      version: 1,
+      version: 2,
       recorded: RECORDED,
       ...writer,
+      commit: await head(repository),
       models: [],
+      judges: [],
       repeat: 1,
       costUsd: 0,
       cases: { [GREETING]: { passed: 0, runs: 1 } },
     })
-    expect(Object.keys(replaced)).toEqual(keys.toSpliced(-1, 0, 'costUsd'))
+    expect(Object.keys(replaced)).toEqual([...keys, 'costUsd', 'cases'])
     expect(second.stderr).toContain(`Recorded ${file}. Cases: 1 now, ${suite.length} before.\n`)
   })
 
-  it('refuses to record while git reports a change under a fingerprint path, whatever it is set to hide, before any case runs', async () => {
+  it('records into the repository that holds the suite as a submodule, once the directory is there', async () => {
+    const outer = await testRepository()
+    await git(outer, 'remote', 'set-url', 'origin', 'https://github.com/example/outer.git')
+    const inner = await testRepository()
+    await git(outer, 'submodule', 'add', '-q', inner, 'sub')
+    await commitAll(outer)
+    const suite = join(outer, 'sub')
+    // A clone names its source as its origin; the suite's repository is the one on GitHub.
+    await git(suite, 'remote', 'set-url', 'origin', TEST_ORIGIN)
+    const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
+    const file = join(outer, SCORECARD)
+
+    expect(await failure(['--record', '--output', root], DECLARED, suite)).toEqual([
+      2,
+      `--record needs the directory ${dirname(file)}, which does not exist. Record from the checkout that keeps the scorecards.`,
+    ])
+    const unread = await invoke(['run', '--output', root], DECLARED, suite)
+    expect(unread.code).toBe(0)
+    expect(unread.stderr).toContain(`No scorecard at ${file} yet: nothing to compare with.\n`)
+    expect(JSON.parse(unread.stdout).baseline).toBeUndefined()
+
+    await mkdir(dirname(file))
+    expect((await record(root, suite, DECLARED)).code).toBe(0)
+    const once = { passed: 1, runs: 1 }
+    expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+      version: 2,
+      recorded: RECORDED,
+      repo: TEST_REPOSITORY,
+      commit: await head(suite),
+      runner: await runner(),
+      models: [LOOKER],
+      judges: [],
+      repeat: 1,
+      cases: { [GREETING]: once, [LOOKUP]: once },
+    })
+    const compared = await invoke(['run', '--output', root], DECLARED, suite)
+    expect(JSON.parse(compared.stdout).baseline).toEqual([file])
+  })
+
+  it('refuses to record a checkout with any uncommitted change, whatever it is set to hide, before any case runs', async () => {
     const { repository, file } = await suiteRepository()
     const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
     const counter = { EVAL_TEST_COUNTER: join(root, 'counter.txt') }
-    const untracked = join(dirname(VECTOR_EDIT.file), 'new.txt')
+    const untracked = 'new.txt'
     await git(repository, 'config', 'status.showUntrackedFiles', 'no')
-    await writeFile(join(repository, VECTOR_EDIT.file), VECTOR_EDIT.content)
+    await writeFile(join(repository, TEST_FILE), 'changed\n')
     await writeFile(join(repository, untracked), 'new\n')
     expect(
       await failure(['--record', '--output', root], { ...DECLARED, ...counter }, repository),
     ).toEqual([
       2,
-      `--record needs its fingerprint paths committed, and git status reports M ${VECTOR_EDIT.file}; ?? ${untracked}. Commit first, then record.`,
+      `--record needs a committed checkout, and git status reports M ${TEST_FILE}; ?? ${untracked}. Commit first, then record.`,
     ])
     expect(await readdir(root)).toEqual([])
 
-    await rm(join(repository, untracked))
     await commitAll(repository)
-    const committed = await record(root, repository, DECLARED)
-    expect(committed.code).toBe(0)
-    expect(JSON.parse(await readFile(file, 'utf8')).fingerprint).toEqual(VECTOR_EDIT.ids)
+    expect((await record(root, repository, DECLARED)).code).toBe(0)
+    expect(JSON.parse(await readFile(file, 'utf8')).commit).toBe(await head(repository))
   })
 
-  it('does not record a run whose case changed a fingerprinted file while it ran', async () => {
+  it('does not record a run whose case changed the checkout while it ran', async () => {
     const { repository, file } = await suiteRepository()
     const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
     await record(root, repository, DECLARED)
+    await commitAll(repository)
     const recorded = await readFile(file, 'utf8')
 
-    const appending = { EVAL_TEST_COUNTER: join(repository, VECTOR_EDIT.file) }
+    const appending = { EVAL_TEST_COUNTER: join(repository, TEST_FILE) }
     const result = await record(root, repository, { ...DECLARED, ...appending })
     expect(result.code).toBe(1)
     expect(result.stderr).toContain(
-      `Not recorded ${file}: the fingerprint paths changed during the run, and git status reports M ${VECTOR_EDIT.file}.\n`,
+      `Not recorded ${file}: the checkout changed during the run, and git status reports M ${TEST_FILE}.\n`,
     )
     const document = JSON.parse(result.stdout)
     expect(document.record).toEqual({ file, written: false })
@@ -438,6 +473,7 @@ describe('scorecard', () => {
     const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
     const scorecard = { EVAL_TEST_SCORECARD: SCORECARD }
     await record(root, repository, DECLARED)
+    await commitAll(repository)
     const recorded = await readFile(file, 'utf8')
 
     const unjudged = 'error'
@@ -469,37 +505,34 @@ describe('scorecard', () => {
   })
 
   it('saves and prints the results of a run whose scorecard cannot be written, and says it was not written', async () => {
-    const { repository } = await suiteRepository()
+    const { repository, file } = await suiteRepository()
     const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
-    const blocker = join(repository, 'blocked')
-    const blocked = join(basename(blocker), SCORECARD)
-    const file = join(repository, blocked)
-    const result = await record(root, repository, {
-      ...AGENT,
-      EVAL_TEST_SCORECARD: blocked,
-      EVAL_TEST_COUNTER: blocker,
-    })
-    expect(result.code).toBe(1)
-    expect(result.stderr).toContain(`Not recorded ${file}: EEXIST`)
-    const document = JSON.parse(result.stdout)
-    expect(document.record).toEqual({ file, written: false })
-    expect(outcomes(result.stdout)).toEqual([
-      [GREETING, 'text', 'passed'],
-      [LOOKUP, 'text', 'passed'],
-    ])
-    expect(JSON.parse(await readFile(join(document.directory, 'result.json'), 'utf8'))).toEqual(
-      document,
-    )
-    expect(await readFile(blocker, 'utf8')).toBe(COUNTED)
+    await chmod(dirname(file), 0o555)
+    try {
+      const result = await record(root, repository, DECLARED)
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain(`Not recorded ${file}: EACCES`)
+      const document = JSON.parse(result.stdout)
+      expect(document.record).toEqual({ file, written: false })
+      expect(outcomes(result.stdout)).toEqual([
+        [GREETING, 'text', 'passed'],
+        [LOOKUP, 'text', 'passed'],
+      ])
+      expect(JSON.parse(await readFile(join(document.directory, 'result.json'), 'utf8'))).toEqual(
+        document,
+      )
+    } finally {
+      await chmod(dirname(file), 0o755)
+    }
   })
 
-  it('compares with the scorecard when no baseline is given', async () => {
+  it('compares with the scorecard when no baseline is given, naming when and at which commit it was recorded', async () => {
     const { repository, file } = await suiteRepository()
     const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
     const repeat = 5
     const run = ['run', '--repeat', String(repeat), '--output', root]
     await invoke([...run, '--record'], DECLARED, repository)
-    const { recorded } = JSON.parse(await readFile(file, 'utf8'))
+    const { recorded, commit } = JSON.parse(await readFile(file, 'utf8'))
 
     const failing = await invoke(run, { ...DECLARED, ...FAILING }, repository)
     expect(failing.code).toBe(1)
@@ -518,61 +551,10 @@ describe('scorecard', () => {
       { name: LOOKUP, baseline: every, current: every, p: 1, change: 'unchanged' },
     ])
     const report = await readFile(document.report, 'utf8')
-    expect(report).toContain(`Baseline: ${SCORECARD} (recorded ${recorded} ${ON_THESE_FILES}).`)
-    expect(report).toContain(NOT_COMPARED)
-  })
-
-  it('says a run is on different files once a path has an uncommitted edit, and still after the edit is committed', async () => {
-    const { repository, file } = await suiteRepository()
-    const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
-    await record(root, repository, DECLARED)
-    const { recorded } = JSON.parse(await readFile(file, 'utf8'))
-    const baseline = `Baseline: ${SCORECARD} (recorded ${recorded} ${ON_DIFFERENT_FILES}).`
-    const ran = { runner: await runner(), models: [LOOKER] }
-
-    await writeFile(join(repository, VECTOR_EDIT.file), VECTOR_EDIT.content)
-    const edited = await plainRun(root, repository)
-    expect(edited.report).toContain(baseline)
-    expect(edited.provenance).toEqual({
-      fingerprint: VECTOR_IDS,
-      commit: await head(repository),
-      dirty: true,
-      ...ran,
-    })
-
-    await commitAll(repository)
-    const committed = await plainRun(root, repository)
-    expect(committed.report).toContain(baseline)
-    expect(committed.provenance).toEqual({
-      fingerprint: VECTOR_EDIT.ids,
-      commit: await head(repository),
-      dirty: false,
-      ...ran,
-    })
-  })
-
-  it('says a run is on these files after a commit that touches nothing under the paths', async () => {
-    const { repository, file } = await suiteRepository()
-    const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
-    await record(root, repository, DECLARED)
-    const { recorded } = JSON.parse(await readFile(file, 'utf8'))
-    const before = await head(repository)
-
-    await writeFile(join(repository, VECTOR_OUTSIDE), 'outside changed\n')
-    await commitAll(repository)
-    const after = await head(repository)
-    expect(after).not.toBe(before)
-    const later = await plainRun(root, repository)
-    expect(later.report).toContain(
-      `Baseline: ${SCORECARD} (recorded ${recorded} ${ON_THESE_FILES}).`,
+    expect(report).toContain(
+      `Baseline: ${basename(file, '.json')} (recorded ${recorded} at ${commit.slice(0, 10)}).`,
     )
-    expect(later.provenance).toEqual({
-      fingerprint: VECTOR_IDS,
-      commit: after,
-      dirty: false,
-      runner: await runner(),
-      models: [LOOKER],
-    })
+    expect(report).toContain(NOT_COMPARED)
   })
 
   it('refuses what the suite or the repository cannot support, before any case runs', async () => {
@@ -586,43 +568,6 @@ describe('scorecard', () => {
       2,
       '--record needs a scorecard: set `scorecard` in the options of evaluate.cli',
     ])
-    const missing = 'evlas'
-    const paths = [...VECTOR_PATHS, missing].join(',')
-    expect(
-      await failure(output, { ...declared, EVAL_TEST_FINGERPRINT: paths }, repository),
-    ).toEqual([2, `Scorecard fingerprint: path '${missing}' does not exist in 'HEAD'`])
-    const holder = dirname(VECTOR_EDIT.file)
-    const inside = join(holder, SCORECARD)
-    expect(await failure(output, { ...counter, EVAL_TEST_SCORECARD: inside }, repository)).toEqual([
-      2,
-      `The scorecard ${inside} is inside ${holder}, a path it fingerprints. Keep it outside its fingerprint paths.`,
-    ])
-    const outside = join(root, SCORECARD)
-    expect(await failure(output, { ...counter, EVAL_TEST_SCORECARD: outside }, repository)).toEqual(
-      [
-        2,
-        `The scorecard ${outside} is not in ${repository}, the repository that holds its fingerprint paths. Keep it in the repository of its paths.`,
-      ],
-    )
-    const linked = join('linked', SCORECARD)
-    await symlink(holder, join(repository, dirname(linked)))
-    expect(await failure(output, { ...counter, EVAL_TEST_SCORECARD: linked }, repository)).toEqual([
-      2,
-      `The scorecard ${inside} is inside ${holder}, a path it fingerprints. Keep it outside its fingerprint paths.`,
-    ])
-    const nested = join(repository, 'nested')
-    await git(repository, 'init', '--quiet', nested)
-    const submodule = join(nested, 'evals', SCORECARD)
-    expect(
-      await failure(output, { ...counter, EVAL_TEST_SCORECARD: submodule }, repository),
-    ).toEqual([
-      2,
-      `The scorecard ${submodule} is not in ${repository}, the repository that holds its fingerprint paths (git places it in ${nested}). Keep it in the repository of its paths.`,
-    ])
-    const unreadable = join(VECTOR_OUTSIDE, SCORECARD)
-    expect(
-      await failure(output, { ...counter, EVAL_TEST_SCORECARD: unreadable }, repository),
-    ).toEqual([2, `ENOTDIR: not a directory, open '${join(repository, unreadable)}'`])
     expect(await failure(output, declared, root)).toEqual([
       2,
       expect.stringMatching(/^A scorecard needs a git repository: not a git repository/),
@@ -632,18 +577,33 @@ describe('scorecard', () => {
       2,
       'A scorecard needs a git repository: spawn git ENOENT',
     ])
+    await git(repository, 'remote', 'remove', 'origin')
+    expect(await failure([...output, '--record'], declared, repository)).toEqual([
+      2,
+      "--record names the repository from its origin remote: No such remote 'origin'",
+    ])
+    const uncommitted = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
+    await git(uncommitted, 'init', '-q')
+    await mkdir(join(uncommitted, dirname(SCORECARD)))
+    expect(await failure([...output, '--record'], declared, uncommitted)).toEqual([
+      2,
+      '--record needs a commit to record against',
+    ])
     expect(await readdir(root)).toEqual([])
 
-    const undeclared = await invoke(['run', ...output], counter, root)
+    const plain = await invoke(['run', ...output], declared, repository)
+    expect(plain.code).toBe(0)
     expect(await readFile(counter.EVAL_TEST_COUNTER, 'utf8')).toBe(COUNTED)
+    const undeclared = await invoke(['run', ...output], counter, root)
     expect(JSON.parse(undeclared.stdout).provenance).toEqual({
       runner: await runner(),
       models: [],
+      judges: [],
     })
   })
 
-  it('runs a suite that declares no scorecard where git status fails, without commit or dirty', async () => {
-    const repository = await vectorRepository()
+  it('reads the checkout around a broken submodule, which it leaves out as its own checkout', async () => {
+    const repository = await testRepository()
     const submodule = join(repository, 'sub')
     await mkdir(submodule)
     await git(submodule, 'init', '-q')
@@ -658,22 +618,29 @@ describe('scorecard', () => {
     expect(result.code).toBe(0)
     const document = JSON.parse(result.stdout)
     expect(outcomes(result.stdout)).toEqual([[GREETING, 'text', 'passed']])
-    expect(document.provenance).toEqual({ runner: await runner(), models: [] })
+    expect(document.provenance).toEqual({
+      commit: await head(repository),
+      dirty: false,
+      runner: await runner(),
+      models: [],
+      judges: [],
+    })
   })
 
-  it('rejects a declared scorecard of another version, with no fingerprint or with no cases, and any scorecard as a baseline', async () => {
+  it('rejects a declared scorecard of another version, with no commit or with no cases, and any scorecard as a baseline', async () => {
     const { repository, file } = await suiteRepository()
     const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
-    const versioned = { ...HEADER, version: 2, cases: {} }
+    const versioned = { ...HEADER, version: 1, cases: {} }
     expect(await rejectedDeclared(root, repository, file, versioned)).toEqual([
       2,
       expect.stringContaining(`Invalid scorecard ${file}: version: `),
     ])
-    expect(await rejectedDeclared(root, repository, file, { ...HEADER, cases: {} })).toEqual([
+    const uncommitted = { ...HEADER, commit: undefined, cases: {} }
+    expect(await rejectedDeclared(root, repository, file, uncommitted)).toEqual([
       2,
-      expect.stringContaining(`Invalid scorecard ${file}: fingerprint: `),
+      expect.stringContaining(`Invalid scorecard ${file}: commit: `),
     ])
-    const measured = { ...HEADER, fingerprint: VECTOR_IDS, measures: MEASURES }
+    const measured = { ...HEADER, measures: MEASURES }
     expect(await rejectedDeclared(root, repository, file, measured)).toEqual([
       2,
       `Invalid scorecard ${file}: cases: this CLI compares cases, and the file has none`,
@@ -711,13 +678,13 @@ describe('scorecard', () => {
     expect(await readdir(root)).toEqual([basename(evidence), basename(saved)])
   })
 
-  it('reads a declared scorecard that names no agent for a model and has measures beside its cases', async () => {
+  it('reads a declared scorecard that names no agent for a model and has judges and measures beside its cases', async () => {
     const { repository, file } = await suiteRepository()
     const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
     const every = { passed: 3, runs: 3 }
     const recorded = {
       ...HEADER,
-      fingerprint: VECTOR_IDS,
+      judges: [{ model: 'gpt-6-astra' }],
       cases: { [GREETING]: every },
       measures: MEASURES,
     }

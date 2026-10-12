@@ -126,12 +126,11 @@ export interface MixedEvalOptions<S extends StateSchema = StateSchema> extends O
   voice?: Pick<VoiceEvalOptions<S>, 'room' | 'hooks' | 'metrics'>
   output?: string
   /**
-   * The suite's committed scorecard, which only the CLI reads. `run` compares with it, and with
-   * `--record` replaces it. `path` is the file. `fingerprint` lists the files and directories the
-   * result depends on. All are relative to the working directory, in one git repository, and `path`
-   * is outside every `fingerprint` path.
+   * The suite's committed scorecard file, which only the CLI reads. `run` compares with it, and
+   * with `--record` replaces it. The path is from the top of the outermost repository that holds
+   * the working directory: for a suite in a submodule, the repository around it.
    */
-  scorecard?: { path: string; fingerprint: string[] }
+  scorecard?: string
   onCase?: (result: AnyEvalCaseResult<S>, index: number, total: number) => void
 }
 

@@ -31,11 +31,36 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
-## [Unreleased]
+## [0.6.7] - 2026-10-12
+
+A suite's scorecard is one path, recorded with the commit it measured, so the scorecards of several
+repositories can be kept in one place. The scorecard declaration from 0.6.6 changes shape in this
+patch release: one suite had adopted it, and it moves with this release.
 
 ### Added
 
+- Scorecards and `provenance` record `judges` — each distinct model the cases' metrics reported calling, such as the judge metric's model.
+- `@animahealth/adk/eval` exports `parseScorecard` and the `Scorecard` type — the reader every tool shares.
+- Scorecards may hold `measures` — aggregates that are not one case's pass count, each `{ passed, runs }` or `{ value, n }` — with `cases` or in place of them. The eval CLI writes `cases` only and rejects a scorecard that has none.
 - `OpenAIModel.serviceTier: 'flex'` — sends OpenAI flex processing requests; a flex request that fails before any output is sent again at the default tier on the same endpoint. Azure endpoints get the default request. See [OpenAI](https://github.com/mycontinuum-com/adk/blob/main/skills/adk/references/providers-memory.md#openai).
+
+### Changed
+
+- `MixedEvalOptions.scorecard`: `{ path, fingerprint }` → a path from the top of the outermost repository that holds the working directory — a suite in a submodule records into the repository around it.
+- Scorecard files are version 2 — `repo` (the `owner/name` the `origin` remote ends in) and `commit` replace `fingerprint`; a reader compares the paths it cares about at that commit.
+- `Scorecard.cases` is optional, and the reader rejects a key the format does not name.
+- Eval CLI `run --record` needs the scorecard's directory to exist, an `origin` remote and the whole checkout committed, submodules aside, before any case runs, and records nothing when `HEAD` moves or the checkout changes during the run.
+- `provenance.fingerprint` is removed; `provenance.dirty` covers the whole checkout, submodules aside, for every suite.
+
+### Migration from 0.6.6
+
+#### Scorecard declaration and file
+
+Replace `scorecard: { path, fingerprint }` with `scorecard: '<path>'`, from the top of the outermost
+repository. A version 1 scorecard at that path is rejected before any case runs, so `--record`
+cannot replace it. Delete the file, commit the deletion and record again with `--record`; or replace
+its `fingerprint` with `repo` and the `commit` whose ids for those paths are the recorded ones, and
+set `version` to `2`.
 
 ## [0.6.6] - 2026-10-08
 
