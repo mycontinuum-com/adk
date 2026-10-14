@@ -12,6 +12,7 @@ import type {
 } from '../types'
 
 import { withRetry } from '../../core/retry'
+import { requestTimeoutMs } from '../../core/timeout'
 
 const ID_KEY = '_original_id'
 const UUID_RE = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i
@@ -155,6 +156,7 @@ function splitQdrantMetadata(metadata: Record<string, unknown>): {
 export function createQdrantIndex(config: QdrantConfig, injectedClient?: unknown): VectorIndex {
   const retryConfig = config.retry ?? DEFAULT_RETRY
   const batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE
+  const timeout = requestTimeoutMs(config.timeoutMs)
   let client: unknown = injectedClient ?? null
 
   function getClient() {
@@ -165,6 +167,7 @@ export function createQdrantIndex(config: QdrantConfig, injectedClient?: unknown
           url: string
           apiKey?: string
           port?: number
+          timeout?: number
         }) => QdrantClientType
       }
       const parsedUrl = new URL(config.url)
@@ -180,6 +183,7 @@ export function createQdrantIndex(config: QdrantConfig, injectedClient?: unknown
         url: config.url,
         ...(config.apiKey ? { apiKey: config.apiKey } : {}),
         ...(defaultPort !== undefined ? { port: defaultPort } : {}),
+        timeout,
       })
     }
     return client as QdrantClientType

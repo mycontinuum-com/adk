@@ -2,6 +2,7 @@ import type { RetryConfig } from '../../types/runnables'
 import type { Embedder, EmbedResult, VoyageModel } from '../types'
 
 import { withRetry } from '../../core/retry'
+import { requestTimeoutMs } from '../../core/timeout'
 
 const DEFAULT_BATCH_SIZE = 128
 
@@ -17,13 +18,16 @@ export function voyage(name: string, config: Omit<VoyageModel, 'provider' | 'nam
 }
 
 interface VoyageClient {
-  embed(opts: {
-    input: string[]
-    model: string
-    inputType?: string
-    outputDimension?: number
-    outputDtype?: string
-  }): Promise<{
+  embed(
+    opts: {
+      input: string[]
+      model: string
+      inputType?: string
+      outputDimension?: number
+      outputDtype?: string
+    },
+    requestOptions: { timeoutInSeconds: number; maxRetries: number; abortSignal: AbortSignal },
+  ): Promise<{
     data?: Array<{ embedding?: number[]; index?: number }>
     usage?: { total_tokens?: number }
   }>
@@ -36,6 +40,7 @@ interface SageMakerRuntimeClient {
 export function createVoyageEmbedder(config: VoyageModel): Embedder {
   const retryConfig = config.retry ?? DEFAULT_RETRY
   const batchSize = config.batchSize ?? DEFAULT_BATCH_SIZE
+  const timeoutMs = requestTimeoutMs(config.timeoutMs)
   const { dimensions } = config
 
   let voyageClient: VoyageClient | null = null
@@ -97,15 +102,27 @@ export function createVoyageEmbedder(config: VoyageModel): Embedder {
 
   async function embedViaVoyageApi(input: string[], inputType: string): Promise<EmbedResult> {
     const client = getVoyageClient()
-    const response = await client.embed({
-      input,
-      model: config.name,
-      inputType,
-      ...(config.dimensions ? { outputDimension: config.dimensions } : {}),
-      ...(config.outputFormat && config.outputFormat !== 'float'
-        ? { outputDtype: config.outputFormat }
-        : {}),
-    })
+    // `retry` is the only retry layer: the SDK's own retries would multiply each attempt by three.
+    // The SDK's timer stops at the response headers, so the signal is the timer and also bounds
+    // reading the body; the SDK's is set past it.
+    const deadline = AbortSignal.timeout(timeoutMs)
+    const response = await client
+      .embed(
+        {
+          input,
+          model: config.name,
+          inputType,
+          ...(config.dimensions ? { outputDimension: config.dimensions } : {}),
+          ...(config.outputFormat && config.outputFormat !== 'float'
+            ? { outputDtype: config.outputFormat }
+            : {}),
+        },
+        { timeoutInSeconds: timeoutMs / 1000 + 1, maxRetries: 0, abortSignal: deadline },
+      )
+      .catch((error: unknown) => {
+        if (!deadline.aborted) throw error
+        throw new Error(`Voyage request timed out after ${timeoutMs}ms`, { cause: error })
+      })
 
     const embeddings =
       response.data

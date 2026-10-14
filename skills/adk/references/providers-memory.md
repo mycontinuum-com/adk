@@ -486,3 +486,18 @@ Qdrant collections are provisioned outside runtime code. Use `collectionSpec()` 
 `pgvector()` auto-provisions tables and indexes; so does `sqliteVec()` (a local file, no server). `inMemoryIndex()` needs no provisioning and is useful for tests.
 
 `voyage()` supports optional SageMaker fallback via `sagemaker: { endpointName, region }`. Set `VOYAGE_API_KEY` or pass `apiKey`.
+
+`voyage()` and `qdrant()` take `timeoutMs`, the limit for each HTTP request including reading its
+response: a whole number of milliseconds from 1 to 3600000, default 30000. A request that runs out
+fails (Voyage with `Voyage request timed out after <n>ms`), and the provider's `retry` decides whether
+to try again; the Voyage SDK's own retries are off, so `retry.maxAttempts` is the number of attempts. Budget a call as attempts × the
+requests in one attempt × `timeoutMs`, plus backoff. Most calls make one request per attempt; a Qdrant
+upsert to a named variant, `updateMetadata` and `distanceMatrix` can make two. Embedding and upsert
+run one retry loop per batch of `batchSize` (default 128), and a memory upsert embeds before it writes. `timeoutMs` does not bound a SageMaker endpoint. A consumer with a hard deadline, such as
+a Lambda timeout, sets both so that the sum fits:
+
+```ts
+const retry = { maxAttempts: 2, initialDelayMs: 500, maxDelayMs: 1_000, backoffMultiplier: 2 }
+voyage('voyage-4-large', { dimensions: 2048, timeoutMs: 8_000, retry })
+qdrant({ url, apiKey, timeoutMs: 5_000, retry })
+```

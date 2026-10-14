@@ -47,6 +47,8 @@ export interface VoyageModel {
   outputFormat?: 'float' | 'int8' | 'binary'
   batchSize?: number
   retry?: RetryConfig
+  /** Limit in ms for each Voyage API request, body included, from 1 to 3600000. Default 30000. */
+  timeoutMs?: number
   sagemaker?: VoyageSageMakerConfig
 }
 
@@ -56,6 +58,8 @@ export interface QdrantConfig {
   apiKey?: string
   batchSize?: number
   retry?: RetryConfig
+  /** Limit in ms for each Qdrant HTTP request, body included, from 1 to 3600000. Default 30000. */
+  timeoutMs?: number
 }
 
 export interface PgPool {

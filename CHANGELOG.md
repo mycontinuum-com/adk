@@ -31,6 +31,17 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## [0.6.8] - 2026-10-14
+
+### Added
+
+- `VoyageModel.timeoutMs` and `QdrantConfig.timeoutMs` — the limit for each provider HTTP request, including reading the response; a whole number of milliseconds from 1 to 3600000, default 30000. A request that runs out fails, and `retry` decides whether to try again. Any other value throws a `RangeError` when the provider is created. See [vector memory](https://github.com/mycontinuum-com/adk/blob/main/skills/adk/references/providers-memory.md#provisioning).
+
+### Changed
+
+- `qdrant()` — requests time out after 30s by default instead of the client's 300s.
+- `voyage()` — requests time out after 30s by default instead of the SDK's 60s, which stopped at the response headers, and fail with `Voyage request timed out after <n>ms`. The SDK no longer retries a 408, 409, 429 or 5xx response itself; `retry.maxAttempts` is the number of requests.
+
 ## [0.6.7] - 2026-10-12
 
 A suite's scorecard is one path, recorded with the commit it measured, so the scorecards of several
