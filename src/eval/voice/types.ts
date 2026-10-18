@@ -65,7 +65,23 @@ export interface VoiceEvalControlDisconnectOptions {
   mode?: VoiceEvalControlDisconnectMode
 }
 
+export interface VoiceEvalUserAudio {
+  /** Text spoken by this synthetic audio, used only in the simulated caller context. */
+  text: string
+  frames: readonly {
+    data: Int16Array
+    sampleRate: number
+    channels: number
+    samplesPerChannel: number
+  }[]
+}
+
 export interface VoiceEvalControl {
+  /**
+   * Plays recorded caller PCM and waits for SDK speech completion. Assert received audio
+   * separately; an SDK audio-output error may be reported outside its speech handle.
+   */
+  playUserAudio(input: VoiceEvalUserAudio): Promise<void>
   disconnectUser(options?: VoiceEvalControlDisconnectOptions): Promise<void>
   /**
    * Stops (`true`) or restores (`false`) the simulated caller's audio. The caller still replies

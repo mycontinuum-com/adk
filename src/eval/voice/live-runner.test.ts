@@ -1,3 +1,5 @@
+import { Future, initializeLogger, voice } from '@livekit/agents'
+import { AudioFrame } from '@livekit/rtc-node'
 import { EventEmitter } from 'node:events'
 import { vi } from 'vitest'
 import { z } from 'zod'
@@ -16,6 +18,8 @@ import { createLiveVoiceHandler } from '../../voice/live-handler'
 import { eventSequenceMetric } from '../metrics/events'
 import { createVoiceEvalCase } from './control'
 import { runLiveVoiceCase } from './live-runner'
+
+initializeLogger({ pretty: false, level: 'silent' })
 
 vi.mock('../../voice/livekit-model', () => ({ createLiveKitModel: () => ({}) }))
 vi.mock('../../voice/livekit-agent', () => ({ createLiveKitAgent: () => new SDKAgent() }))
@@ -104,6 +108,7 @@ async function fixture() {
   const liveSessions: AgentSession[] = []
   const callerSessions: AgentSession[] = []
   const callerAudio: boolean[] = []
+  const injectedAudio: Array<{ room: Room | undefined; text: unknown; audio: unknown }> = []
   class AgentSession extends EventEmitter {
     agent?: SDKAgent
     room?: Room
@@ -111,6 +116,18 @@ async function fixture() {
       setAudioEnabled: (enabled: boolean) => {
         if (this.agent?.constructor === SDKAgent) callerAudio.push(enabled)
       },
+    }
+    interrupt() {
+      const future = new Future<void>()
+      future.resolve()
+      return future
+    }
+    say(text: unknown, options: { audio: unknown }) {
+      injectedAudio.push({ room: this.room, text, audio: options.audio })
+      const handle = voice.SpeechHandle.create()
+      vi.spyOn(handle, 'waitForPlayout').mockResolvedValue()
+      vi.spyOn(handle, 'exception').mockReturnValue(undefined)
+      return handle
     }
     async start({ agent: started, room }: { agent: SDKAgent; room: Room }) {
       this.agent = started
@@ -278,6 +295,7 @@ async function fixture() {
     deleteRoom,
     closeCaller,
     callerAudio,
+    injectedAudio,
     closeLiveSession: (reason: string) => {
       liveSessions.at(-1)!.emit('close', { reason })
     },
@@ -807,6 +825,37 @@ test('reports a GPT Live caller cost from its session time', async () => {
     })
     const total = run.liveUsage!.total
     expect(total.basis !== 'unavailable' && total.totalCost).toBeCloseTo(0.3375, 12)
+  } finally {
+    await f.app.close()
+  }
+})
+
+test('plays fixture audio from the caller room and unbinds the control after the run', async () => {
+  const f = await fixture()
+  const frames = [new AudioFrame(new Int16Array([1, 2, 3, 4]), 48000, 1, 4)]
+  try {
+    const controlled = createVoiceEvalCase((control) => ({
+      name: 'recorded caller',
+      agent: f.agent,
+      backend: f.backend,
+      userAgent: f.userAgent,
+      hooks: [
+        {
+          async onResult() {
+            await control.playUserAudio({ text: 'No.', frames })
+          },
+        },
+      ],
+    }))
+    expect(() => controlled.evalControl!.playUserAudio({ text: 'No.', frames })).toThrow(
+      'not bound',
+    )
+    const run = await f.run(controlled)
+    expect(run.error).toBeUndefined()
+    expect(f.injectedAudio).toEqual([{ room: f.rooms[1], text: 'No.', audio: expect.anything() }])
+    expect(() => controlled.evalControl!.playUserAudio({ text: 'No.', frames })).toThrow(
+      'not bound',
+    )
   } finally {
     await f.app.close()
   }

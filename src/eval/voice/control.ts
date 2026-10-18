@@ -20,6 +20,7 @@ function createVoiceEvalControl(): BindableVoiceEvalControl {
   const control: BindableVoiceEvalControl = {
     disconnectUser: (options?: VoiceEvalControlDisconnectOptions) =>
       requireBinding(activeBinding).disconnectUser(options),
+    playUserAudio: (input) => requireBinding(activeBinding).playUserAudio(input),
     muteUser: (muted: boolean) => requireBinding(activeBinding).muteUser(muted),
     bind: (binding: VoiceEvalControl) => {
       activeBinding = binding

@@ -145,3 +145,62 @@ if (staticViolations.length > 0) {
 }
 
 console.log(`Verified ${KEY_FREE_ENTRIES.join(', ')} load without optional dependencies.`)
+
+const consumer = fs.mkdtempSync(path.join(require('os').tmpdir(), 'adk-text-consumer-'))
+try {
+  const installed = path.join(consumer, 'node_modules/@animahealth/adk')
+  for (const file of packedPaths) {
+    if (file !== 'package.json' && !file.endsWith('.d.ts')) continue
+    const target = path.join(installed, file)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.copyFileSync(path.join(root, file), target)
+  }
+  // Existing public declarations require these two peers; neither makes rtc-node resolvable
+  // from the consumer's ADK package. Keep the new recorded-audio type free of that native peer.
+  for (const name of [...allowed, '@types/node', '@ag-ui/core', '@livekit/agents']) {
+    const target = path.join(consumer, 'node_modules', name)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.symlinkSync(fs.realpathSync(path.join(root, 'node_modules', name)), target, 'junction')
+  }
+  fs.writeFileSync(path.join(consumer, 'package.json'), JSON.stringify({ type: 'module' }))
+  fs.writeFileSync(
+    path.join(consumer, 'index.ts'),
+    `import { adk } from '@animahealth/adk'
+import type { VoiceEvalUserAudio } from '@animahealth/adk/eval'
+const fixture: VoiceEvalUserAudio = {
+  text: 'No.',
+  frames: [{ data: new Int16Array([1]), sampleRate: 48000, channels: 1, samplesPerChannel: 1 }],
+}
+void adk
+void fixture
+`,
+  )
+  fs.writeFileSync(
+    path.join(consumer, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        noEmit: true,
+        strict: true,
+        skipLibCheck: false,
+        module: 'NodeNext',
+        moduleResolution: 'NodeNext',
+        target: 'ES2022',
+        types: ['node'],
+      },
+      files: ['index.ts'],
+    }),
+  )
+  require('assert').throws(
+    () =>
+      require('module')
+        .createRequire(path.join(installed, 'package.json'))
+        .resolve('@livekit/rtc-node'),
+    { code: 'MODULE_NOT_FOUND' },
+  )
+  execFileSync(process.execPath, [require.resolve('typescript/bin/tsc'), '-p', consumer], {
+    stdio: 'inherit',
+  })
+  console.log('Verified packed public audio types without rtc-node in the consumer.')
+} finally {
+  fs.rmSync(consumer, { recursive: true, force: true })
+}

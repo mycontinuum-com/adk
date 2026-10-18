@@ -306,4 +306,17 @@ Voice case fields: `name`, `agent`, `userAgent`, `toolMocks`, `metrics`, `retrie
 
 Voice suite options: `room`, `output`, `metrics`, `hooks`, `concurrency`, `repeat`, `stopOnFirstFailure`, and `onCase`.
 
+A case factory receives `control.playUserAudio({ text, frames })` to play a recorded synthetic
+caller utterance through that caller's existing LiveKit participant. `frames` is a nonempty array
+of decoded PCM frames (`data`, `sampleRate`, `channels`, `samplesPerChannel`); LiveKit `AudioFrame`
+objects also satisfy this shape. Decode and validate the fixture before the run, for example by
+collecting `audioFramesFromFile(path)` from `@livekit/agents`. The control interrupts current caller
+speech, waits for it to stop, then plays the fixture without interruption. It rejects invalid frames,
+interrupted playback, and errors reported by the SDK's speech handle. Resolution means that the
+SDK marked the handle complete; some SDK audio-output failures are reported outside that handle.
+Assert received PCM and the intended overlap separately, and fail the run on process or session
+errors. The supplied `text` updates only the simulated caller's conversation; the tested agent
+hears the PCM through its normal audio input. Keep the caller unmuted while playing. Trigger
+fixtures from structured state and speech activity, never from transcript word matching.
+
 Use `voiceTimingMetric()` for `time_to_first_speech`, response latency p50/p95/max, silence gap max/total, and interruption count.

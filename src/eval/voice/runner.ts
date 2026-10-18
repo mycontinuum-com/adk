@@ -55,6 +55,7 @@ import { withTimeout } from '../suite-runner'
 import { requireLiveKit } from './livekit-sdk'
 import { recordRooms } from './recorder'
 import { emptyTiming } from './speaker-tracker'
+import { playUserAudio } from './user-audio'
 
 interface TranscriptSource {
   text: string
@@ -894,6 +895,7 @@ export async function runVoiceCase<S extends StateSchema>(
             await userRoom.disconnect()
           }
         },
+        playUserAudio: (input) => playUserAudio({ caller: userLkSession, input }),
         muteUser: (muted) => userLkSession.output.setAudioEnabled(!muted),
       })
     }

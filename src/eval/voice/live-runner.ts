@@ -45,6 +45,7 @@ import { createVoiceEvalCaller } from './caller'
 import { requireLiveKit } from './livekit-sdk'
 import { recordRooms } from './recorder'
 import { createSpeakerTracker } from './speaker-tracker'
+import { playUserAudio } from './user-audio'
 
 interface LiveKitSdk {
   lk: typeof import('@livekit/agents')
@@ -339,6 +340,7 @@ class LiveVoiceCaseRun<S extends StateSchema> {
             throw new Error('Live voice eval supports physical disconnect only')
           await userRoom.disconnect()
         },
+        playUserAudio: (input) => playUserAudio({ caller: this.caller, input }),
         muteUser: (muted) => this.caller.output.setAudioEnabled(!muted),
       })
     const handler = this.createHandler<S, any>(this.handlerConfig(), this.appContext)

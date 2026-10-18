@@ -76,6 +76,7 @@ export type {
   LiveVoiceEvalCase,
   VoiceEvalCaseFactory,
   VoiceEvalControl,
+  VoiceEvalUserAudio,
   VoiceEvalControlDisconnectMode,
   VoiceEvalControlDisconnectOptions,
   VoiceRoomConfig,
