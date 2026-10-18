@@ -235,6 +235,7 @@
     "@types/pg": "^8.15.2",
     "@types/react": "^18.0.0",
     "@types/turndown": "^5.0.5",
+    "@types/ws": "^8.18.1",
     "better-sqlite3": "^12.6.2",
     "esbuild": "^0.27.7",
     "google-auth-library": "^9.15.1",

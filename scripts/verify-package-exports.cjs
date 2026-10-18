@@ -157,6 +157,9 @@ try {
   }
   // Existing public declarations require these two peers; neither makes rtc-node resolvable
   // from the consumer's ADK package. Keep the new recorded-audio type free of that native peer.
+  // `@livekit/agents`' declarations import `ws`, which TypeScript resolves from the package's real
+  // store path, so `@types/ws` must be in the install's hoisted store: it is an ADK devDependency
+  // for that reason, or an image's filtered install fails this check (deploy run 39171243070).
   for (const name of [...allowed, '@types/node', '@ag-ui/core', '@livekit/agents']) {
     const target = path.join(consumer, 'node_modules', name)
     fs.mkdirSync(path.dirname(target), { recursive: true })
@@ -190,12 +193,22 @@ void fixture
       files: ['index.ts'],
     }),
   )
+  // Shadow rtc-node with a package that exports nothing. Node and TypeScript both resolve from the
+  // nearest node_modules, so whatever the host has above the temp directory (a hosted runner
+  // resolved a real copy: deploy run 39171243070), the consumer's ADK package cannot load it and
+  // its declarations fail to typecheck if they ever need it.
+  const shadow = path.join(consumer, 'node_modules/@livekit/rtc-node')
+  fs.mkdirSync(shadow, { recursive: true })
+  fs.writeFileSync(
+    path.join(shadow, 'package.json'),
+    JSON.stringify({ name: '@livekit/rtc-node', version: '0.0.0', exports: {} }),
+  )
   require('assert').throws(
     () =>
       require('module')
         .createRequire(path.join(installed, 'package.json'))
         .resolve('@livekit/rtc-node'),
-    { code: 'MODULE_NOT_FOUND' },
+    { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' },
   )
   execFileSync(process.execPath, [require.resolve('typescript/bin/tsc'), '-p', consumer], {
     stdio: 'inherit',
