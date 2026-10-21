@@ -126,6 +126,7 @@ function costedRun(run: VoiceRunResult<typeof schema>): VoiceRunResult<typeof sc
       backend: undefined,
       call: {
         backend: callBackend,
+        decisions: { cost: { basis: 'reported', totalCost: 0, currency: 'USD' } },
         voice,
         total: sumCosts([callBackend.cost, voice.cost]),
       },
@@ -136,7 +137,7 @@ function costedRun(run: VoiceRunResult<typeof schema>): VoiceRunResult<typeof sc
 }
 
 describe('native Live voice eval suite', () => {
-  it('writes backend, voice and caller cost with their basis to result.json and report.md', async () => {
+  it('writes backend, decisions, voice and caller cost with their basis to result.json and report.md', async () => {
     const { app, live } = fixture()
     boundary.run.mockImplementation(async () => costedRun(await completedCall(app, 'costed')))
     const root = await mkdtemp(join(tmpdir(), 'adk-live-cost-'))
@@ -167,13 +168,13 @@ describe('native Live voice eval suite', () => {
     expect(liveUsage.total.basis).toBe('estimated')
     expect(liveUsage.total.totalCost).toBeCloseTo(0.865, 12)
     expect(await readFile(join(root, directory!, 'report.md'), 'utf8')).toContain(
-      '**Cost:** $0.8650 (estimated) — backend $0.1500 (reported), voice $0.0750 (estimated), caller $0.6400 (reported)',
+      '**Cost:** $0.8650 (estimated) — backend $0.1500 (reported), decisions $0.000000 (reported), voice $0.0750 (estimated), caller $0.6400 (reported)',
     )
     const [caseDirectory] = await readdir(join(root, directory!, 'voice'))
     expect(
       await readFile(join(root, directory!, 'voice', caseDirectory!, 'report.md'), 'utf8'),
     ).toContain(
-      '**Cost**: $0.8650 (estimated) — backend $0.1500 (reported), voice 90.0s $0.0750 (estimated), caller $0.6400 (reported)',
+      '**Cost**: $0.8650 (estimated) — backend $0.1500 (reported), decisions $0.000000 (reported), voice 90.0s $0.0750 (estimated), caller $0.6400 (reported)',
     )
   })
 
@@ -197,7 +198,7 @@ describe('native Live voice eval suite', () => {
     const result = await evaluateVoice(live, { ...options, repeat: 2 }, context)
     expect(result.results[1].run.liveUsage?.caller.cost).toEqual({ basis: 'unavailable' })
     expect(app.evaluate.voice.report()(result)).toContain(
-      '**Cost:** unavailable ($0.8650 known across 1 of 2 cases) — backend $0.1500 (reported), voice unavailable, caller unavailable',
+      '**Cost:** unavailable ($0.8650 known across 1 of 2 cases) — backend $0.1500 (reported), decisions unavailable, voice unavailable, caller unavailable',
     )
   })
 
@@ -214,7 +215,7 @@ describe('native Live voice eval suite', () => {
     }
     const report = generateReport({ ...voice, results: [liveCase, realtime] })
     expect(report).toContain(
-      '**Cost:** unavailable ($0.8650 known across 1 of 2 cases) — backend $0.1500 (reported), voice $0.0750 (estimated), caller $0.6400 (reported), other cases unavailable',
+      '**Cost:** unavailable ($0.8650 known across 1 of 2 cases) — backend $0.1500 (reported), decisions $0.000000 (reported), voice $0.0750 (estimated), caller $0.6400 (reported), other cases unavailable',
     )
   })
 
@@ -234,12 +235,13 @@ describe('native Live voice eval suite', () => {
     const result = await evaluateVoice(live, options, context)
     expect(result.results[0].run.liveUsage).toEqual({
       backend: { cost: { basis: 'reported', totalCost: 0, currency: 'USD' } },
+      decisions: { cost: { basis: 'unavailable' } },
       voice: { modelName: 'gpt-live-1', cost: { basis: 'unavailable' } },
       caller: { cost: { basis: 'unavailable' } },
       total: { basis: 'unavailable' },
     })
     expect(app.evaluate.voice.report()(result)).toContain(
-      '**Cost:** unavailable ($0.000000 known across 0 of 1 cases) — backend $0.000000 (reported), voice unavailable, caller unavailable',
+      '**Cost:** unavailable ($0.000000 known across 0 of 1 cases) — backend $0.000000 (reported), decisions unavailable, voice unavailable, caller unavailable',
     )
   })
 

@@ -88,6 +88,8 @@ export interface UsageSummary {
   readonly totalAudioInputTokens: number
   readonly totalAudioOutputTokens: number
   readonly modelCalls: number
+  /** Calls that failed or were cut off before they reported usage, counted at their estimated input. */
+  readonly estimatedCalls?: number
   readonly cost?: CostEstimate
 }
 

@@ -165,13 +165,15 @@ export type VoiceRunStatus =
   | 'disconnected'
   | 'participant_left'
 
-/** Live eval usage: the handler's backend and voice usage plus the simulated caller's tokens. */
+/** Live eval usage: the handler's call usage plus the simulated caller's tokens. */
 export interface LiveVoiceEvalUsage {
   readonly backend: UsageCost
+  /** `app.decide()` calls made during the call. */
+  readonly decisions: UsageCost
   readonly voice: LiveVoiceSessionUsage
   /** Token usage for a Realtime caller; session time for a GPT Live caller. */
   readonly caller: UsageCost | LiveVoiceSessionUsage
-  /** Backend, voice and caller. Unavailable when any component is unavailable. */
+  /** Backend, decisions, voice and caller. Unavailable when any component is unavailable. */
   readonly total: CostAccount
 }
 

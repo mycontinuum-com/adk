@@ -176,7 +176,7 @@ function renderResult(
   lines.push(`**Duration**: ${formatMs(result.durationMs)}${costStr}`)
   if (live) {
     lines.push(
-      `**Cost**: ${formatCostAccount(live.total)} — backend ${formatCostAccount(live.backend.cost)}, voice${formatBilledTime(live.voice.seconds)} ${formatCostAccount(live.voice.cost)}, caller${formatBilledTime('seconds' in live.caller ? live.caller.seconds : undefined)} ${formatCostAccount(live.caller.cost)}`,
+      `**Cost**: ${formatCostAccount(live.total)} — backend ${formatCostAccount(live.backend.cost)}, decisions ${formatCostAccount(live.decisions.cost)}, voice${formatBilledTime(live.voice.seconds)} ${formatCostAccount(live.voice.cost)}, caller${formatBilledTime('seconds' in live.caller ? live.caller.seconds : undefined)} ${formatCostAccount(live.caller.cost)}`,
     )
   }
   if (result.recording.path) {

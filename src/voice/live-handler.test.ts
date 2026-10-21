@@ -118,6 +118,8 @@ async function fixture(
     agentScope?: boolean
     backendTimeoutMs?: number
     backendUsage?: boolean
+    /** The backend agent's model name; the adapter is the mock whatever the name. */
+    backendModel?: string
     resultGate?: ReturnType<typeof gate>
     clock?: () => number
     playoutTimeoutMs?: number
@@ -145,6 +147,7 @@ async function fixture(
     responses: ['first', 'second', 'third'].map((id) => ({
       toolCalls: [{ name: 'lookup', args: { id } }],
     })),
+    decisions: { urgent: { type: 'predicate', probability: 0.02 } },
   })
   adapter.reportUsage = Boolean(options.backendUsage)
   const app = adk({
@@ -163,7 +166,7 @@ async function fixture(
   const toolStateBefore: Array<{ id: string; answer: string }> = []
   const backend = app.agent({
     name: 'lookup',
-    model: openai('mock'),
+    model: openai(options.backendModel ?? 'mock'),
     context: [
       app.context.history(options.agentScope ? { scope: 'agent' } : undefined),
       (ctx) => {
@@ -2518,7 +2521,7 @@ describe('Live call usage', () => {
     expect(usage.total).toEqual({ basis: 'estimated', totalCost: 0.1, currency: 'USD' })
   })
 
-  test('backend work abandoned at close makes backend cost unavailable, not complete', async () => {
+  test('backend work abandoned at close keeps the model calls that finished', async () => {
     const stuck = gate()
     const f = await fixture({ gates: { second: stuck }, backendTimeoutMs: 50, backendUsage: true })
     const call = await f.call()
@@ -2528,11 +2531,86 @@ describe('Live call usage', () => {
     await vi.waitFor(() => expect(f.started).toEqual(['first', 'second']))
     f.entered[0]!.voice.end()
     await vi.waitFor(() => expect(f.exited).toHaveBeenCalledTimes(1), { timeout: 500 })
+    // The second run's tool is what hangs; its model call had ended.
     const usage = f.exited.mock.calls[0]![0].usage
-    expect(usage.backend.cost).toEqual({ basis: 'unavailable' })
-    expect(usage.total).toEqual({ basis: 'unavailable' })
+    expect(usage.backend.usage?.modelCalls).toBe(2)
+    expect(usage.backend.cost).toEqual({ basis: 'reported', totalCost: 0.3, currency: 'USD' })
     stuck.release()
     await vi.waitFor(() => expect(f.finished).toEqual(['first', 'second']))
+  })
+
+  test('a model call cut off at close counts at its estimated input', async () => {
+    const stuck = gate()
+    const f = await fixture({
+      backendTimeoutMs: 50,
+      backendUsage: true,
+      backendModel: 'gpt-4o-mini',
+    })
+    cleanup.push(stuck.release)
+    const call = await f.call()
+    call.live.dispatch('first-id', 'Question')
+    await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
+    f.adapter.stepGate = stuck.promise
+    call.live.dispatch('second-id', 'Follow-up')
+    await vi.waitFor(() => expect(f.renderedHistory).toHaveLength(2))
+    f.entered[0]!.voice.end()
+    await vi.waitFor(() => expect(f.exited).toHaveBeenCalledTimes(1), { timeout: 500 })
+    const { backend, total } = f.exited.mock.calls[0]![0].usage
+    expect(backend.usage).toMatchObject({ modelCalls: 2, estimatedCalls: 1 })
+    expect(backend.cost).toMatchObject({ basis: 'estimated', currency: 'USD' })
+    // The reported call's $0.15, plus a few estimated input tokens at $0.15 a million.
+    const cost = backend.cost.basis === 'estimated' ? backend.cost.totalCost : 0
+    expect(cost).toBeGreaterThan(0.15)
+    expect(cost).toBeLessThan(0.1501)
+    expect(total.basis).toBe('estimated')
+  })
+
+  test('a class hook with a private-field getter, and a frozen hook, still run', async () => {
+    class Counted {
+      calls = 0
+      readonly #exit = async () => {
+        this.calls += 1
+      }
+      get onExit() {
+        return this.#exit
+      }
+    }
+    const counted = new Counted()
+    const frozenExit = vi.fn<() => void>()
+    const f = await fixture({
+      extraHooks: [counted, Object.freeze({ onExit: frozenExit })],
+    })
+    const call = await f.call()
+    await call.shutdown()
+    expect(counted.calls).toBe(1)
+    expect(frozenExit).toHaveBeenCalledTimes(1)
+  })
+
+  test('decisions made in hooks count toward the call, apart from the backend', async () => {
+    let app: Awaited<ReturnType<typeof fixture>>['app'] | undefined
+    const f = await fixture({
+      backendUsage: true,
+      extraHooks: [
+        {
+          async onResult() {
+            await app!.decide('Synthetic caller words', {
+              model: openai('gpt-4o-mini'),
+              questions: { urgent: { type: 'predicate', instructions: 'Is it urgent?' } },
+            })
+          },
+        },
+      ],
+    })
+    app = f.app
+    const call = await f.call()
+    call.live.dispatch('first-id', 'Opening hours?')
+    await vi.waitFor(() => expect(f.adapter.decideCalls).toHaveLength(1))
+    call.live.emit('openai_server_event_received', { type: 'session.closed' })
+    await call.shutdown()
+    const usage = f.exited.mock.calls[0]![0].usage
+    expect(usage.backend.usage?.modelCalls).toBe(1)
+    expect(usage.decisions.usage?.modelCalls).toBe(1)
+    expect(usage.decisions.cost).toEqual({ basis: 'reported', totalCost: 0.15, currency: 'USD' })
   })
 
   test('a result hook still running at close keeps the settled backend cost', async () => {

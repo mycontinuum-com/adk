@@ -96,11 +96,17 @@ export interface UsageCost {
   readonly cost: CostAccount
 }
 
-/** Per-call usage: ADK backend model calls and GPT Live session time, costed separately. */
+/**
+ * Per-call usage, costed by part. GPT Live's own transcripts come with its session time, so there
+ * is no separate transcription charge.
+ */
 export interface LiveCallUsage {
-  readonly backend: UsageCost
   readonly voice: LiveVoiceSessionUsage
-  /** Backend plus voice. Unavailable when either component is unavailable. */
+  /** Model calls of agent runs made during the call, such as each backend run and `app.ask()`. */
+  readonly backend: UsageCost
+  /** `app.decide()` calls made during the call, from hooks, tools or any other code. */
+  readonly decisions: UsageCost
+  /** Voice, backend and decisions. Unavailable when any part is unavailable. */
   readonly total: CostAccount
 }
 

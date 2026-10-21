@@ -7,6 +7,8 @@ import type {
   StreamEvent,
   HandoffOrigin,
   InvocationStartEvent,
+  ModelEndEvent,
+  ModelStartEvent,
   ModelUsage,
   Event,
   AssistantEvent,
@@ -40,7 +42,7 @@ import { runAgent } from '../agents/reasoning'
 import { runSequence, type SequenceResumeContext } from '../agents/sequential'
 import { runStep, type StepResumeContext } from '../agents/step'
 import { InMemoryChannel } from '../channels/inMemory'
-import { createEndEvent } from '../context/build'
+import { createEndEvent, estimateTokens } from '../context/build'
 import { PipelineStructureChangedError } from '../errors/pipeline'
 import { DecisionsUnavailableError } from '../errors/types'
 import { composeHooks } from '../hook/compose'
@@ -61,6 +63,7 @@ import { ADAPTER, REALTIME_ADAPTER, getSymbol } from './adapter-symbol'
 import { createEventId } from './constants'
 import { assertAnswersMatch } from './decisions'
 import { createInvocationId } from './invocation'
+import { modelCallObservers } from './model-calls'
 
 /** Prevents executing against a session started with a different agent configuration. */
 function validatePipelineFingerprint(session: Session, currentFingerprint: string): void {
@@ -242,6 +245,7 @@ export function summarizeModelUsage(
   }
 
   const completeUsage = calls.every((usage) => usage !== undefined)
+  const estimatedCalls = calls.filter((usage) => usage?.estimated).length
   const models: ModelUsageEntry[] = []
   for (const e of byModel.values()) {
     models.push(modelUsageEntry(e, completeUsage))
@@ -259,6 +263,7 @@ export function summarizeModelUsage(
     totalAudioInputTokens,
     totalAudioOutputTokens,
     modelCalls: calls.length,
+    ...(estimatedCalls > 0 && { estimatedCalls }),
     ...(reportedCostCalls === calls.length && { reportedCostUSD }),
     ...(knownCostCalls === calls.length && {
       cost: {
@@ -519,48 +524,65 @@ export class BaseRunner implements Runner {
     model: ModelConfig,
     signal?: AbortSignal,
   ): Promise<Answers<Qs>> {
+    const observers = modelCallObservers()
     const adapter = await this.getAdapter(model)
     const config = getInnerModel(model)
-    const notify = composeHooks(this.hooks).onEvent
+    const onEvent = composeHooks(this.hooks).onEvent
+    const notify = (event: ModelStartEvent | ModelEndEvent) => {
+      for (const observe of observers) observe(event, 'decision')
+      onEvent?.(event)
+    }
     const call = { invocationId: createInvocationId(), agentName: 'decide', stepIndex: 1 }
     const startedAt = Date.now()
-    notify?.({
+    notify({
       id: createEventId(),
       type: 'model_start',
       createdAt: startedAt,
       ...call,
       messageCount: 1,
       tools: [],
+      estimatedInput: {
+        provider: config.provider,
+        modelName: config.name,
+        inputTokens: estimateTokens(JSON.stringify(request).length),
+      },
     })
 
+    const usageOf = (usage: ModelUsage | undefined) =>
+      usage && {
+        ...usage,
+        provider: usage.provider ?? config.provider,
+        modelName: usage.modelName ?? config.name,
+      }
+    // Failing before the request was sent spends nothing; once sent, the provider's usage is kept.
+    let spent: ModelUsage | undefined = usageOf({ inputTokens: 0, outputTokens: 0 })
     let served: DecisionResponse
     try {
       if (!adapter.decide) throw new DecisionsUnavailableError(config)
       signal?.throwIfAborted()
+      spent = undefined
       served = await adapter.decide(request, config, signal)
+      spent = usageOf(served.usage)
       signal?.throwIfAborted()
       assertAnswersMatch(request.questions, served.answers)
     } catch (error) {
-      notify?.(
+      notify(
         createEndEvent({
           ...call,
           durationMs: Date.now() - startedAt,
           finishReason: 'error',
+          usage: spent,
           error: error instanceof Error ? error.message : String(error),
         }),
       )
       throw error
     }
-    notify?.(
+    notify(
       createEndEvent({
         ...call,
         durationMs: Date.now() - startedAt,
         finishReason: 'stop',
-        usage: served.usage && {
-          ...served.usage,
-          provider: served.usage.provider ?? config.provider,
-          modelName: served.usage.modelName ?? config.name,
-        },
+        usage: spent,
       }),
     )
     return served.answers
@@ -665,9 +687,12 @@ export class BaseRunner implements Runner {
     // in the same order. Hooks observe on enqueue, so they keep observing if the consumer stops
     // reading, and keep receiving work a run that yielded or failed left running.
     const ownership = trackOwnership()
+    const observers = modelCallObservers()
     const eventChannel = new InMemoryChannel({
       onEvent: (event) => {
         ownership.observe(event)
+        if (event.type === 'model_start' || event.type === 'model_end')
+          for (const observe of observers) observe(event, 'run')
         // Start the first registry fetch while later steps run, so the result rarely waits for it.
         if (event.type === 'model_end' && isPriceable(event.usage)) void loadPricing()
         composed.onEvent?.(event)

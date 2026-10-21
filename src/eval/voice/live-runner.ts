@@ -122,7 +122,8 @@ function waitForCaller(room: Room, events: LiveKitSdk['rtc']['RoomEvent']): Prom
 
 /**
  * Combines the handler's call usage with the simulated caller's usage. Backend events copied into
- * the eval session are the fallback when the handler did not finalize.
+ * the eval session are the fallback when the handler did not finalize; decisions then have no
+ * figure.
  */
 export function summarizeLiveEvalUsage(input: {
   backend: UsageSummary | undefined
@@ -141,6 +142,7 @@ export function summarizeLiveEvalUsage(input: {
     modelName: input.voiceModel,
     cost: { basis: 'unavailable' as const },
   }
+  const decisions = input.call?.decisions ?? { cost: { basis: 'unavailable' as const } }
   const callerUsage = summarizeModelUsage(input.callerCalls, input.pricing)
   const caller =
     input.callerSession ??
@@ -149,9 +151,10 @@ export function summarizeLiveEvalUsage(input: {
       : { cost: { basis: 'unavailable' as const } })
   return {
     backend,
+    decisions,
     voice,
     caller,
-    total: sumCosts([backend.cost, voice.cost, caller.cost]),
+    total: sumCosts([backend.cost, decisions.cost, voice.cost, caller.cost]),
   }
 }
 

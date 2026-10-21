@@ -16,6 +16,7 @@ import type { StateSchema } from '../types/schema'
 import type { AnyZodSchema } from '../types/zod'
 
 import { partitionTools, expandMCPTools, signalOutput, isOutputSignal } from '../core/tools'
+import { getInnerModel } from '../providers/models'
 import { createEventId } from '../session'
 import { isSupportedZodSchema, schemaKind } from '../types/zod'
 import { createStateAccessor } from './state'
@@ -84,15 +85,29 @@ function getOutputSchemaName(ctx: RenderContext): string | undefined {
   return `${ctx.agent.name}.output`
 }
 
+/**
+ * Tokens in a request of `characters` characters, at about four a token, the usual rate for
+ * English. It sizes a request that never reported its usage.
+ */
+export function estimateTokens(characters: number): number {
+  return Math.ceil(characters / 4)
+}
+
 export function createStartEvent(
   ctx: RenderContext,
   stepIndex: number,
   invocationId: string,
 ): ModelStartEvent {
   let messageCount = 0
+  let characters = 0
   for (const event of ctx.events) {
-    if (eventToMessageSummary(event)) messageCount++
+    const message = eventToMessageSummary(event)
+    if (!message) continue
+    messageCount++
+    characters += message.content.length
   }
+  for (const tool of ctx.functionTools) characters += tool.name.length + tool.description.length
+  const model = ctx.agent.kind === 'agent' ? getInnerModel(ctx.agent.model) : ctx.agent.model
 
   return {
     id: createEventId(),
@@ -104,6 +119,11 @@ export function createStartEvent(
     messageCount,
     tools: ctx.functionTools.map(toolToSummary),
     outputSchema: ctx.outputSchema ? getOutputSchemaName(ctx) : undefined,
+    estimatedInput: {
+      provider: model.provider,
+      modelName: model.name,
+      inputTokens: estimateTokens(characters),
+    },
   }
 }
 

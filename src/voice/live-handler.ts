@@ -1,8 +1,9 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 
 import type { AdkApp } from '../api/app'
-import type { ModelUsage } from '../types/events'
+import type { ModelCallSource } from '../core/model-calls'
 import type { StateSchema } from '../types/schema'
 import type { Session, SessionService, SessionStore } from '../types/session'
 import type { ThinkingSound } from './background-audio'
@@ -17,12 +18,14 @@ import type {
   LiveVoiceDelegation,
   LiveVoiceHandlerConfig,
   LiveVoiceHook,
+  UsageCost,
 } from './live-types'
 import type { VoiceDeps } from './livekit-types'
 import type { NoiseCancellationModule } from './noise-cancellation'
 import type { RecordingSession } from './recording'
 import type { VoiceHandlerHandle } from './types'
 
+import { installModelCallContext, observeModelCalls } from '../core/model-calls'
 import { summarizeModelUsage } from '../core/runner'
 import { safeErrorFields } from '../errors/safe-error'
 import {
@@ -41,7 +44,7 @@ import { LiveActivity } from './live-activity'
 import { liveHistory, completedBackendWork } from './live-history'
 import { createGPTLiveModel, renderLiveInstructions, requireGPTLive } from './live-model'
 import { seedLiveState, applyLiveState } from './live-state'
-import { backendModelCalls, LiveVoiceMeter } from './live-usage'
+import { LiveVoiceMeter, ModelCallLedger } from './live-usage'
 import { defaultVoiceDeps } from './livekit-types'
 import { loadNoiseCancellation, resolveNoiseCancellation } from './noise-cancellation'
 import { startRecordingSession } from './recording'
@@ -311,8 +314,8 @@ class LiveCall<S extends StateSchema, T> {
   private readonly seen = new Set<string>()
   private callSession: Session<S> | undefined
   private readonly meter: LiveVoiceMeter
-  /** Usage of every backend model call; `undefined` marks a call without reported usage. */
-  private readonly backendCalls: Array<ModelUsage | undefined> = []
+  /** The app's hooks, each run in the call's model call scope. */
+  private readonly hooks: readonly LiveVoiceHook<S, T>[]
   private readonly activity: LiveActivity
   /**
    * Lines the caller cannot interrupt, in order, each given after the one before it is said. An
@@ -375,16 +378,26 @@ class LiveCall<S extends StateSchema, T> {
   constructor(
     private readonly runtime: LiveRuntime<S, T>,
     private readonly job: LiveVoiceJob,
+    /** Every model call made in the call's async context, observed by `entry`. */
+    private readonly modelCalls: ModelCallLedger,
   ) {
     this.voiceSession = new runtime.agents.voice.AgentSession({
       llm: createGPTLiveModel(runtime.realtime, runtime.config.agent.model),
     })
     this.meter = new LiveVoiceMeter(runtime.config.agent.model.name, runtime.deps.clock)
+    this.hooks = runtime.hooks.map((hook) => inScope(hook, this.observingModelCalls))
     this.activity = new LiveActivity(runtime.deps.lineSettleMs)
     this.voiceSession.on(runtime.agents.voice.AgentSessionEventTypes.MetricsCollected, (event) =>
       this.meter.observeMetrics(event.metrics),
     )
   }
+
+  /**
+   * Runs `fn` so that the model calls it makes count toward the call. LiveKit and timers call the
+   * handler outside the async context `entry` started, so app code is entered through this.
+   */
+  private readonly observingModelCalls = <R>(fn: () => R): R =>
+    observeModelCalls(this.modelCalls.observe, fn)
 
   get session(): Session<S> {
     if (!this.callSession) throw new Error('Live call session is not ready')
@@ -531,7 +544,7 @@ class LiveCall<S extends StateSchema, T> {
         }
         let keep = false
         try {
-          for (const hook of this.runtime.hooks) {
+          for (const hook of this.hooks) {
             if (!hook[name]) continue
             try {
               // react-doctor-disable-next-line react-doctor/async-await-in-loop -- lifecycle hooks run in registration order, one at a time
@@ -610,7 +623,7 @@ class LiveCall<S extends StateSchema, T> {
       this.context = entered
       if (!this.agentActive) this.silence.agentWentIdle()
       this.queue = this.queue.then(async () => {
-        for (const hook of this.runtime.hooks) {
+        for (const hook of this.hooks) {
           // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onEnter hooks run in registration order, one at a time
           await hook.onEnter?.(entered)
         }
@@ -939,8 +952,7 @@ class LiveCall<S extends StateSchema, T> {
   private notify(activity: LiveVoiceActivity): Array<Promise<void>> {
     const pending: Array<Promise<void>> = []
     const context = this.context
-    if (!context || this.stopped || !this.runtime.hooks.some((hook) => hook.onVoiceActivity))
-      return pending
+    if (!context || this.stopped || !this.hooks.some((hook) => hook.onVoiceActivity)) return pending
     if (activity.type === 'run_started') this.sinceRun = []
     this.sinceRun.push(activity)
     const ctx = new LiveActivityContext(context, activity, this.sinceRun, this.runForApp)
@@ -957,7 +969,7 @@ class LiveCall<S extends StateSchema, T> {
   }
 
   private dispatchActivity(ctx: LiveActivityContext, pending: Array<Promise<void>>): void {
-    for (const hook of this.runtime.hooks) {
+    for (const hook of this.hooks) {
       if (!hook.onVoiceActivity) continue
       try {
         const result = hook.onVoiceActivity(ctx)
@@ -1061,7 +1073,7 @@ class LiveCall<S extends StateSchema, T> {
     await this.commit(session)
     if (this.stopped) return
     const workStart = session.events.length
-    const run = app.run(config.backend, { session, timeout, voice })
+    const run = this.observingModelCalls(() => app.run(config.backend, { session, timeout, voice }))
     this.activeRun = run
     this.replying = false
     this.syncThinkingSound()
@@ -1073,9 +1085,6 @@ class LiveCall<S extends StateSchema, T> {
       await run.settled
       this.activeRun = undefined
       this.answerDue = true
-      // Usage is final once close() abandons this work; it was recorded as unknown then.
-      if (!this.abandoned)
-        this.backendCalls.push(...backendModelCalls(session.events.slice(workStart)))
       await this.commit(session)
       // A call finalized without this work keeps its ledger closed.
       if (!this.abandoned) await this.transferBackendWork(delegation, snapshot, session, workStart)
@@ -1113,7 +1122,7 @@ class LiveCall<S extends StateSchema, T> {
     try {
       if ('error' in outcome) throw outcome.error
       try {
-        for (const hook of this.runtime.hooks) {
+        for (const hook of this.hooks) {
           // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onResult hooks run in registration order, one at a time
           await hook.onResult?.({
             ...liveContext(this, voice),
@@ -1275,9 +1284,6 @@ class LiveCall<S extends StateSchema, T> {
     const backendSettled = await settlesWithin(this.queue, this.runtime.timeout)
     if (!backendSettled) {
       this.abandoned = true
-      // A run still in flight has unknown model calls. A settled run's calls are already recorded,
-      // even when its transfer or result hook is what keeps the queue open.
-      if (this.activeRun) this.backendCalls.push(undefined)
       this.log({ callId: this.context?.callId }, 'Live backend work did not settle before close')
     }
     this.ledgerClosed = true
@@ -1361,7 +1367,7 @@ class LiveCall<S extends StateSchema, T> {
       const exit = Object.assign(liveContext({ ...context, session: ledger }, context.voice), {
         usage: this.usage(await loadPricing({ maxWaitMs: RESULT_PRICING_WAIT_MS })),
       })
-      for (const hook of this.runtime.hooks) {
+      for (const hook of this.hooks) {
         // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onExit hooks run in registration order, one at a time
         await hook.onExit?.(exit)
       }
@@ -1370,11 +1376,21 @@ class LiveCall<S extends StateSchema, T> {
     }
   }
 
+  /** Usage so far. A model call still running counts at its estimated input. */
   private usage(pricing: PricingCatalog | undefined): LiveCallUsage {
-    const usage = summarizeModelUsage(this.backendCalls, pricing)
-    const backend = { ...(usage && { usage }), cost: usageCost(usage) }
+    const part = (source: ModelCallSource): UsageCost => {
+      const usage = summarizeModelUsage(this.modelCalls.usage(source), pricing)
+      return { ...(usage && { usage }), cost: usageCost(usage) }
+    }
     const voice = this.meter.usage(pricing)
-    return { backend, voice, total: sumCosts([backend.cost, voice.cost]) }
+    const backend = part('run')
+    const decisions = part('decision')
+    return {
+      voice,
+      backend,
+      decisions,
+      total: sumCosts([voice.cost, backend.cost, decisions.cost]),
+    }
   }
 
   private async reportError(
@@ -1395,7 +1411,7 @@ class LiveCall<S extends StateSchema, T> {
     try {
       let handled = false
       let terminate = false
-      for (const hook of this.runtime.hooks) {
+      for (const hook of this.hooks) {
         // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onError hooks run in registration order and each decision is folded before the next hook
         const decision = await hook.onError?.({ ...errorContext, error, recoverable })
         handled ||= decision === 'continue'
@@ -1415,6 +1431,24 @@ class LiveCall<S extends StateSchema, T> {
   private log(data: Record<string, unknown>, message: string): void {
     this.runtime.agents.log().error(data, message)
   }
+}
+
+installModelCallContext(new AsyncLocalStorage())
+
+/**
+ * `hook` with each of its methods run through `scope`. Getters run on the hook itself, and a frozen
+ * method is returned as it is, as a proxy must, so it runs in the scope of the call's entry only.
+ */
+function inScope<H extends object>(hook: H, scope: <R>(fn: () => R) => R): H {
+  return new Proxy(hook, {
+    get(target, key) {
+      const value: unknown = Reflect.get(target, key)
+      const fixed = Object.getOwnPropertyDescriptor(target, key)
+      if (typeof value !== 'function' || (fixed && !fixed.configurable && !fixed.writable))
+        return value
+      return (...args: unknown[]) => scope(() => value.apply(target, args))
+    },
+  })
 }
 
 /** @internal Selected by app.handler.voice for openai.live models. */
@@ -1461,7 +1495,10 @@ export function createLiveVoiceHandler<S extends StateSchema, T>(
     async entry(rawCtx) {
       if (!isLiveVoiceJob(rawCtx))
         throw new Error('Live voice entry requires a LiveKit job context')
-      await new LiveCall(runtime, rawCtx).run()
+      const modelCalls = new ModelCallLedger()
+      await observeModelCalls(modelCalls.observe, () =>
+        new LiveCall(runtime, rawCtx, modelCalls).run(),
+      )
     },
   }
   agents.defineAgent(handler)

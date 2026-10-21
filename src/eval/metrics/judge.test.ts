@@ -732,6 +732,7 @@ describe('judge cost', () => {
         durationMs: 1,
         liveUsage: {
           backend: { cost: reported },
+          decisions: { cost: free },
           voice: { modelName: 'gpt-live-1', seconds: 0, cost: free },
           caller: { cost: free },
           total: reported,
@@ -742,7 +743,7 @@ describe('judge cost', () => {
     expect(
       generateReport({ summary: buildSummary([live]), durationMs: 1, results: [live] }),
     ).toContain(
-      '**Cost:** $0.3000 (reported) — backend $0.1500 (reported), voice $0.000000 (reported), caller $0.000000 (reported), judge $0.1500 (reported)',
+      '**Cost:** $0.3000 (reported) — backend $0.1500 (reported), decisions $0.000000 (reported), voice $0.000000 (reported), caller $0.000000 (reported), judge $0.1500 (reported)',
     )
   })
 })

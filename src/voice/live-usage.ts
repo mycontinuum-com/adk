@@ -1,4 +1,5 @@
-import type { Event, ModelUsage } from '../types/events'
+import type { ModelCallSource } from '../core/model-calls'
+import type { ModelEndEvent, ModelStartEvent, ModelUsage } from '../types/events'
 import type { LiveVoiceSessionUsage } from './live-types'
 
 import { calculateSessionCost, type PricingCatalog } from '../providers/pricing'
@@ -105,24 +106,52 @@ export class LiveVoiceMeter {
   }
 }
 
+interface LedgerCall {
+  readonly source: ModelCallSource
+  readonly start?: ModelStartEvent
+  end?: ModelEndEvent
+}
+
 /**
- * Usage of each model call in a backend run's events, in order. A call that started without a
- * recorded end, such as one cut off by `maxSteps` or cancellation, has unknown usage.
+ * The model calls made during a GPT Live call, by where they came from. A call that failed without
+ * reported usage, or has not ended when it is read, such as one cut off by cancellation or the call
+ * closing, counts at the input estimated when it started. A call that ended otherwise without usage
+ * stays unknown.
  */
-export function backendModelCalls(events: readonly Event[]): Array<ModelUsage | undefined> {
-  const calls: Array<ModelUsage | undefined> = []
-  const open = new Set<string>()
-  for (const event of events) {
+export class ModelCallLedger {
+  private readonly calls: LedgerCall[] = []
+  private readonly open = new Map<string, LedgerCall>()
+
+  /** A `ModelCallObserver` for `observeModelCalls`. */
+  readonly observe = (event: ModelStartEvent | ModelEndEvent, source: ModelCallSource): void => {
+    const key = `${source}:${event.invocationId}`
     if (event.type === 'model_start') {
-      if (open.has(event.invocationId)) calls.push(undefined)
-      open.add(event.invocationId)
-    } else if (event.type === 'model_end') {
-      open.delete(event.invocationId)
-      calls.push(event.usage)
+      const call = { source, start: event }
+      this.calls.push(call)
+      this.open.set(key, call)
+      return
     }
+    const call = this.open.get(key)
+    this.open.delete(key)
+    if (call) call.end = event
+    else this.calls.push({ source, end: event })
   }
-  calls.push(...Array.from(open, () => undefined))
-  return calls
+
+  /** Usage of each call from `source`, in start order; `undefined` when it cannot be estimated. */
+  usage(source: ModelCallSource): Array<ModelUsage | undefined> {
+    return this.calls
+      .filter((call) => call.source === source)
+      .map((call) =>
+        !call.end || (!call.end.usage && call.end.finishReason === 'error')
+          ? estimatedUsage(call.start)
+          : call.end.usage,
+      )
+  }
+}
+
+function estimatedUsage(start: ModelStartEvent | undefined): ModelUsage | undefined {
+  const input = start?.estimatedInput
+  return input && { ...input, outputTokens: 0, estimated: true }
 }
 
 /**

@@ -1,11 +1,12 @@
 import { realtime } from '@livekit/agents-plugin-openai'
 
-import { calculateCost, calculateSessionCost, sumCosts } from '../providers/pricing'
+import { summarizeModelUsage } from '../core/runner'
+import { calculateCost, calculateSessionCost, sumCosts, usageCost } from '../providers/pricing'
 import { TEST_PRICING } from '../test-support/pricing-registry'
 import {
-  backendModelCalls,
   isRealtimeMetrics,
   LiveVoiceMeter,
+  ModelCallLedger,
   realtimeTokenUsage,
 } from './live-usage'
 
@@ -162,8 +163,8 @@ describe('Live voice meter', () => {
   })
 })
 
-describe('backend model calls', () => {
-  const start = (invocationId: string) => ({
+describe('model call ledger', () => {
+  const start = (invocationId: string, estimatedTokens?: number) => ({
     id: `${invocationId}-start`,
     type: 'model_start' as const,
     createdAt: 0,
@@ -172,8 +173,15 @@ describe('backend model calls', () => {
     stepIndex: 1,
     messageCount: 0,
     tools: [],
+    ...(estimatedTokens !== undefined && {
+      estimatedInput: {
+        provider: 'openai' as const,
+        modelName: 'gpt-4o-mini',
+        inputTokens: estimatedTokens,
+      },
+    }),
   })
-  const end = (invocationId: string, inputTokens?: number) => ({
+  const end = (invocationId: string, inputTokens?: number, finishReason?: 'error') => ({
     id: `${invocationId}-end`,
     type: 'model_end' as const,
     createdAt: 0,
@@ -181,20 +189,51 @@ describe('backend model calls', () => {
     agentName: 'backend',
     stepIndex: 1,
     durationMs: 1,
+    finishReason,
     ...(inputTokens !== undefined && {
       usage: { modelName: 'gpt-4o-mini', inputTokens, outputTokens: 0 },
     }),
   })
+  const estimated = (inputTokens: number) => ({
+    provider: 'openai',
+    modelName: 'gpt-4o-mini',
+    inputTokens,
+    outputTokens: 0,
+    estimated: true,
+  })
 
-  test('a call that started without a recorded end has unknown usage', () => {
-    expect(
-      backendModelCalls([start('a'), end('a', 10), start('a'), end('a'), start('a'), start('b')]),
-    ).toEqual([
+  test('a failed or unfinished call counts at its estimated input, by source', () => {
+    const ledger = new ModelCallLedger()
+    ledger.observe(start('a', 5), 'run')
+    ledger.observe(start('d', 7), 'decision')
+    ledger.observe(end('a', 10), 'run')
+    ledger.observe(start('b', 20), 'run')
+    ledger.observe(end('b', undefined, 'error'), 'run')
+    ledger.observe(start('f', 40), 'run')
+    ledger.observe(end('f'), 'run')
+    ledger.observe(end('g', 50), 'run')
+    ledger.observe(start('c', 30), 'run')
+    ledger.observe(start('e'), 'run')
+    // f ended without failing and without usage, as a skipped step does: unknown, not estimated.
+    expect(ledger.usage('run')).toEqual([
       { modelName: 'gpt-4o-mini', inputTokens: 10, outputTokens: 0 },
+      estimated(20),
       undefined,
-      undefined,
+      { modelName: 'gpt-4o-mini', inputTokens: 50, outputTokens: 0 },
+      estimated(30),
       undefined,
     ])
+    expect(ledger.usage('decision')).toEqual([estimated(7)])
+  })
+
+  test('summarizes and prices estimated calls on an estimated basis', () => {
+    const ledger = new ModelCallLedger()
+    ledger.observe(start('a', 5), 'run')
+    ledger.observe(end('a', 1_000_000), 'run')
+    ledger.observe(start('b', 1_000_000), 'run')
+    const usage = summarizeModelUsage(ledger.usage('run'), TEST_PRICING)
+    expect(usage).toMatchObject({ modelCalls: 2, estimatedCalls: 1, totalInputTokens: 2_000_000 })
+    expect(usageCost(usage)).toEqual({ basis: 'estimated', totalCost: 0.3, currency: 'USD' })
   })
 })
 

@@ -394,6 +394,26 @@ describe('what the app hooks see of app.decide', () => {
     expect(JSON.stringify(seen)).not.toContain(questions.urgent.instructions)
   })
 
+  it('keeps the usage of a call whose answers do not match the questions', async () => {
+    const seen: StreamEvent[] = []
+    const usage = { inputTokens: 40, outputTokens: 2 }
+    const app = observedApp(
+      decidingAdapter(async () => ({ answers: {}, usage })),
+      seen,
+    )
+
+    await expect(app.decide(INPUT, { questions: urgentOnly })).rejects.toThrow()
+    expect(eventSummary(seen)).toEqual([
+      'model_start',
+      [
+        'model_end',
+        'decide',
+        { provider: 'openai', modelName: 'gpt-6-luna', ...usage },
+        expect.any(String),
+      ],
+    ])
+  })
+
   it('records a failed decision as a model call without usage', async () => {
     const seen: StreamEvent[] = []
     const failure = new Error('503 unavailable')
@@ -491,9 +511,15 @@ describe('aborting app.decide', () => {
 
     await expect(pending).rejects.toBe(reason)
     expect(calls).toBe(0)
+    // Nothing was sent, so the call spent nothing.
     expect(eventSummary(seen)).toEqual([
       'model_start',
-      ['model_end', 'decide', undefined, reason.message],
+      [
+        'model_end',
+        'decide',
+        { provider: 'openai', modelName: 'gpt-6-luna', inputTokens: 0, outputTokens: 0 },
+        reason.message,
+      ],
     ])
   })
 

@@ -353,8 +353,9 @@ export function calculateSessionCost(
 
 /**
  * Prices a token usage summary. No model calls cost nothing. Each model is priced from the pricing
- * registry or, failing that, from the charge its provider reported; a call without known usage or
- * any model without a charge makes the whole figure unavailable.
+ * registry or, failing that, from the charge its provider reported. The total is `estimated` when a
+ * call was cut off and counted at its estimated input; a call without known or estimated usage, or
+ * any model without a charge, makes it unavailable.
  */
 export function usageCost(usage: UsageSummary | undefined): CostAccount {
   if (!usage) return { basis: 'reported', totalCost: 0, currency: 'USD' }
@@ -367,7 +368,7 @@ export function usageCost(usage: UsageSummary | undefined): CostAccount {
     calls += model.calls
   }
   if (calls !== usage.modelCalls) return { basis: 'unavailable' }
-  return { basis: 'reported', totalCost, currency: 'USD' }
+  return { basis: usage.estimatedCalls ? 'estimated' : 'reported', totalCost, currency: 'USD' }
 }
 
 /** Adds costs. The result is only as strong as its weakest component. */

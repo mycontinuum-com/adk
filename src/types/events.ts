@@ -239,6 +239,11 @@ export interface ModelStartEvent extends EventBase {
   messageCount: number
   tools: ContextToolSummary[]
   outputSchema?: string
+  /**
+   * The model called and its input size, estimated from the request's characters. It prices a call
+   * cut off before it reported usage.
+   */
+  estimatedInput?: Pick<ModelUsage, 'provider' | 'modelName' | 'inputTokens'>
 }
 
 export interface ModelUsage {
@@ -259,6 +264,11 @@ export interface ModelUsage {
   audioOutputTokens?: number
   /** Cached audio input tokens — repeated context the provider doesn't reprocess. */
   audioCachedTokens?: number
+  /**
+   * Set when the call failed or was cut off before the provider reported usage: `inputTokens` is
+   * estimated from the request and the output is unknown.
+   */
+  estimated?: true
 }
 
 export interface ModelEndEvent extends EventBase {

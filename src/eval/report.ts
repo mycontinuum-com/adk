@@ -134,8 +134,9 @@ export interface SuiteCost {
   total: CostAccount
   /** Set when `total` is unavailable: the sum over the cases whose whole cost is known. */
   known?: { totalCost: number; caseCount: number }
-  /** GPT Live cases' backend, voice and simulated caller spend. */
+  /** GPT Live cases' backend, decisions, voice and simulated caller spend. */
   backend?: CostAccount
+  decisions?: CostAccount
   voice?: CostAccount
   caller?: CostAccount
   /** With GPT Live cases: the other cases' own spend. */
@@ -148,6 +149,7 @@ export interface SuiteCost {
 
 const COST_COMPONENTS = [
   ['backend', 'backend'],
+  ['decisions', 'decisions'],
   ['voice', 'voice'],
   ['caller', 'caller'],
   ['otherCases', 'other cases'],
@@ -178,6 +180,7 @@ export function suiteCost(results: readonly AnyEvalCaseResult[]): SuiteCost {
     ...(live.length
       ? {
           backend: sumCosts(live.map((usage) => usage.backend.cost)),
+          decisions: sumCosts(live.map((usage) => usage.decisions.cost)),
           voice: sumCosts(live.map((usage) => usage.voice.cost)),
           caller: sumCosts(live.map((usage) => usage.caller.cost)),
           ...(others.length > 0 && { otherCases: sumCosts(others.map(caseCost)) }),

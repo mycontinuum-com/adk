@@ -31,12 +31,26 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
-## [0.6.9] - 2026-10-19
+## [0.6.9] - 2026-10-21
+
+A GPT Live call's `ctx.usage` prices every model call made during the call, so a call that closes
+with a model call in flight has an estimated cost rather than none. A hook can replace a stalled
+GPT Live connection and keep the call.
 
 ### Added
 
 - `LiveVoiceControls.reconnect()` — replaces a started GPT Live connection and keeps the call: the connection closes within 5 s and a new one starts with the call's instructions and conversation; lines and caller audio not yet sent go to the new connection. Returns `true` when the replacement has begun, `false` while the connection has not started, a replacement is under way, or the call has ended. Logs `connection_replaced` with `replacedAfterMs` once the new connection has started. See [GPT Live](docs/gpt-live.md#failure-and-shutdown).
 - `VoiceEvalControl.playUserAudio({ text, frames })` — plays recorded caller PCM through the simulated caller in a voice eval and resolves when the SDK marks the speech complete; `@animahealth/adk/eval` exports the `VoiceEvalUserAudio` type. See [testing](docs/guide/references/hooks-errors-testing.md).
+- `LiveCallUsage.decisions` — `app.decide()` calls made during a GPT Live call, from hooks, backend tools or work they start, costed apart from `backend`.
+- `ModelStartEvent.estimatedInput` — the model called and its input tokens, estimated from the request at about four characters a token.
+- `ModelUsage.estimated` and `UsageSummary.estimatedCalls` — a call that failed or was cut off before it reported usage, counted at its estimated input with no output.
+- Live eval usage, `SuiteCost` and case reports show `decisions` beside `backend`, `voice` and `caller`.
+
+### Changed
+
+- `LiveCallUsage.backend` counts every model call of runs made during the call, `app.ask()` included, not only those in backend runs' session events.
+- In a GPT Live call, a model call that failed without usage, or was cut off when the call closed, prices at its estimated input; `usageCost` and `LiveCallUsage.total` report it as `estimated` instead of `unavailable`.
+- `app.decide()` reports zero usage when it fails before sending the request (no decisions endpoint, or a signal already aborted), and keeps the provider's usage when the answers do not match the questions.
 
 ### Internal
 
