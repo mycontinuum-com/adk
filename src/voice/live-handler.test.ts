@@ -983,7 +983,7 @@ describe('Live voice handler', () => {
       new Promise((resolve) => setTimeout(() => resolve(false), 1_000)),
     ])
     expect(settled).toBe(true)
-    expect(f.logError).toHaveBeenCalledWith(expect.anything(), 'Live line_lost_to_moderation')
+    expect(f.logError).toHaveBeenCalledWith(expect.anything(), 'Live line_lost_with_connection')
     await vi.waitFor(() => expect(f.error).toHaveBeenCalledTimes(1))
     await call.shutdown()
   })
@@ -1159,6 +1159,11 @@ function given(live: LiveSession, text: string) {
   return live.sent.filter((entry) => entry.kind === 'commentary' && entry.text === text)
 }
 
+/** The `connection_replaced` entries among the logger's error calls. */
+function replacedLogs(logError: { mock: { calls: Array<[unknown, string]> } }) {
+  return logError.mock.calls.filter(([, message]) => message === 'Live connection_replaced')
+}
+
 const speaking = (session: EventEmitter) =>
   session.emit('agent_state_changed', { oldState: 'listening', newState: 'speaking' })
 const listening = (session: EventEmitter) =>
@@ -1240,6 +1245,114 @@ test('untilQuiet resolves at once when no uninterrupted line is waiting', async 
   const call = await f.call()
   f.entered[0]!.voice.appendCommentary('How can I help?')
   await f.entered[0]!.voice.untilQuiet()
+  await call.shutdown()
+})
+
+test('reconnect replaces a started GPT Live connection once at a time, and logs the replacement when it starts', async () => {
+  const f = await fixture()
+  const call = await f.call()
+  const close = vi.fn<() => void>()
+  Reflect.set(call.live, 'requestConnectionClose', close)
+  const voice = f.entered[0]!.voice
+  expect(voice.reconnect()).toBe(true)
+  // A second request while the first is under way closes nothing more.
+  expect(voice.reconnect()).toBe(false)
+  expect(close).toHaveBeenCalledOnce()
+  expect(replacedLogs(f.logError)).toEqual([])
+  call.live.sessionId = 'connection-two'
+  call.live.emit('session_reconnected', {})
+  expect(replacedLogs(f.logError)).toEqual([
+    [
+      expect.objectContaining({
+        from: 'connection-one',
+        to: 'connection-two',
+        replacedAfterMs: expect.any(Number),
+      }),
+      'Live connection_replaced',
+    ],
+  ])
+  // A connection that has not started, or no connection at all, is left alone.
+  call.live.sessionId = undefined
+  expect(voice.reconnect()).toBe(false)
+  call.live.sessionId = 'connection-two'
+  Reflect.set(call.live, 'requestConnectionClose', undefined)
+  expect(voice.reconnect()).toBe(false)
+  Reflect.set(call.live, 'requestConnectionClose', close)
+  await call.shutdown()
+  expect(voice.reconnect()).toBe(false)
+  expect(close).toHaveBeenCalledOnce()
+})
+
+test('a line the caller cannot talk over, lost to a hook replacing the connection, settles at the replacement', async () => {
+  const f = await fixture({ playoutTimeoutMs: 10_000 })
+  const call = await f.call()
+  Reflect.set(call.live, 'requestConnectionClose', vi.fn<() => void>())
+  const voice = f.entered[0]!.voice
+  voice.appendCommentary('Handoff notice', { allowInterruptions: false })
+  const quiet = voice.untilQuiet()
+  await vi.waitFor(() => expect(given(call.live, 'Handoff notice')).toHaveLength(1))
+  voice.appendCommentary('Back again', { allowInterruptions: false })
+  expect(given(call.live, 'Back again')).toEqual([])
+  expect(voice.reconnect()).toBe(true)
+  call.live.sessionId = 'connection-two'
+  call.live.emit('session_reconnected', {})
+  const settled = await Promise.race([
+    quiet.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 1_000)),
+  ])
+  expect(settled).toBe(true)
+  expect(f.logError).toHaveBeenCalledWith(expect.anything(), 'Live line_lost_with_connection')
+  // A line not yet given when the replacement starts is kept for it.
+  await vi.waitFor(() => expect(given(call.live, 'Back again')).toHaveLength(1))
+  expect(
+    f.logError.mock.calls.filter(([, message]) => message === 'Live line_lost_with_connection'),
+  ).toHaveLength(1)
+  await call.shutdown()
+})
+
+test('a line given while a hook replaces the connection is still awaited after the replacement starts', async () => {
+  const f = await fixture({ playoutTimeoutMs: 10_000 })
+  const call = await f.call()
+  Reflect.set(call.live, 'requestConnectionClose', vi.fn<() => void>())
+  const voice = f.entered[0]!.voice
+  expect(voice.reconnect()).toBe(true)
+  voice.appendCommentary('Putting you through.', { allowInterruptions: false })
+  await vi.waitFor(() => expect(given(call.live, 'Putting you through.')).toHaveLength(1))
+  let quiet = false
+  void voice.untilQuiet().then(() => (quiet = true))
+  call.live.sessionId = 'connection-two'
+  call.live.emit('session_reconnected', {})
+  await sleep(100)
+  expect(quiet).toBe(false)
+  expect(call.live.input).toEqual(['mute'])
+  call.live.speak(call.session)
+  await vi.waitFor(() => expect(quiet).toBe(true))
+  expect(call.live.input).toEqual(['mute', 'unmute'])
+  expect(f.logError).not.toHaveBeenCalledWith(expect.anything(), 'Live line_lost_with_connection')
+  await call.shutdown()
+})
+
+test('speech from the closing connection does not count as a line given while a hook replaces it', async () => {
+  const f = await fixture({ playoutTimeoutMs: 10_000 })
+  const call = await f.call()
+  Reflect.set(call.live, 'requestConnectionClose', vi.fn<() => void>())
+  const voice = f.entered[0]!.voice
+  expect(voice.reconnect()).toBe(true)
+  voice.appendCommentary('Putting you through.', { allowInterruptions: false })
+  await vi.waitFor(() => expect(given(call.live, 'Putting you through.')).toHaveLength(1))
+  let quiet = false
+  void voice.untilQuiet().then(() => (quiet = true))
+  // The old connection plays out audio it had already started while it closes.
+  call.live.speak(call.session)
+  await sleep(100)
+  expect(quiet).toBe(false)
+  call.live.sessionId = 'connection-two'
+  call.live.emit('session_reconnected', {})
+  await sleep(100)
+  expect(quiet).toBe(false)
+  call.live.speak(call.session)
+  await vi.waitFor(() => expect(quiet).toBe(true))
+  expect(f.logError).not.toHaveBeenCalledWith(expect.anything(), 'Live line_lost_with_connection')
   await call.shutdown()
 })
 

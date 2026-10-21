@@ -31,6 +31,21 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## [0.6.9] - 2026-10-19
+
+### Added
+
+- `LiveVoiceControls.reconnect()` — replaces a started GPT Live connection and keeps the call: the connection closes within 5 s and a new one starts with the call's instructions and conversation; lines and caller audio not yet sent go to the new connection. Returns `true` when the replacement has begun, `false` while the connection has not started, a replacement is under way, or the call has ended. Logs `connection_replaced` with `replacedAfterMs` once the new connection has started. See [GPT Live](docs/gpt-live.md#failure-and-shutdown).
+- `VoiceEvalControl.playUserAudio({ text, frames })` — plays recorded caller PCM through the simulated caller in a voice eval and resolves when the SDK marks the speech complete; `@animahealth/adk/eval` exports the `VoiceEvalUserAudio` type. See [testing](docs/guide/references/hooks-errors-testing.md).
+
+### Internal
+
+- `@types/ws` is a declared dev dependency, so filtered installs pass the packed-types check.
+
+### Migration from 0.6.8
+
+An object you build as `LiveVoiceControls` or `VoiceEvalControl`, such as a test double, needs the new `reconnect` or `playUserAudio` member.
+
 ## [0.6.8] - 2026-10-14
 
 ### Added

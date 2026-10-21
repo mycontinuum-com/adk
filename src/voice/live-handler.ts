@@ -159,6 +159,18 @@ function forgetConversation(live: GPTLiveSession): void {
   live.appendInstructions(RESTARTED_AFTER_MODERATION, {})
 }
 
+/**
+ * Closes the current GPT Live connection the way the LiveKit plugin's `maxSessionDuration` recycle
+ * does, and its connection loop starts the replacement. The close is private to the plugin and
+ * unset between connections; false when there was none to close.
+ */
+function replaceConnection(live: GPTLiveSession): boolean {
+  const close: unknown = Reflect.get(live, 'requestConnectionClose')
+  if (typeof close !== 'function') return false
+  close()
+  return true
+}
+
 const defaultDeps: LiveDeps = {
   agents: () => require('@livekit/agents'),
   openai: () => require('@livekit/agents-plugin-openai'),
@@ -286,8 +298,12 @@ class LiveCall<S extends StateSchema, T> {
   /** Call audio (local file or LiveKit egress), when `recording` is configured. */
   private audioRecording: RecordingSession | undefined
   private activeRun: { abort(): void } | undefined
-  /** Connections GPT Live's moderation closed; a line pending at one is dropped. */
+  /** Connections GPT Live's moderation closed; a line not yet given at one is dropped. */
   private moderationStops = 0
+  /** Connections closed by moderation or a hook's `reconnect()`; a line given to one is lost. */
+  private lostConnections = 0
+  /** A hook's `reconnect()` awaiting its replacement connection: the connection it closed and when. */
+  private replacing: { from: string; at: number } | undefined
   /** The latest backend run, kept so a reconnect's repeat of its caller turn gets its outcome. */
   private lastRun: SettledRun<S, T> | undefined
   private queue = Promise.resolve()
@@ -564,11 +580,27 @@ class LiveCall<S extends StateSchema, T> {
         forgetConversation(live)
       })
       live.on('session_reconnected', () => {
+        const replacing = this.replacing
+        this.replacing = undefined
+        if (replacing)
+          this.log(
+            {
+              callId: this.context?.callId,
+              from: replacing.from,
+              to: live.sessionId ?? null,
+              replacedAfterMs: Date.now() - replacing.at,
+            },
+            'Live connection_replaced',
+          )
+        // Lines given to the closed connection were lost with it, whether moderation or a hook
+        // closed it: the waits on them end, so the caller is heard again.
+        if (replacing || contentFiltered) {
+          this.lostConnections++
+          this.activity.giveUp()
+        }
         if (!contentFiltered) return
         contentFiltered = false
-        // Lines given to the closed connection were lost with it.
         this.moderationStops++
-        this.activity.giveUp()
         const context = liveContext(this, this.controls(live))
         this.queue = this.queue.then(async () => {
           if (!this.stopped) await this.reportError(new LiveContentFilterError(), context)
@@ -703,6 +735,13 @@ class LiveCall<S extends StateSchema, T> {
         if (usable()) this.requestEnd()
       },
       untilQuiet: () => this.uninterrupted ?? Promise.resolve(),
+      reconnect: () => {
+        // A connection that has not started yet would only start again from the beginning.
+        const from = live.sessionId
+        if (!usable() || !from || this.replacing || !replaceConnection(live)) return false
+        this.replacing = { from, at: Date.now() }
+        return true
+      },
       appendThinking: (text) => {
         if (usable()) live.appendThinking(text, { delegationId })
       },
@@ -741,6 +780,30 @@ class LiveCall<S extends StateSchema, T> {
     })
   }
 
+  /** Waits, within the playout timeout, for GPT Live to finish a speaking turn after `turns`. */
+  private whenAgentSpokeSince(turns: number): Promise<boolean> {
+    return this.activity.whenQuietAnd(
+      () => this.activity.agentTurns > turns,
+      this.runtime.playoutTimeout,
+    )
+  }
+
+  /**
+   * The agent's speech turns once the replacement that is the call's `connection`th lost connection
+   * has started, waiting within the playout timeout; undefined when it has not started by then.
+   */
+  private async agentTurnsOnceReplaced(connection: number): Promise<number | undefined> {
+    await this.activity.whenQuietAnd(
+      () => this.lostConnections >= connection,
+      this.runtime.playoutTimeout,
+    )
+    return this.lostConnections >= connection ? this.activity.agentTurns : undefined
+  }
+
+  private logLineLost(): void {
+    this.log({ callId: this.context?.callId }, 'Live line_lost_with_connection')
+  }
+
   /** Gives one uninterruptible line after `previous`, once quiet, and waits for it to be said. */
   private async giveUninterrupted(
     live: GPTLiveSession,
@@ -750,22 +813,20 @@ class LiveCall<S extends StateSchema, T> {
   ): Promise<void> {
     const { playoutTimeout } = this.runtime
     const stops = this.moderationStops
-    const lost = () => {
-      if (this.moderationStops === stops) return false
-      this.log({ callId: this.context?.callId }, 'Live line_lost_to_moderation')
-      return true
-    }
     await previous
     const quiet = await this.activity.whenQuietAnd(() => true, playoutTimeout)
-    if (lost()) return
+    // A line not yet given survives a hook's replacement, which the new connection takes it for.
+    if (this.moderationStops !== stops) return this.logLineLost()
     if (!quiet) this.log({ callId: this.context?.callId }, 'Live line_given_while_busy')
     const turns = this.activity.agentTurns
+    const before = this.lostConnections
+    // While a hook's replacement is under way the plugin holds the line for the new connection.
+    const connection = before + (this.replacing ? 1 : 0)
     live.appendCommentary(text, { delegationId })
-    const said = await this.activity.whenQuietAnd(
-      () => this.activity.agentTurns > turns,
-      playoutTimeout,
-    )
-    if (lost()) return
+    // The closing connection's speech is not that line: count only the new connection's.
+    const from = connection === before ? turns : await this.agentTurnsOnceReplaced(connection)
+    const said = from !== undefined && (await this.whenAgentSpokeSince(from))
+    if (this.lostConnections > connection) return this.logLineLost()
     if (!said) this.log({ callId: this.context?.callId }, 'Live line_unconfirmed')
   }
 

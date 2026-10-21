@@ -306,6 +306,14 @@ Voice case fields: `name`, `agent`, `userAgent`, `toolMocks`, `metrics`, `retrie
 
 Voice suite options: `room`, `output`, `metrics`, `hooks`, `concurrency`, `repeat`, `stopOnFirstFailure`, and `onCase`.
 
+`app.evaluate.voice.case((control) => ...)` calls the factory once, when the case is made, not once
+per run: every run of the case, `--repeat` runs included, shares its closure. Keep state a run needs
+in a map keyed by the run's session id (`ctx.session.id` in a hook, `run.session.id` in a metric),
+or reset it in `onEnter`. A GPT Live handler shares the entry's `voice` controls with `onEnter`,
+`onVoiceActivity`, `onInactivity`, `onExpiry`, and `onExit`, so a hook that wraps those controls
+wraps them once. Delegation result and error hooks receive separate controls, so wrapping the
+entry's controls does not wrap those hooks.
+
 A case factory receives `control.playUserAudio({ text, frames })` to play a recorded synthetic
 caller utterance through that caller's existing LiveKit participant. `frames` is a nonempty array
 of decoded PCM frames (`data`, `sampleRate`, `channels`, `samplesPerChannel`); LiveKit `AudioFrame`

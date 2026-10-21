@@ -14,6 +14,10 @@ function controls(messages: string[]): LiveVoiceControls {
     appendCommentary: (text) => messages.push(`commentary:${text}`),
     appendInstructions: (text) => messages.push(`instructions:${text}`),
     untilQuiet: async () => {},
+    reconnect: () => {
+      messages.push('reconnect')
+      return true
+    },
     turnCount: 0,
   }
 }

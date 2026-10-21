@@ -32,6 +32,15 @@ export interface LiveVoiceControls {
    * heard the line.
    */
   untilQuiet(): Promise<void>
+  /**
+   * Replace GPT Live's connection and keep the call: the caller stays on the line while the
+   * connection closes, within 5 s, and a new one starts with the call's instructions and
+   * conversation. Lines and caller audio not yet sent wait for the new connection and go to it; a
+   * line the old connection was given and had not said is lost with it, as is any delegation it
+   * started. True when the replacement has begun; false, doing nothing, while the connection has
+   * not started, while a replacement is under way, or once the call has ended.
+   */
+  reconnect(): boolean
   /** Caller speech turns so far in the call. */
   readonly turnCount: number
 }
