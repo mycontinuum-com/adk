@@ -212,6 +212,16 @@ async function settlesWithin(work: Promise<unknown>, ms: number): Promise<boolea
 }
 
 /** LiveKit passes its job context untyped; check the members the handler uses. */
+/** The usage and cost of the model calls one source made during the call. */
+function sourceUsageCost(
+  calls: ModelCallLedger,
+  source: ModelCallSource,
+  pricing: PricingCatalog | undefined,
+): UsageCost {
+  const usage = summarizeModelUsage(calls.usage(source), pricing)
+  return { ...(usage && { usage }), cost: usageCost(usage) }
+}
+
 function isLiveVoiceJob(value: unknown): value is LiveVoiceJob {
   return (
     typeof value === 'object' &&
@@ -1378,13 +1388,9 @@ class LiveCall<S extends StateSchema, T> {
 
   /** Usage so far. A model call still running counts at its estimated input. */
   private usage(pricing: PricingCatalog | undefined): LiveCallUsage {
-    const part = (source: ModelCallSource): UsageCost => {
-      const usage = summarizeModelUsage(this.modelCalls.usage(source), pricing)
-      return { ...(usage && { usage }), cost: usageCost(usage) }
-    }
     const voice = this.meter.usage(pricing)
-    const backend = part('run')
-    const decisions = part('decision')
+    const backend = sourceUsageCost(this.modelCalls, 'run', pricing)
+    const decisions = sourceUsageCost(this.modelCalls, 'decision', pricing)
     return {
       voice,
       backend,

@@ -17,6 +17,7 @@ import type { AnyZodSchema } from '../types/zod'
 
 import { partitionTools, expandMCPTools, signalOutput, isOutputSignal } from '../core/tools'
 import { getInnerModel } from '../providers/models'
+import { zodToToolSchema } from '../providers/zodToJsonSchema'
 import { createEventId } from '../session'
 import { isSupportedZodSchema, schemaKind } from '../types/zod'
 import { createStateAccessor } from './state'
@@ -106,7 +107,14 @@ export function createStartEvent(
     messageCount++
     characters += message.content.length
   }
-  for (const tool of ctx.functionTools) characters += tool.name.length + tool.description.length
+  for (const tool of ctx.functionTools) {
+    characters += JSON.stringify(zodToToolSchema(tool.name, tool.description, tool.schema)).length
+  }
+  if (ctx.outputSchema && ctx.outputMode === 'native') {
+    characters += JSON.stringify(
+      zodToToolSchema(getOutputSchemaName(ctx) ?? 'output', '', ctx.outputSchema),
+    ).length
+  }
   const model = ctx.agent.kind === 'agent' ? getInnerModel(ctx.agent.model) : ctx.agent.model
 
   return {

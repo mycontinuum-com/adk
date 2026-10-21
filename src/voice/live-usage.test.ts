@@ -232,7 +232,45 @@ describe('model call ledger', () => {
     ledger.observe(end('a', 1_000_000), 'run')
     ledger.observe(start('b', 1_000_000), 'run')
     const usage = summarizeModelUsage(ledger.usage('run'), TEST_PRICING)
-    expect(usage).toMatchObject({ modelCalls: 2, estimatedCalls: 1, totalInputTokens: 2_000_000 })
+    expect(usage).toEqual({
+      cost: { currency: 'USD', inputCost: 0.3, outputCost: 0, totalCost: 0.3 },
+      estimatedCalls: 1,
+      modelCalls: 2,
+      models: [
+        {
+          audioInputTokens: 0,
+          audioOutputTokens: 0,
+          cacheWriteTokens: 0,
+          cachedTokens: 0,
+          calls: 1,
+          cost: { currency: 'USD', inputCost: 0.15, outputCost: 0, totalCost: 0.15 },
+          inputTokens: 1_000_000,
+          modelName: 'gpt-4o-mini',
+          outputTokens: 0,
+          reasoningTokens: 0,
+        },
+        {
+          audioInputTokens: 0,
+          audioOutputTokens: 0,
+          cacheWriteTokens: 0,
+          cachedTokens: 0,
+          calls: 1,
+          cost: { currency: 'USD', inputCost: 0.15, outputCost: 0, totalCost: 0.15 },
+          inputTokens: 1_000_000,
+          modelName: 'gpt-4o-mini',
+          outputTokens: 0,
+          provider: 'openai',
+          reasoningTokens: 0,
+        },
+      ],
+      totalAudioInputTokens: 0,
+      totalAudioOutputTokens: 0,
+      totalCacheWriteTokens: 0,
+      totalCachedTokens: 0,
+      totalInputTokens: 2_000_000,
+      totalOutputTokens: 0,
+      totalReasoningTokens: 0,
+    })
     expect(usageCost(usage)).toEqual({ basis: 'estimated', totalCost: 0.3, currency: 'USD' })
   })
 })

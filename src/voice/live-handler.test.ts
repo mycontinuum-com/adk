@@ -2556,13 +2556,50 @@ describe('Live call usage', () => {
     f.entered[0]!.voice.end()
     await vi.waitFor(() => expect(f.exited).toHaveBeenCalledTimes(1), { timeout: 500 })
     const { backend, total } = f.exited.mock.calls[0]![0].usage
-    expect(backend.usage).toMatchObject({ modelCalls: 2, estimatedCalls: 1 })
-    expect(backend.cost).toMatchObject({ basis: 'estimated', currency: 'USD' })
-    // The reported call's $0.15, plus a few estimated input tokens at $0.15 a million.
-    const cost = backend.cost.basis === 'estimated' ? backend.cost.totalCost : 0
-    expect(cost).toBeGreaterThan(0.15)
-    expect(cost).toBeLessThan(0.1501)
-    expect(total.basis).toBe('estimated')
+    // The reported call's 1,000,000 input tokens at $0.15 a million, plus the cut-off call's
+    // estimated input.
+    const cost = {
+      currency: 'USD',
+      inputCost: expect.closeTo(0.1500318, 7),
+      outputCost: 0,
+      totalCost: expect.closeTo(0.1500318, 7),
+    }
+    expect(backend).toEqual({
+      cost: { basis: 'estimated', currency: 'USD', totalCost: expect.closeTo(0.1500318, 7) },
+      usage: {
+        cost,
+        estimatedCalls: 1,
+        modelCalls: 2,
+        models: [
+          {
+            audioInputTokens: 0,
+            audioOutputTokens: 0,
+            cacheWriteTokens: 0,
+            cachedTokens: 0,
+            calls: 2,
+            cost,
+            inputTokens: 1000212,
+            modelName: 'gpt-4o-mini',
+            outputTokens: 0,
+            provider: 'openai',
+            reasoningTokens: 0,
+          },
+        ],
+        totalAudioInputTokens: 0,
+        totalAudioOutputTokens: 0,
+        totalCacheWriteTokens: 0,
+        totalCachedTokens: 0,
+        totalInputTokens: 1000212,
+        totalOutputTokens: 0,
+        totalReasoningTokens: 0,
+      },
+    })
+    // The total adds the voice seconds, which depend on the call's duration.
+    expect(total).toEqual({
+      basis: 'estimated',
+      currency: 'USD',
+      totalCost: expect.any(Number),
+    })
   })
 
   test('a class hook with a private-field getter, and a frozen hook, still run', async () => {

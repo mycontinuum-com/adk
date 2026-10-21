@@ -14,6 +14,7 @@ import type {
   AssistantEvent,
 } from '../types/events'
 import type {
+  ProviderModelConfig,
   Runnable,
   Agent,
   ModelAdapter,
@@ -63,7 +64,7 @@ import { ADAPTER, REALTIME_ADAPTER, getSymbol } from './adapter-symbol'
 import { createEventId } from './constants'
 import { assertAnswersMatch } from './decisions'
 import { createInvocationId } from './invocation'
-import { modelCallObservers } from './model-calls'
+import { modelCallObservers, type ModelCallObserver } from './model-calls'
 
 /** Prevents executing against a session started with a different agent configuration. */
 function validatePipelineFingerprint(session: Session, currentFingerprint: string): void {
@@ -418,6 +419,30 @@ export function resolveRunResult(
   }
 }
 
+/** Reports a `decide()` call's model event to the call observers and the hooks' `onEvent`. */
+function notifyDecision(
+  observers: readonly ModelCallObserver[],
+  onEvent: ((event: StreamEvent) => void) | undefined,
+  event: ModelStartEvent | ModelEndEvent,
+): void {
+  for (const observe of observers) observe(event, 'decision')
+  onEvent?.(event)
+}
+
+/** Fills a usage report's provider and model from the model the call was made to. */
+function withModelIdentity(
+  usage: ModelUsage | undefined,
+  config: Pick<ProviderModelConfig, 'provider' | 'name'>,
+): ModelUsage | undefined {
+  return (
+    usage && {
+      ...usage,
+      provider: usage.provider ?? config.provider,
+      modelName: usage.modelName ?? config.name,
+    }
+  )
+}
+
 function isHandoffStart(event: StreamEvent): event is InvocationStartEvent {
   return (
     event.type === 'invocation_start' &&
@@ -528,13 +553,9 @@ export class BaseRunner implements Runner {
     const adapter = await this.getAdapter(model)
     const config = getInnerModel(model)
     const onEvent = composeHooks(this.hooks).onEvent
-    const notify = (event: ModelStartEvent | ModelEndEvent) => {
-      for (const observe of observers) observe(event, 'decision')
-      onEvent?.(event)
-    }
     const call = { invocationId: createInvocationId(), agentName: 'decide', stepIndex: 1 }
     const startedAt = Date.now()
-    notify({
+    notifyDecision(observers, onEvent, {
       id: createEventId(),
       type: 'model_start',
       createdAt: startedAt,
@@ -548,25 +569,24 @@ export class BaseRunner implements Runner {
       },
     })
 
-    const usageOf = (usage: ModelUsage | undefined) =>
-      usage && {
-        ...usage,
-        provider: usage.provider ?? config.provider,
-        modelName: usage.modelName ?? config.name,
-      }
     // Failing before the request was sent spends nothing; once sent, the provider's usage is kept.
-    let spent: ModelUsage | undefined = usageOf({ inputTokens: 0, outputTokens: 0 })
+    let spent: ModelUsage | undefined = withModelIdentity(
+      { inputTokens: 0, outputTokens: 0 },
+      config,
+    )
     let served: DecisionResponse
     try {
       if (!adapter.decide) throw new DecisionsUnavailableError(config)
       signal?.throwIfAborted()
       spent = undefined
       served = await adapter.decide(request, config, signal)
-      spent = usageOf(served.usage)
+      spent = withModelIdentity(served.usage, config)
       signal?.throwIfAborted()
       assertAnswersMatch(request.questions, served.answers)
     } catch (error) {
-      notify(
+      notifyDecision(
+        observers,
+        onEvent,
         createEndEvent({
           ...call,
           durationMs: Date.now() - startedAt,
@@ -577,7 +597,9 @@ export class BaseRunner implements Runner {
       )
       throw error
     }
-    notify(
+    notifyDecision(
+      observers,
+      onEvent,
       createEndEvent({
         ...call,
         durationMs: Date.now() - startedAt,

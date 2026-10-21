@@ -1,8 +1,11 @@
+import { z } from 'zod'
+
 import type { Event, RenderContext, Agent } from '../types'
 
 import { agent } from '../agents'
 import { openai } from '../providers'
 import { BaseSession } from '../session'
+import { createStartEvent } from './build'
 import {
   injectSystemMessage,
   includeHistory,
@@ -948,5 +951,46 @@ describe('transformUserMessages', () => {
 
     expect(userEvents[0]).toMatchObject({ text: '[wrapped] First' })
     expect(userEvents[1]).toMatchObject({ text: 'Second' })
+  })
+})
+
+describe('createStartEvent estimate', () => {
+  const session = new BaseSession('app', { id: 'test' })
+  const context = (schema: z.ZodType, outputSchema?: z.ZodType): RenderContext => ({
+    session,
+    agent: agent({ name: 'test', model: openai('gpt-4o-mini'), context: [] }),
+    invocationId: TEST_INV_ID,
+    agentName: 'test',
+    events: [],
+    functionTools: [{ name: 'lookup', description: 'Look a record up.', schema }],
+    providerTools: [],
+    state: createStateAccessor(session, TEST_INV_ID),
+    ...(outputSchema && { outputSchema, outputMode: 'native' as const }),
+  })
+  const estimate = (ctx: RenderContext) =>
+    createStartEvent(ctx, 1, TEST_INV_ID).estimatedInput?.inputTokens
+
+  test('counts a tool parameter schema, which the provider receives with the request', () => {
+    const small = estimate(context(z.object({ id: z.string() })))
+    const large = estimate(
+      context(
+        z.object({
+          id: z.string().describe('The record id, as printed on the appointment card.'),
+          practice: z.string().describe('The practice the record belongs to, by its full name.'),
+          date: z.string().describe('The date of the appointment, as day, month and year.'),
+        }),
+      ),
+    )
+    expect(small).toBeGreaterThan(Math.ceil('lookupLook a record up.'.length / 4))
+    expect(large).toBeGreaterThan(small!)
+  })
+
+  test('counts a native output schema', () => {
+    const tools = z.object({ id: z.string() })
+    const without = estimate(context(tools))
+    const withOutput = estimate(
+      context(tools, z.object({ answer: z.string().describe('What to tell the caller.') })),
+    )
+    expect(withOutput).toBeGreaterThan(without!)
   })
 })

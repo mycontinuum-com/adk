@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { expect, test } from 'vitest'
 import { z } from 'zod'
 
+import type { ModelStartEvent } from '../types/events'
 import type { ModelCallSource } from './model-calls'
 
 import { adk } from '../api/app'
@@ -82,15 +83,14 @@ test('records each call once when the scope is entered again, and nothing outsid
 
 test('a decision records the model it asked and an estimate of its input', async () => {
   const { app } = fixture()
-  const starts: unknown[] = []
+  const starts: NonNullable<ModelStartEvent['estimatedInput']>[] = []
   await observeModelCalls(
     (event) => {
-      if (event.type === 'model_start') starts.push(event.estimatedInput)
+      if (event.type === 'model_start' && event.estimatedInput) starts.push(event.estimatedInput)
     },
     () => app.decide('x'.repeat(400), { questions }),
   )
-  expect(starts).toEqual([
-    { provider: 'openai', modelName: 'gpt-4o-mini', inputTokens: expect.any(Number) },
-  ])
-  expect((starts[0] as { inputTokens: number }).inputTokens).toBeGreaterThanOrEqual(100)
+  expect(starts).toHaveLength(1)
+  expect(starts[0]).toMatchObject({ provider: 'openai', modelName: 'gpt-4o-mini' })
+  expect(starts[0]!.inputTokens).toBeGreaterThanOrEqual(100)
 })

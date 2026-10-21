@@ -31,6 +31,12 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## [0.6.10] - Unreleased
+
+### Changed
+
+- A model call that fails or is cut off before it reports usage is estimated from its tool parameter schemas and native output schema as well as its messages, tool names and descriptions, so a schema-heavy call is no longer priced low.
+
 ## [0.6.9] - 2026-10-21
 
 A GPT Live call's `ctx.usage` prices every model call made during the call, so a call that closes
