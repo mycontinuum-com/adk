@@ -44,6 +44,10 @@ interface PgPool {
   ): Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>
   end(): Promise<void>
   on(event: 'error', listener: (err: Error) => void): void
+  on(
+    event: 'connect',
+    listener: (client: { on(event: 'error', listener: (err: Error) => void): void }) => void,
+  ): void
 }
 
 /**
@@ -84,12 +88,20 @@ export class PostgresArtifactService implements ArtifactService {
       }
       this.pool = new Pool({ connectionString: this.config.connectionString! })
       this.ownsPool = true
-      // Without a listener, pg re-throws a dropped/culled connection as an unhandled 'error' event and
-      // Node terminates the process — only for a pool THIS service constructs itself; a caller-injected
+      // pg reports a connection the server ends on the Client holding it, and the Pool re-emits it
+      // only while the Client sits idle there; Node ends the process on an 'error' event with no
+      // listener. So each Client the pool connects logs its own, idle or checked out, and the Pool's
+      // listener only has to exist. Only for a pool THIS service constructs itself; a caller-injected
       // config.pool is that caller's own to manage.
-      this.pool.on('error', (err) => {
-        console.error('PostgresArtifactService: idle client error (pool recovers):', err)
-      })
+      this.pool.on('connect', (client) =>
+        client.on('error', (err) => {
+          console.error(
+            'PostgresArtifactService: connection error (the pool drops the connection):',
+            err,
+          )
+        }),
+      )
+      this.pool.on('error', () => {})
     }
     return this.pool
   }

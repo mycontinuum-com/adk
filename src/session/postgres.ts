@@ -21,6 +21,10 @@ interface PgPool extends PgQueryable {
   connect(): Promise<PgClient>
   end(): Promise<void>
   on(event: 'error', listener: (err: Error) => void): void
+  on(
+    event: 'connect',
+    listener: (client: { on(event: 'error', listener: (err: Error) => void): void }) => void,
+  ): void
 }
 
 const SCHEMA_SQL = `
@@ -94,12 +98,17 @@ export class PostgresStore implements SessionStore {
         Pool: new (opts: { connectionString: string }) => PgPool
       }
       this.pool = new Pool({ connectionString: this.config.connectionString! })
-      // Without a listener, pg re-throws a dropped/culled connection as an unhandled 'error' event and
-      // Node terminates the process — only for a pool THIS store constructs itself; a caller-injected
+      // pg reports a connection the server ends on the Client holding it, and the Pool re-emits it
+      // only while the Client sits idle there; Node ends the process on an 'error' event with no
+      // listener. So each Client the pool connects logs its own, idle or checked out, and the Pool's
+      // listener only has to exist. Only for a pool THIS store constructs itself; a caller-injected
       // config.pool is that caller's own to manage.
-      this.pool.on('error', (err) => {
-        console.error('PostgresStore: idle client error (pool recovers):', err)
-      })
+      this.pool.on('connect', (client) =>
+        client.on('error', (err) => {
+          console.error('PostgresStore: connection error (the pool drops the connection):', err)
+        }),
+      )
+      this.pool.on('error', () => {})
     }
     return this.pool
   }

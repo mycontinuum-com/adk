@@ -124,12 +124,20 @@ export function createPgVectorIndex(config: PgVectorConfig): VectorIndex {
         }
         pool = new Pool({ connectionString: config.connectionString })
         ownedPool = true
-        // Without a listener, pg re-throws a dropped/culled connection as an unhandled 'error' event
-        // and Node terminates the process — only for a pool THIS index constructs itself (ownedPool);
-        // a caller-injected config.pool is that caller's own to manage.
-        pool.on?.('error', (err) => {
-          console.error('createPgVectorIndex: idle client error (pool recovers):', err)
-        })
+        // pg reports a connection the server ends on the Client holding it, and the Pool re-emits it
+        // only while the Client sits idle there; Node ends the process on an 'error' event with no
+        // listener. So each Client the pool connects logs its own, idle or checked out, and the
+        // Pool's listener only has to exist. Only for a pool THIS index constructs itself
+        // (ownedPool); a caller-injected config.pool is that caller's own to manage.
+        pool.on?.('connect', (client) =>
+          client.on('error', (err) => {
+            console.error(
+              'createPgVectorIndex: connection error (the pool drops the connection):',
+              err,
+            )
+          }),
+        )
+        pool.on?.('error', () => {})
       }
     }
     return pool

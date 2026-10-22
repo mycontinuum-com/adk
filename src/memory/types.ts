@@ -69,6 +69,10 @@ export interface PgPool {
   ): Promise<{ rows: Record<string, unknown>[]; rowCount: number }>
   end?(): Promise<void>
   on?(event: 'error', listener: (err: Error) => void): void
+  on?(
+    event: 'connect',
+    listener: (client: { on(event: 'error', listener: (err: Error) => void): void }) => void,
+  ): void
 }
 
 export interface PgVectorConfig {
