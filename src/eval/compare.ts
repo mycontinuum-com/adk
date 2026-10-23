@@ -33,6 +33,17 @@ interface CaseComparison {
   change: Change
 }
 
+type OverallComparison =
+  | Omit<CaseComparison, 'name'>
+  | {
+      baseline: PassCount
+      current: PassCount
+      p: null
+      change: 'unverified'
+      reason: 'case-weights-differ' | 'no-shared-cases'
+    }
+
+/** A tool result that one side returned and the other never did, over the cases that returned it. */
 interface ToolResultChange {
   tool: string
   result: string
@@ -48,8 +59,8 @@ interface ToolResultChange {
 export interface RunComparison {
   /** `p` below this is a change. */
   alpha: number
-  /** Over the cases both sides ran. */
-  overall: Omit<CaseComparison, 'name'>
+  /** Shared-case totals; inference requires the same relative case weights on both sides. */
+  overall: OverallComparison
   cases: CaseComparison[]
   /**
    * What the tools returned differently, whether or not a check noticed. A tool's result is the
@@ -139,6 +150,26 @@ export function pooledCounts(baselines: readonly Baseline[]): Map<string, PassCo
 const sumOver = (counts: ReadonlyMap<string, PassCount>, names: readonly string[]): PassCount =>
   names.reduce((sum, name) => add(sum, counts.get(name) ?? NO_RUNS), NO_RUNS)
 
+function compareOverall(
+  before: ReadonlyMap<string, PassCount>,
+  after: ReadonlyMap<string, PassCount>,
+  shared: readonly string[],
+  alpha: number,
+): OverallComparison {
+  const baseline = sumOver(before, shared)
+  const current = sumOver(after, shared)
+  if (!shared.length)
+    return { baseline, current, p: null, change: 'unverified', reason: 'no-shared-cases' }
+  const weightsDiffer = shared.some((name) => {
+    const was = before.get(name) ?? NO_RUNS
+    const now = after.get(name) ?? NO_RUNS
+    return was.runs * current.runs !== now.runs * baseline.runs
+  })
+  if (weightsDiffer)
+    return { baseline, current, p: null, change: 'unverified', reason: 'case-weights-differ' }
+  return compare(baseline, current, alpha)
+}
+
 interface Returned {
   tool: string
   result: string
@@ -223,9 +254,7 @@ export function compareRuns(
   const kept = baselines.flatMap((baseline) => ('runs' in baseline ? [baseline.runs] : []))
   return {
     alpha,
-    overall: shared.length
-      ? compare(sumOver(before, shared), sumOver(after, shared), alpha)
-      : { baseline: NO_RUNS, current: NO_RUNS, p: 1, change: 'unchanged' },
+    overall: compareOverall(before, after, shared, alpha),
     cases: shared.map((name) => ({
       name,
       ...compare(before.get(name) ?? NO_RUNS, after.get(name) ?? NO_RUNS, alpha),
@@ -277,7 +306,9 @@ export function formatComparison(comparison: RunComparison, baselines: readonly 
   const lines = [
     `Baseline: ${baselines.join(', ')}. A case is improved or regressed when a two-sided Fisher exact test on its own runs gives p < ${alpha}; with no correction for the number of cases, expect about one such verdict by chance in every ${Math.round(1 / alpha)} cases that did not change.`,
     '',
-    `**Pass rate:** ${rate(overall.baseline)} → ${rate(overall.current)}, p=${pValue(overall.p)}, ${overall.change}`,
+    overall.change === 'unverified'
+      ? `**Pass rate:** ${rate(overall.baseline)} → ${rate(overall.current)}; overall unverified: ${overall.reason === 'case-weights-differ' ? 'case weights differ' : 'no shared cases'}.`
+      : `**Pass rate:** ${rate(overall.baseline)} → ${rate(overall.current)}, p=${pValue(overall.p)}, ${overall.change}`,
     `**Cases:** ${by('regressed').length} regressed, ${by('improved').length} improved, ${by('unclear').length} unclear, ${by('unchanged').length} unchanged`,
   ]
   if (by('regressed').length) lines.push('', '### Regressed', '', ...caseTable(by('regressed')))

@@ -43,6 +43,48 @@ describe('fisherExact', () => {
 })
 
 describe('compareRuns', () => {
+  it('withholds an overall verdict when only the case weights changed', () => {
+    const baseline = [...runs('passing', 5, 5), ...runs('failing', 0, 100)]
+    const current = [...runs('passing', 5, 5), ...runs('failing', 0, 5)]
+    for (const [before, after] of [
+      [baseline, current],
+      [current, baseline],
+    ]) {
+      const result = compareRuns([{ runs: before }], after)
+      expect(result.overall).toEqual({
+        baseline: { passed: 5, runs: before.length },
+        current: { passed: 5, runs: after.length },
+        p: null,
+        change: 'unverified',
+        reason: 'case-weights-differ',
+      })
+      expect(result.cases.map((item) => item.change)).toEqual(['unchanged', 'unchanged'])
+      expect(formatComparison(result, ['baseline'])).toContain('case weights differ')
+    }
+  })
+
+  it('preserves a genuine aggregate improvement with proportional unequal repeat counts', () => {
+    const result = compareRuns(
+      [{ runs: [...runs('first', 0, 10), ...runs('second', 0, 20)] }],
+      [...runs('first', 5, 5), ...runs('second', 10, 10)],
+    )
+    expect(result.overall.change).toBe('improved')
+    expect(result.overall.p).toBeLessThan(0.05)
+    expect(result.cases.map((item) => item.change)).toEqual(['improved', 'improved'])
+  })
+
+  it('does not call disjoint case sets unchanged', () => {
+    const result = compareRuns([{ runs: runs('before', 5, 5) }], runs('after', 5, 5))
+    expect(result.overall).toEqual({
+      baseline: { passed: 0, runs: 0 },
+      current: { passed: 0, runs: 0 },
+      p: null,
+      change: 'unverified',
+      reason: 'no-shared-cases',
+    })
+    expect(formatComparison(result, ['baseline'])).toContain('no shared cases')
+  })
+
   const comparison = compareRuns(
     [
       {

@@ -49,6 +49,7 @@ Exit codes: 0 passed, 1 failed/incomplete, 2 invocation or export error.
 
 /** What one model call was given beyond the session's own events. */
 interface ModelInput {
+  modelStartId: string
   invocationId: string
   agentName: string
   /** The system messages in force, in order. */
@@ -86,8 +87,13 @@ function recordModelInputs<S extends StateSchema>() {
   const hook: Hook<S> = {
     name: 'adk.eval.model-inputs',
     beforeModel(ctx, renderCtx) {
+      const start = ctx.session.events.findLast(
+        (event) => event.type === 'model_start' && event.invocationId === renderCtx.invocationId,
+      )
+      if (!start) throw new Error('Model input has no model_start event')
       const inputs = bySession.get(ctx.session.id) ?? []
       inputs.push({
+        modelStartId: start.id,
         invocationId: renderCtx.invocationId,
         agentName: renderCtx.agentName,
         system: renderCtx.events.flatMap((event) => (event.type === 'system' ? [event.text] : [])),
@@ -106,8 +112,8 @@ function recordModelInputs<S extends StateSchema>() {
 }
 
 /**
- * Model inputs as evidence keeps them: `modelInputs[n]` belongs to the run's n-th `model_start`,
- * and its `system` indexes `instructions`, which holds each distinct message once.
+ * Each input names its model_start event; intercepted starts may have no recorded input. Its
+ * `system` indexes `instructions`, which holds each distinct message once.
  */
 function modelInputEvidence(inputs: readonly ModelInput[]) {
   if (!inputs.length) return {}

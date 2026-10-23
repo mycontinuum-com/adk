@@ -82,10 +82,34 @@ const cases =
     : process.env.EVAL_TEST_AGENT === '1'
       ? [text, lookup]
       : [text]
+if (process.env.EVAL_TEST_MULTIPLE_INVOCATIONS === '1')
+  cases.push(
+    app.evaluate.case({
+      name: 'lookup/repeated',
+      runnable: app.sequence({
+        name: 'repeat-lookup',
+        runnables: [lookup.runnable, lookup.runnable],
+      }),
+      input: { message: 'Look up the line twice.' },
+    }),
+  )
 void app.evaluate
   .cli(cases, {
     concurrency: CONCURRENCY,
     stopOnFirstFailure: process.env.EVAL_TEST_STOP === '1',
+    hooks:
+      process.env.EVAL_TEST_INTERCEPT === '1'
+        ? [
+            {
+              name: 'intercept-first-step',
+              beforeModel(ctx) {
+                if (ctx.state.lookedUp) return
+                ctx.state.lookedUp = true
+                return { stepEvents: [], toolCalls: [], terminal: false }
+              },
+            },
+          ]
+        : [],
     voice: { room: { url: 'ws://unused.invalid' } },
     scorecard: process.env.EVAL_TEST_SCORECARD,
   })

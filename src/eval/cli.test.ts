@@ -216,13 +216,59 @@ it('keeps what each model call was given, with every distinct instruction once',
     'Lines looked up so far: 1',
   ])
   expect(evidence.modelInputs).toEqual([
-    { invocationId: expect.any(String), agentName: 'looker', system: [0, 1] },
-    { invocationId: expect.any(String), agentName: 'looker', system: [0, 2] },
+    {
+      modelStartId: expect.any(String),
+      invocationId: expect.any(String),
+      agentName: 'looker',
+      system: [0, 1],
+    },
+    {
+      modelStartId: expect.any(String),
+      invocationId: expect.any(String),
+      agentName: 'looker',
+      system: [0, 2],
+    },
   ])
   expect(
     evidence.events.filter((event: { type: string }) => event.type === 'model_start'),
   ).toHaveLength(evidence.modelInputs.length)
 })
+
+it.each([
+  { name: 'lookup/text', mode: 'EVAL_TEST_INTERCEPT', skipped: 1, invocations: 1 },
+  {
+    name: 'lookup/repeated',
+    mode: 'EVAL_TEST_MULTIPLE_INVOCATIONS',
+    skipped: 0,
+    invocations: 2,
+  },
+])(
+  'binds model inputs to actual start events for $name',
+  async ({ name, mode, skipped, invocations }) => {
+    const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
+    const result = await invoke(['run', '--output', root, '--case', name], {
+      EVAL_TEST_AGENT: '1',
+      [mode]: '1',
+    })
+    expect(result.code).toBe(0)
+    const evidence = JSON.parse(
+      await readFile(JSON.parse(result.stdout).results[0].evidence, 'utf8'),
+    )
+    const starts = evidence.events.filter((event: { type: string }) => event.type === 'model_start')
+    expect(starts.length).toBe(evidence.modelInputs.length + skipped)
+    expect(new Set(starts.map((event: { invocationId: string }) => event.invocationId)).size).toBe(
+      invocations,
+    )
+    expect(
+      evidence.modelInputs.map((input: { modelStartId: string }) => input.modelStartId),
+    ).toEqual(starts.slice(skipped).map((event: { id: string }) => event.id))
+    for (const input of evidence.modelInputs) {
+      const start = starts.find((event: { id: string }) => event.id === input.modelStartId)
+      expect(input.invocationId).toBe(start.invocationId)
+      expect(input.agentName).toBe(start.agentName)
+    }
+  },
+)
 
 it('rejects a missing or unreadable baseline before running, and run options with list', async () => {
   const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
