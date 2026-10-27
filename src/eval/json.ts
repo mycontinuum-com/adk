@@ -9,14 +9,14 @@ export function omitUndefinedProperties<T extends object>(value: T): Record<stri
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined))
 }
 
-/** State as a JSON session store keeps it: function-valued properties are dropped. */
+/** State as a JSON session store keeps it: function-valued and undefined properties are dropped. */
 function storedState(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(storedState)
   if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype)
     return value
   return Object.fromEntries(
     Object.entries(value)
-      .filter(([, item]) => typeof item !== 'function')
+      .filter(([, item]) => typeof item !== 'function' && item !== undefined)
       .map(([key, item]) => [key, storedState(item)]),
   )
 }

@@ -227,6 +227,27 @@ it('rejects lossy voice metric data before worker serialization', async () => {
       }),
     ),
   ).toContain('"limit": 1')
+  // ...and so is a property cleared to undefined.
+  const kept = { stage: 'day' }
+  const cleared = {
+    key: 'booking',
+    oldValue: { stage: 'offer' },
+    newValue: { ...kept, suggested: undefined },
+  }
+  expect(
+    JSON.parse(
+      stringifyEvidence(
+        serializeEvent({
+          id: 'change',
+          createdAt: 0,
+          type: 'state_change',
+          scope: 'session',
+          source: 'mutation',
+          changes: [cleared],
+        }),
+      ),
+    ).changes,
+  ).toEqual([{ ...cleared, newValue: kept }])
   expect(stringifyEvidence({ evidence: ['kept'], data: { count: 2 } })).toBe(
     '{\n  "evidence": [\n    "kept"\n  ],\n  "data": {\n    "count": 2\n  }\n}',
   )
