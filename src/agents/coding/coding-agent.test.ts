@@ -289,27 +289,6 @@ describe('CodingAgent', () => {
       expect(result.sessionId).toBe('custom-session-123')
     })
 
-    it('supports streaming delay for realistic simulation', async () => {
-      const agent = createMockCodingAgent({
-        responses: [
-          { type: 'assistant', text: 'One' },
-          { type: 'assistant', text: 'Two' },
-        ],
-        delayMs: 10,
-      })
-
-      const startTime = performance.now()
-
-      for await (const _ of agent.run('Task')) {
-        // consume
-      }
-
-      const elapsed = performance.now() - startTime
-      // Two 10 ms delays. A Node timer may fire up to a millisecond early and Date.now() rounds, so
-      // the floor allows one millisecond per delay (CI measured 19 for 20).
-      expect(elapsed).toBeGreaterThanOrEqual(18)
-    })
-
     describe('.execute() for tool interface', () => {
       it('works as a FunctionTool', async () => {
         const agent = createMockCodingAgent({

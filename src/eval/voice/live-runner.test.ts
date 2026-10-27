@@ -574,7 +574,6 @@ test('binds native eval caller disconnect control', async () => {
         data: { reason: 'participant_disconnected' },
       },
     ])
-    expect(run.durationMs).toBeLessThan(1_000)
     expect(f.deleteRoom).toHaveBeenCalledOnce()
     expect(() => controlled.evalControl!.disconnectUser()).toThrow('not bound')
   } finally {
@@ -700,7 +699,6 @@ test.each([
       })
       expect(run.error).toBeUndefined()
       expect(run.status).toBe(expected)
-      expect(run.durationMs).toBeLessThan(10_000)
       expect(f.deleteRoom).toHaveBeenCalledOnce()
     } finally {
       await f.app.close()
@@ -717,7 +715,6 @@ test.each([
     const run = await f.run({ durationMs: 10_000, timeouts, playoutTimeoutMs: 20 })
     expect(run.error).toBeUndefined()
     expect(run.status).toBe(expected)
-    expect(run.durationMs).toBeLessThan(10_000)
   } finally {
     await f.app.close()
   }

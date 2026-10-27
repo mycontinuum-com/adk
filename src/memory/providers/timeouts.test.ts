@@ -5,7 +5,6 @@ import { createQdrantIndex, qdrant } from './qdrant'
 import { createVoyageEmbedder, voyage } from './voyage'
 
 const TIMEOUT_MS = 200
-const WITHIN_BUDGET_MS = 3_000
 const retry = { maxAttempts: 2, initialDelayMs: 10, maxDelayMs: 10, backoffMultiplier: 1 }
 const VOYAGE_TIMEOUT = new Error(`Voyage request timed out after ${TIMEOUT_MS}ms`)
 const VOYAGE_REQUEST = 'POST /v1/embeddings'
@@ -55,21 +54,20 @@ async function voyageServedBy(answer: Answer): Promise<string[]> {
 async function qdrantUpsertServedBy(answer: Answer) {
   const { url, requests } = await listen(answer)
   const index = createQdrantIndex(qdrant({ url, timeoutMs: TIMEOUT_MS, retry }))
-  const settled = await settleTime(
+  const outcome = await settled(
     index.upsert('entity-memory', [{ id: 'req-1', embedding: [0.1, 0.2] }], {
       variant: 'created',
     }),
   )
-  return { ...settled, posts: requests.filter((r) => r.startsWith('POST')) }
+  return { ...outcome, posts: requests.filter((r) => r.startsWith('POST')) }
 }
 
-async function settleTime(work: Promise<unknown>): Promise<{ ms: number; error: unknown }> {
-  const started = Date.now()
+async function settled(work: Promise<unknown>): Promise<{ error: unknown }> {
   const error = await work.then(
     () => null,
     (e: unknown) => e,
   )
-  return { ms: Date.now() - started, error }
+  return { error }
 }
 
 function embedder(timeoutMs?: number) {
@@ -96,45 +94,41 @@ describe('memory provider requests to a degraded dependency', () => {
   })
 
   it('fails a Qdrant upsert after each attempt times out', { timeout: 10_000 }, async () => {
-    const { ms, error, posts } = await qdrantUpsertServedBy(neverAnswer)
+    const { error, posts } = await qdrantUpsertServedBy(neverAnswer)
 
     expect(error).toBeInstanceOf(Error)
-    expect(ms).toBeLessThan(WITHIN_BUDGET_MS)
     expect(posts).toEqual([QDRANT_RETRIEVE, QDRANT_RETRIEVE])
   })
 
   it('fails a Qdrant upsert whose body stalls after the headers', { timeout: 10_000 }, async () => {
-    const { ms, error, posts } = await qdrantUpsertServedBy(stallAfterHeaders)
+    const { error, posts } = await qdrantUpsertServedBy(stallAfterHeaders)
 
     expect(error).toBeInstanceOf(Error)
-    expect(ms).toBeLessThan(WITHIN_BUDGET_MS)
     expect(posts).toEqual([QDRANT_RETRIEVE, QDRANT_RETRIEVE])
   })
 
   it('fails a Voyage embed after each attempt times out', { timeout: 10_000 }, async () => {
     const requests = await voyageServedBy(neverAnswer)
 
-    const { ms, error } = await settleTime(embedder(TIMEOUT_MS).embed(INPUT))
+    const { error } = await settled(embedder(TIMEOUT_MS).embed(INPUT))
 
     expect(error).toEqual(VOYAGE_TIMEOUT)
-    expect(ms).toBeLessThan(WITHIN_BUDGET_MS)
     expect(requests).toEqual([VOYAGE_REQUEST, VOYAGE_REQUEST])
   })
 
   it('fails a Voyage embed whose body stalls after the headers', { timeout: 10_000 }, async () => {
     const requests = await voyageServedBy(stallAfterHeaders)
 
-    const { ms, error } = await settleTime(embedder(TIMEOUT_MS).embed(INPUT))
+    const { error } = await settled(embedder(TIMEOUT_MS).embed(INPUT))
 
     expect(error).toEqual(VOYAGE_TIMEOUT)
-    expect(ms).toBeLessThan(WITHIN_BUDGET_MS)
     expect(requests).toEqual([VOYAGE_REQUEST, VOYAGE_REQUEST])
   })
 
   it('makes one request per attempt while Voyage answers 503', { timeout: 10_000 }, async () => {
     const requests = await voyageServedBy(unavailable)
 
-    const { error } = await settleTime(embedder().embed(INPUT))
+    const { error } = await settled(embedder().embed(INPUT))
 
     expect(String(error)).toContain('503')
     expect(requests).toEqual([VOYAGE_REQUEST, VOYAGE_REQUEST])

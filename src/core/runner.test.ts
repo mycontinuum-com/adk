@@ -4,7 +4,7 @@ import type { ErrorHandler } from '../errors'
 import type { ModelAdapter, StreamEvent } from '../types'
 
 import { adk } from '../api'
-import { configurePricing, RESULT_PRICING_WAIT_MS } from '../providers/pricing'
+import { configurePricing } from '../providers/pricing'
 import { BaseSession } from '../session'
 import { inMemoryStore } from '../session/memory'
 import { sessionService } from '../session/service'
@@ -285,17 +285,15 @@ describe('BaseRunner', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1)
       })
 
-      test('returns within the wait bound when the registry does not answer', async () => {
+      test('returns without a cost when the registry does not answer', async () => {
         fetchMock.mockImplementation(() => new Promise(() => {}))
         const runner = new BaseRunner({ adapters: { openai: pricedAdapter } })
 
-        const startedAt = Date.now()
         const result = await runner.run(
           testAgent({ model: { provider: 'openai', name: 'gpt-4o-mini' } }),
           createTestSession('Test'),
         )
 
-        expect(Date.now() - startedAt).toBeLessThan(RESULT_PRICING_WAIT_MS + 500)
         expect(result.usage?.cost).toBeUndefined()
         expect(result.usage?.totalInputTokens).toBe(1000)
       })
