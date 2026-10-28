@@ -31,7 +31,7 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
-## [0.6.11] - Unreleased
+## [0.6.11] - 2026-10-28
 
 ### Changed
 
