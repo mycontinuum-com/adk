@@ -657,7 +657,9 @@ describe('scorecard', () => {
     await commitAll(repository)
     await rm(join(submodule, '.git'), { recursive: true })
     await writeFile(join(submodule, '.git'), 'gitdir: gone\n')
-    await expect(git(repository, 'status', '--porcelain')).rejects.toThrow('not a git repository')
+    await expect(git(repository, 'status', '--porcelain')).rejects.toThrow(
+      /not a git repository|does not point to a valid repository/,
+    )
 
     const root = await mkdtemp(join(tmpdir(), 'adk-eval-cli-'))
     const result = await invoke(['run', '--output', root], {}, repository)
