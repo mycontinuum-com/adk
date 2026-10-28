@@ -1162,6 +1162,24 @@ function given(live: LiveSession, text: string) {
   return live.sent.filter((entry) => entry.kind === 'commentary' && entry.text === text)
 }
 
+/** GPT Live's delegation of no new caller words. */
+function delegate(live: LiveSession, id: string) {
+  live.emit('openai_server_event_received', {
+    type: 'session.delegation.created',
+    delegation: { id, target: 'client' },
+  })
+  live.emit('delegation_created', { id })
+}
+/** Waits for `count` runs to have settled. */
+const settledRuns = (seen: Array<{ type: string }>, count: number) =>
+  vi.waitFor(() => expect(seen.filter(({ type }) => type === 'run_settled')).toHaveLength(count))
+/** The thinking that tells delegation `id` its words were answered. */
+const answeredThinking = (id: string) => ({
+  kind: 'thinking',
+  text: expect.stringContaining('already answered these caller words'),
+  delegationId: id,
+})
+
 /** The `connection_replaced` entries among the logger's error calls. */
 function replacedLogs(logError: { mock: { calls: Array<[unknown, string]> } }) {
   return logError.mock.calls.filter(([, message]) => message === 'Live connection_replaced')
@@ -2243,6 +2261,111 @@ describe('voice activity hooks', () => {
     expect(latest().runBackend()).toBe(true)
     await vi.waitFor(() => expect(f.started).toEqual(['first', 'second']))
     await call.shutdown()
+  })
+
+  describe('GPT Live delegating the caller words a trigger ran', () => {
+    test(
+      'When GPT Live delegates caller words that a backend run it did not delegate already covers, with no caller words since, the backend runs once: a delegation that arrives while that run works is given its outcome, one that arrives after its outcome but before GPT Live speaks again is told the words were answered, and a delegation with new caller words still runs, in every forced-run join test of the ADK live handler.',
+      {
+        meta: {
+          claim: 'turn-taking.forced-run-join',
+          nodes: ['andi/operate/runtime/turn-taking'],
+        },
+      },
+      async () => {
+        const work = gate()
+        const { f, seen, latest } = await watched({ gates: { first: work } })
+        const call = await f.call()
+        expect(latest().runBackend()).toBe(true)
+        await vi.waitFor(() => expect(f.started).toEqual(['first']))
+        delegate(call.live, 'during')
+        work.release()
+        await settledRuns(seen, 2)
+        call.live.fragment('user', 'Tuesday', 'input-tuesday')
+        expect(latest().runBackend()).toBe(true)
+        await settledRuns(seen, 3)
+        delegate(call.live, 'after')
+        await settledRuns(seen, 4)
+        call.live.dispatch('new-words', 'And Friday')
+        await settledRuns(seen, 5)
+        await call.shutdown()
+        expect(f.started).toEqual(['first', 'second', 'third'])
+        expect(
+          f.result.mock.calls.map(([ctx]) => [ctx.delegation.id.split('-')[0], ctx.output]),
+        ).toEqual([
+          ['during', { reply: 'first' }],
+          ['undelegated', { reply: 'second' }],
+          ['new', { reply: 'third' }],
+        ])
+        expect(given(call.live, 'first')).toEqual([
+          { kind: 'commentary', text: 'first', delegationId: 'during' },
+        ])
+        expect(call.live.sent).toContainEqual(answeredThinking('after'))
+      },
+    )
+
+    test('a delegation while the run works joins it, and its error hooks get the run failing', async () => {
+      const work = gate()
+      const { f, seen, latest } = await watched({
+        gates: { first: work },
+        failResult: true,
+        errorAction: 'continue',
+      })
+      const call = await f.call()
+      expect(latest().runBackend()).toBe(true)
+      await vi.waitFor(() => expect(f.started).toEqual(['first']))
+      delegate(call.live, 'during')
+      work.release()
+      await settledRuns(seen, 2)
+      await call.shutdown()
+      expect(f.started).toEqual(['first'])
+      expect(f.error).toHaveBeenCalledTimes(1)
+      expect(f.error.mock.calls[0]![0].delegation).toMatchObject({ id: 'during' })
+      expect(given(call.live, 'Recovered')).toEqual([
+        { kind: 'commentary', text: 'Recovered', delegationId: 'during' },
+      ])
+    })
+
+    test('a delegation after GPT Live spoke again runs the backend', async () => {
+      const { f, seen, latest } = await watched()
+      const call = await f.call()
+      expect(latest().runBackend()).toBe(true)
+      await settledRuns(seen, 1)
+      speaking(call.session)
+      listening(call.session)
+      delegate(call.live, 'later')
+      await settledRuns(seen, 2)
+      await call.shutdown()
+      expect(f.started).toEqual(['first', 'second'])
+    })
+
+    test('a delegation after the caller took a turn runs the backend, even with no transcript', async () => {
+      const work = gate()
+      const { f, seen, latest } = await watched({ gates: { first: work } })
+      const call = await f.call()
+      expect(latest().runBackend()).toBe(true)
+      await vi.waitFor(() => expect(f.started).toEqual(['first']))
+      call.session.emit('user_state_changed', { oldState: 'listening', newState: 'speaking' })
+      call.session.emit('user_state_changed', { oldState: 'speaking', newState: 'listening' })
+      delegate(call.live, 'spoke')
+      work.release()
+      await settledRuns(seen, 2)
+      await call.shutdown()
+      expect(f.started).toEqual(['first', 'second'])
+      expect(given(call.live, 'first')[0]!.delegationId).toBeUndefined()
+    })
+
+    test('GPT Live delegating the words of its own earlier delegation still runs the backend', async () => {
+      const { f, seen } = await watched()
+      const call = await f.call()
+      call.live.dispatch('d1', 'Book it')
+      await settledRuns(seen, 1)
+      delegate(call.live, 'd2')
+      await settledRuns(seen, 2)
+      await call.shutdown()
+      expect(f.started).toEqual(['first', 'second'])
+      expect(call.live.sent).not.toContainEqual(answeredThinking('d2'))
+    })
   })
 
   test('a trigger runs nothing once the call has stopped', async () => {

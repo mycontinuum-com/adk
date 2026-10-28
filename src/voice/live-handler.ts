@@ -99,19 +99,40 @@ interface LiveRuntime<S extends StateSchema, T> {
  * error hooks get. `delivery` is `answered` once that reached the connection it was given on, and
  * `interrupted` when that connection was replaced while its result hooks ran.
  */
-interface SettledRun<S extends StateSchema, T> {
-  readonly connectionId: string
-  /** Caller turns when its delegation was admitted. */
-  readonly callerTurns: number
+interface SettledRun<S extends StateSchema, T> extends AdmittedRun {
   readonly outcome:
     | { readonly output: T; readonly backendSession: Session<S> }
     | { readonly error: Error }
+  /** The delegation its outcome went to: its own, or GPT Live's that joined it while it worked. */
+  readonly answers: LiveVoiceDelegation
   delivery: 'pending' | 'interrupted' | 'answered'
+  /** GPT Live's speaking turns once the outcome was answered. */
+  agentTurns?: number
+}
+
+interface AdmittedRun {
+  readonly delegation: LiveVoiceDelegation
+  /** Caller turns when its delegation was admitted. */
+  readonly callerTurns: number
+}
+
+interface Delegated {
+  readonly delegation: LiveVoiceDelegation
+  readonly voice: LiveVoiceControls
+}
+
+/** A run GPT Live did not delegate, until its outcome goes to its hooks. */
+interface UntoldRun extends AdmittedRun {
+  joinedBy?: Delegated
 }
 
 /** Thinking given to a reconnect's repeat of a caller turn whose result hooks were cut off. */
 const HANDLED_BEFORE_RECONNECT =
   'The backend worked on this request before the voice connection was replaced, and its reply may not have reached the caller. Its actions are not repeated automatically: tell the caller the connection dropped and ask what they still need.'
+
+/** Thinking given to a delegation of caller words a run GPT Live did not delegate has answered. */
+const ANSWERED_BEFORE_DELEGATION =
+  'The backend has already answered these caller words, and its reply was given to you just before this request. Say that reply if you have not said it yet; do not repeat it.'
 
 /** Longest wait for a line to be spoken before a muted caller is heard again or the call ends. */
 const PLAYOUT_TIMEOUT_MS = 30_000
@@ -319,6 +340,11 @@ class LiveCall<S extends StateSchema, T> {
   private replacing: { from: string; at: number } | undefined
   /** The latest backend run, kept so a reconnect's repeat of its caller turn gets its outcome. */
   private lastRun: SettledRun<S, T> | undefined
+  /**
+   * The run GPT Live did not delegate that is working, which its delegation of the same words
+   * joins.
+   */
+  private untold: UntoldRun | undefined
   private queue = Promise.resolve()
   private closing: Promise<void> | undefined
   private readonly seen = new Set<string>()
@@ -1020,6 +1046,14 @@ class LiveCall<S extends StateSchema, T> {
     this.admittedThrough = snapshot.receivedThrough
     let active = true
     const voice = this.controls(live, delegation, () => active)
+    const untold = this.untold
+    if (startedBy !== 'voice') this.untold = { delegation, callerTurns }
+    else if (
+      untold &&
+      !untold.joinedBy &&
+      this.sameWords(untold, delegation, snapshot, callerTurns)
+    )
+      untold.joinedBy = { delegation, voice }
     // With nothing pending, an answer GPT Live has not started is no longer expected. It may have
     // run into it from a filler word, and what it says next is then this delegation's filler word.
     if (this.delegating === 0) this.answerDue = false
@@ -1034,6 +1068,7 @@ class LiveCall<S extends StateSchema, T> {
       .catch((error) => this.onDelegationError(error, delegation, voice))
       .finally(() => {
         active = false
+        if (this.untold?.delegation === delegation) this.untold = undefined
         this.delegating--
         this.syncAgentActivity()
         this.syncThinkingSound()
@@ -1045,8 +1080,10 @@ class LiveCall<S extends StateSchema, T> {
    * Runs the backend for a delegation and gives its outcome to the delegation's result or error
    * hooks. A delegation on a new connection with no caller turn since the last run's delegation,
    * whose connection was replaced before that run's outcome reached it, is the provider asking
-   * again for the same caller turn: it gets that run's outcome, and the backend does not run
-   * again.
+   * again for the same caller turn: it gets that run's outcome, and the backend does not run again.
+   * So does GPT Live's delegation of the caller words a run it did not delegate covers: one made
+   * while that run worked was given its outcome, and one made after, before GPT Live spoke again,
+   * is told the words were answered.
    */
   private async execute(
     live: GPTLiveSession,
@@ -1057,12 +1094,13 @@ class LiveCall<S extends StateSchema, T> {
   ): Promise<void> {
     const { app, config, sessionService, timeout } = this.runtime
     if (this.stopped || live.sessionId !== delegation.connectionId) return
+    if (this.answeredUntold(live, delegation, snapshot, callerTurns)) return
     const earlier = this.lastRun
     if (
       earlier &&
       earlier.delivery !== 'answered' &&
       earlier.callerTurns === callerTurns &&
-      earlier.connectionId !== delegation.connectionId
+      earlier.delegation.connectionId !== delegation.connectionId
     ) {
       if (earlier.delivery === 'pending') return this.deliver(live, delegation, voice, earlier)
       // Its result hooks may already have acted, so they are not run again.
@@ -1099,9 +1137,11 @@ class LiveCall<S extends StateSchema, T> {
       // A call finalized without this work keeps its ledger closed.
       if (!this.abandoned) await this.transferBackendWork(delegation, snapshot, session, workStart)
     }
+    const answer = this.answerFor(delegation, voice)
     const settled: SettledRun<S, T> = {
-      connectionId: delegation.connectionId,
+      delegation,
       callerTurns,
+      answers: answer.delegation,
       delivery: 'pending',
       outcome:
         result.status !== 'completed'
@@ -1111,7 +1151,69 @@ class LiveCall<S extends StateSchema, T> {
             : { output: result.output.value, backendSession: session },
     }
     this.lastRun = settled
-    await this.deliver(live, delegation, voice, settled)
+    await this.deliver(live, answer.delegation, answer.voice, settled)
+  }
+
+  /**
+   * Answers GPT Live's delegation of the caller words the latest run covers, when that run was not
+   * GPT Live's: true when the delegation joined it, and so was given its outcome, or when it came
+   * after the outcome, before GPT Live spoke again. Its result hooks have acted and given their
+   * lines, so neither they nor the backend run again.
+   */
+  private answeredUntold(
+    live: GPTLiveSession,
+    delegation: LiveVoiceDelegation,
+    snapshot: GPTLiveTranscriptSnapshot,
+    callerTurns: number,
+  ): boolean {
+    const earlier = this.lastRun
+    if (!earlier) return false
+    if (earlier.answers === delegation) return earlier.delegation !== delegation
+    if (
+      earlier.delivery !== 'answered' ||
+      earlier.agentTurns !== this.activity.agentTurns ||
+      !this.sameWords(earlier, delegation, snapshot, callerTurns)
+    )
+      return false
+    live.appendThinking(ANSWERED_BEFORE_DELEGATION, { delegationId: delegation.id })
+    return true
+  }
+
+  /**
+   * The delegation a settled run's outcome goes to, with its controls: GPT Live's that joined the
+   * run, else the run's own. A delegation that would join from here on would not be answered, so it
+   * runs the backend itself.
+   */
+  private answerFor(delegation: LiveVoiceDelegation, voice: LiveVoiceControls): Delegated {
+    const untold = this.untold
+    this.untold = undefined
+    return (untold?.delegation === delegation && untold.joinedBy) || { delegation, voice }
+  }
+
+  /**
+   * Whether GPT Live's `delegation`, admitted at `snapshot` and `callerTurns`, is of the caller
+   * words a run it did not delegate covers: on that run's connection, with no caller turn or caller
+   * transcript since.
+   */
+  private sameWords(
+    run: AdmittedRun,
+    delegation: LiveVoiceDelegation,
+    snapshot: GPTLiveTranscriptSnapshot,
+    callerTurns: number,
+  ): boolean {
+    const { connectionId, nativeThrough } = run.delegation
+    return (
+      run.delegation.startedBy !== 'voice' &&
+      delegation.startedBy === 'voice' &&
+      delegation.connectionId === connectionId &&
+      callerTurns === run.callerTurns &&
+      !snapshot.fragments.some(
+        (fragment) =>
+          fragment.speaker === 'caller' &&
+          fragment.connection.id === connectionId &&
+          fragment.sequence > nativeThrough,
+      )
+    )
   }
 
   /**
@@ -1148,7 +1250,10 @@ class LiveCall<S extends StateSchema, T> {
       // Handled here, so the run counts as answered only once its error hooks have run too.
       await this.onDelegationError(error, delegation, voice)
     } finally {
-      if (live.sessionId === delegation.connectionId) run.delivery = 'answered'
+      if (live.sessionId === delegation.connectionId) {
+        run.delivery = 'answered'
+        run.agentTurns = this.activity.agentTurns
+      }
     }
   }
 

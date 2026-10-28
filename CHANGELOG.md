@@ -31,6 +31,18 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## [0.6.11] - Unreleased
+
+### Changed
+
+- GPT Live's delegation of caller words that a run it did not delegate (`startedBy` `handler` or `app`) already covers, on the same connection with no caller turn or transcript since, no longer runs the backend again. One made while that run works joins it: the run's result or error hooks get the delegation, so their lines answer it. One made after the run's outcome, before GPT Live speaks again, is answered with thinking that the backend already answered these words. A delegation with new caller words runs as before.
+
+### Migration from 0.6.10
+
+#### Joined runs
+
+`onResult` and `onError` for a run started by `runBackend()` or the silence rule get GPT Live's `ctx.delegation` (`startedBy: 'voice'`) when GPT Live delegated the same words while the run worked. Code that reads `startedBy` there to tell a run that answers no delegation must expect that run to answer one.
+
 ## [0.6.10] - 2026-10-27
 
 ### Changed
