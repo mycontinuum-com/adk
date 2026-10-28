@@ -31,11 +31,26 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
-## [0.6.10] - Unreleased
+## [0.6.10] - 2026-10-27
 
 ### Changed
 
 - A model call that fails or is cut off before it reports usage is estimated from its tool parameter schemas and native output schema as well as its messages, tool names and descriptions, so a schema-heavy call is no longer priced low.
+- `RunComparison.overall` — when the shared cases' run counts are not in the same proportion on both sides, or no case is shared, it reports `change: 'unverified'` with `p: null` and a `reason` (`'case-weights-differ'` or `'no-shared-cases'`) instead of a verdict.
+- Eval evidence names each model input's `model_start` event (`modelStartId`) instead of matching inputs to starts by position.
+- Eval evidence drops state properties set to `undefined`, as a JSON session store does, so a run whose state clears a field saves its results instead of failing with "Evaluation evidence cannot contain undefined".
+- `PostgresStore`, `PostgresProcessStore`, `PostgresArtifactService` and `createPgVectorIndex` listen for errors on every connection in a pool they create, so a connection the database ends mid-transaction fails that statement instead of ending the process. A pool passed in as `config.pool` is unchanged: its owner adds its own connection error listener.
+- `PgPool` — `on` also declares a `'connect'` overload, so an object whose `on` accepts only `'error'` no longer satisfies it. A `pg` `Pool` still does.
+
+### Migration from 0.6.9
+
+#### Overall comparison verdict
+
+Code that reads `RunComparison.overall.p` as a number, or expects `change` to be one of `'improved'`, `'regressed'`, `'unchanged'` or `'unclear'`, must handle `change: 'unverified'` with `p: null`.
+
+#### Hand-built `PgPool`
+
+A hand-built `PgPool`, such as a test double passed as `PgVectorConfig.pool`, must accept `'connect'` in `on`, or leave `on` out.
 
 ## [0.6.9] - 2026-10-21
 
