@@ -31,6 +31,12 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## [0.6.12] - Unreleased
+
+### Changed
+
+- `Live caller speech not delegated` — logged at warn level, not error: the handler recovers by running the backend on the speech. Its text and `callId` are unchanged.
+
 ## [0.6.11] - 2026-10-28
 
 ### Changed

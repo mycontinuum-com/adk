@@ -298,6 +298,7 @@ async function fixture(
   const entered: LiveVoiceContext[] = []
   const deleteRoom = vi.fn<(room: string) => Promise<void>>(async () => {})
   const logError = vi.fn<(data: unknown, message: string) => void>()
+  const logWarn = vi.fn<(data: unknown, message: string) => void>()
   const setup = vi.fn<() => Promise<{ sessionId: string; state: { answer: string } }>>(
     async () => ({
       sessionId: options.setupId!,
@@ -321,7 +322,7 @@ async function fixture(
           SpeechCreated: 'speech_created',
         },
       },
-      log: () => ({ error: logError }),
+      log: () => ({ error: logError, warn: logWarn }),
       audioFramesFromFile,
     }),
     clock: options.clock,
@@ -472,6 +473,7 @@ async function fixture(
   return {
     handler,
     logError,
+    logWarn,
     app,
     store,
     closeStore,
@@ -1532,7 +1534,12 @@ test('runs the backend on caller speech GPT Live neither delegated nor answered,
   call.live.fragment('user', 'No, that is everything', 'input-missed')
   await vi.waitFor(() => expect(f.result).toHaveBeenCalledTimes(1))
   expect(f.started).toEqual(['first'])
-  expect(f.logError).toHaveBeenCalledWith(expect.anything(), 'Live caller speech not delegated')
+  // The handler recovers, so the line is a warning, not an error.
+  expect(f.logWarn).toHaveBeenCalledWith(
+    { callId: f.entered[0]!.callId },
+    'Live caller speech not delegated',
+  )
+  expect(f.logError).not.toHaveBeenCalledWith(expect.anything(), 'Live caller speech not delegated')
   expect(f.result.mock.calls[0]![0].delegation.startedBy).toBe('handler')
   // Its line answers no delegation of GPT Live's, so it carries no delegation ID.
   await vi.waitFor(() =>

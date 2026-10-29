@@ -894,7 +894,9 @@ class LiveCall<S extends StateSchema, T> {
     if (latest?.payload.kind !== 'transcript') return false
     if (latest.payload.event.type !== 'session.input_transcript.delta') return false
     if (!this.runBackend('handler')) return false
-    this.log({ callId: this.context?.callId }, 'Live caller speech not delegated')
+    this.runtime.agents
+      .log()
+      .warn({ callId: this.context?.callId }, 'Live caller speech not delegated')
     return true
   }
 
