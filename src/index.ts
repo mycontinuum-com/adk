@@ -155,6 +155,7 @@ export {
   OutputParseError,
   ConflictError,
   DecisionsUnavailableError,
+  ModelResponseFailedError,
 } from './errors'
 
 // Parsing

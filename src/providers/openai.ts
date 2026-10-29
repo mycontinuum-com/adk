@@ -32,7 +32,7 @@ import type {
 
 import { CALL_ID_PREFIX } from '../core/constants'
 import { withStreamRetry } from '../core/retry'
-import { DecisionsUnavailableError } from '../errors/types'
+import { DecisionsUnavailableError, ModelResponseFailedError } from '../errors/types'
 import { createEventId, createCallId } from '../session'
 import { createStreamAccumulator, type RawDeltaEvent, type AccumulatedText } from './accumulator'
 import {
@@ -91,6 +91,15 @@ function createEndpointKey(endpoint: OpenAIEndpoint, model?: string): string {
 }
 
 class PrematureOpenAIStreamError extends Error {}
+
+/** The stream's terminal response, or the error for a stream that has none or a failed one. */
+function settledResponse(response: ProviderResponse | undefined): ProviderResponse {
+  if (!response)
+    throw new PrematureOpenAIStreamError('OpenAI stream ended without a terminal response')
+  if (response.status === 'failed')
+    throw new ModelResponseFailedError('OpenAI', response.error?.code)
+  return response
+}
 
 export class OpenAIAdapter implements ModelAdapter {
   private endpoints: OpenAIEndpoint[]
@@ -353,11 +362,8 @@ export class OpenAIAdapter implements ModelAdapter {
         }
 
         await stream.finalResponse()
-        if (!terminalResponse)
-          throw new PrematureOpenAIStreamError('OpenAI stream ended without a terminal response')
-        if (terminalResponse.status === 'failed') throw new Error('OpenAI response failed')
         return parseResponse(
-          terminalResponse,
+          settledResponse(terminalResponse),
           endpoint,
           ctx.invocationId,
           ctx.agentName,

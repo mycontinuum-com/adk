@@ -1,5 +1,6 @@
 import type { Correction } from '../parser'
 import type { Provider, Runnable } from './runnables'
+import type { Session } from './session'
 
 export type MediaSource =
   | { type: 'base64'; mimeType: string; data: string }
@@ -478,6 +479,8 @@ export function isAnnotationEvent(e: Event | StreamEvent): e is AnnotationEvent 
 export interface ErrorContext {
   invocationId: string
   agent: Runnable
+  /** The run's session, whose state and events a handler may read to decide its recovery. */
+  session: Session
   phase: 'model' | 'tool' | 'callback' | 'render'
   attempt: number
   error: Error

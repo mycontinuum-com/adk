@@ -1,10 +1,13 @@
+import { inspect } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 
+import type { ErrorHandler } from '../errors/types'
 import type { ProviderModelConfig, StreamEvent } from '../types'
 
 import { adk } from '../api'
 import { buildContext } from '../context'
+import { ModelResponseFailedError } from '../errors/types'
 import { createTestSession, testAgent } from '../testing/context'
 import { OpenAIAdapter } from './openai'
 
@@ -25,6 +28,19 @@ const completed = (output: unknown[] = []) => ({
     status: 'completed',
     output,
     usage: { input_tokens: 1, output_tokens: 1 },
+  },
+})
+const FAILED_CODE = 'server_error'
+const PROVIDER_DETAIL = 'private provider detail'
+const FAILED_MESSAGE = `OpenAI response failed: ${FAILED_CODE}`
+const TIMEOUT_CODE = 'vector_store_timeout'
+const failed = (code: string = FAILED_CODE) => ({
+  type: 'response.failed',
+  response: {
+    id: 'synthetic',
+    status: 'failed',
+    output: [],
+    error: { code, message: PROVIDER_DETAIL },
   },
 })
 const call = {
@@ -141,22 +157,32 @@ describe('OpenAI SDK stream completion', () => {
     })
   })
 
-  it('rejects a terminal failed response without exposing provider error details', async () => {
+  it('rejects a terminal failed response with its code and without the provider detail', async () => {
+    const fetch = serve([[created(), failed()]])
+    const failure = await consume().catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(ModelResponseFailedError)
+    expect(failure).toMatchObject({
+      message: FAILED_MESSAGE,
+      provider: 'OpenAI',
+      code: FAILED_CODE,
+    })
+    expect(inspect(failure)).not.toContain(PROVIDER_DETAIL)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not send a failed response to the next endpoint, even when its code names a timeout', async () => {
     const fetch = serve([
-      [
-        created(),
-        {
-          type: 'response.failed',
-          response: {
-            id: 'synthetic',
-            status: 'failed',
-            output: [],
-            error: { code: 'server_error', message: 'private provider detail' },
-          },
-        },
-      ],
+      [created(), failed(TIMEOUT_CODE)],
+      [created(), completed()],
     ])
-    await expect(consume()).rejects.toThrow(/^OpenAI response failed$/)
+    const endpoints = new OpenAIAdapter([
+      { type: 'openai', apiKey: 'synthetic', baseUrl: 'https://first.invalid/v1' },
+      { type: 'openai', apiKey: 'synthetic', baseUrl: 'https://second.invalid/v1' },
+    ])
+    await expect(endpoints.step(context(), model).next()).rejects.toMatchObject({
+      name: 'ModelResponseFailedError',
+      code: TIMEOUT_CODE,
+    })
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
@@ -222,5 +248,96 @@ describe('OpenAI SDK stream completion', () => {
     } finally {
       await app.close()
     }
+  })
+})
+
+// Sends a failed response once more when the run's state asks for it, as a call's flag does.
+function retryFailedOnce(seen: Array<string | undefined>): ErrorHandler {
+  return {
+    canHandle: (ctx) => {
+      if (ctx.phase !== 'model' || !(ctx.error instanceof ModelResponseFailedError)) return false
+      seen.push(ctx.error.code)
+      return ctx.attempt === 1 && ctx.session.state.retryFailed === true
+    },
+    handle: () => ({ action: 'retry' }),
+  }
+}
+
+async function runWithRetryHandler(retryFailed: boolean, streams: unknown[][]) {
+  const fetch = serve(streams)
+  const seen: Array<string | undefined> = []
+  const execute = vi.fn<(value: number) => void>()
+  const app = adk({ adapters: { openai: adapter() } })
+  const agent = app.agent({
+    name: 'synthetic',
+    model,
+    maxSteps: 3,
+    context: [app.context.history()],
+    errorHandlers: [retryFailedOnce(seen)],
+    tools: [
+      app.tool({
+        name: 'finish',
+        description: 'Finish',
+        schema: z.object({ value: z.number() }),
+        execute: (ctx) => {
+          execute(ctx.args.value)
+          return ctx.output(ctx.args.value)
+        },
+      }),
+    ],
+  })
+  const session = createTestSession('Synthetic input')
+  session.state.update({ retryFailed })
+  try {
+    const outcome: { result?: unknown; error?: unknown } = await app.run(agent, { session }).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    )
+    return { ...outcome, fetch, execute, session, seen }
+  } finally {
+    await app.close()
+  }
+}
+
+// A run that still fails rejects with the same class name and message, without the error's fields.
+function expectRejectedRun(error: unknown) {
+  expect(error).toMatchObject({ name: 'ModelResponseFailedError', message: FAILED_MESSAGE })
+  expect(error).not.toHaveProperty('code')
+  expect(error).not.toHaveProperty('provider')
+  expect(inspect(error)).not.toContain(PROVIDER_DETAIL)
+}
+
+describe('a failed OpenAI response and a model error handler', () => {
+  it('fails the run on a failed response when the handler does not retry', async () => {
+    const { error, seen, fetch, execute } = await runWithRetryHandler(false, [
+      [created(), failed()],
+    ])
+    expect(seen).toEqual([FAILED_CODE])
+    expectRejectedRun(error)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('sends the step once more when the handler reads the state and retries', async () => {
+    const { result, seen, fetch, execute, session } = await runWithRetryHandler(true, [
+      [created(), failed()],
+      [created(), completed([call])],
+    ])
+    expect(seen).toEqual([FAILED_CODE])
+    expect(result).toMatchObject({ status: 'completed', output: { value: 7 } })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(execute).toHaveBeenCalledExactlyOnceWith(7)
+    expect(session.events.filter((event) => event.type === 'tool_call')).toHaveLength(1)
+  })
+
+  it('fails the run when the one retry fails too', async () => {
+    const { error, seen, fetch, execute } = await runWithRetryHandler(true, [
+      [created(), failed()],
+      [created(), failed()],
+    ])
+    expect(seen).toEqual([FAILED_CODE, FAILED_CODE])
+    expectRejectedRun(error)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(execute).not.toHaveBeenCalled()
   })
 })

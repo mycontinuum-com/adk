@@ -54,6 +54,32 @@ export class DecisionsUnavailableError extends Error {
   }
 }
 
+/** A provider's error code, such as `server_error`: a short identifier, never free text. */
+const PROVIDER_CODE = /^[a-z][a-z0-9_]{0,63}$/
+
+/**
+ * The provider ended a model response as failed. `code` is the provider's own code for the failure,
+ * such as OpenAI's `server_error` or `rate_limit_exceeded`, when it gave one shaped as an
+ * identifier. The provider's error message is not kept, since it can repeat the input.
+ */
+export class ModelResponseFailedError extends Error {
+  readonly provider: string
+  readonly code: string | undefined
+
+  constructor(provider: string, code?: unknown) {
+    const kept = typeof code === 'string' && PROVIDER_CODE.test(code) ? code : undefined
+    super(kept ? `${provider} response failed: ${kept}` : `${provider} response failed`)
+    this.name = 'ModelResponseFailedError'
+    this.provider = provider
+    this.code = kept
+  }
+
+  /** Matches by name, as `DecisionsUnavailableError` does: each provider entry bundles its own copy. */
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return value instanceof Error && value.name === 'ModelResponseFailedError'
+  }
+}
+
 export class ConflictError extends Error {
   constructor(
     public readonly sessionId: string,

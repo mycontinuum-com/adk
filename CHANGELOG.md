@@ -33,10 +33,17 @@ Migration section:
 
 ## [0.6.12] - Unreleased
 
+### Added
+
+- `ModelResponseFailedError` — thrown by the OpenAI adapter for a response that ends `failed`, with `provider` and the response's own error `code` (such as `server_error` or `rate_limit_exceeded`) when it is an identifier. The provider's error message is still never kept. An error handler sees `code`; a run that fails with it rejects with the same class name and message, without `code`.
+- `ErrorContext.session` — the run's session, so an error handler can decide its recovery from the run's state and events, such as retrying a `ModelResponseFailedError` only for a session whose flag allows it.
+
 ### Changed
 
 - `Live caller speech not delegated` — logged at warn level, not error: the handler recovers by running the backend on the speech. Its text and `callId` are unchanged.
 - A voice eval case file holds the run's start (`startedAtMs`), from which a judge's voice timeline measures every turn, so a re-score of a recorded voice run rebuilds the timeline its judges read.
+- A `failed` OpenAI response throws `ModelResponseFailedError` (message `OpenAI response failed: <code>`) instead of a plain `Error('OpenAI response failed')`.
+- `isRetryableForFallback` returns `false` for a `ModelResponseFailedError`: a failed response is not sent to the next endpoint, even when its code contains `timeout`.
 
 ## [0.6.11] - 2026-10-28
 

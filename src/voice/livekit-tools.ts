@@ -284,6 +284,7 @@ async function recoverVoiceToolError(
   const errorCtx: ErrorContext = {
     invocationId: bridgeCtx.invocationId,
     agent: bridgeCtx.agent,
+    session: bridgeCtx.session,
     phase: 'tool',
     attempt,
     error: lastError,

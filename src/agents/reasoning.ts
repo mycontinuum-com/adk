@@ -134,6 +134,7 @@ async function handleError(
   const errorCtx: ErrorContext = {
     invocationId: ctx.invocationId,
     agent: ctx.runnable,
+    session: ctx.session,
     phase,
     attempt,
     error,

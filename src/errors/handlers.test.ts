@@ -24,6 +24,7 @@ function createErrorContext(overrides: Partial<ErrorContext> = {}): ErrorContext
   return {
     invocationId: 'inv_test',
     agent: { name: 'test' } as any,
+    session: createTestSession(),
     phase: 'tool',
     attempt: 1,
     error: new Error('Test error'),

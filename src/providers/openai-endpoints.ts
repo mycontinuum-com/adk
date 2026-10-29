@@ -1,3 +1,5 @@
+import { ModelResponseFailedError } from '../errors/types'
+
 export interface OpenAIEndpoint {
   type: 'azure' | 'openai'
   baseUrl?: string
@@ -107,6 +109,9 @@ export function resolveOpenAIConnection(): { baseURL?: string; apiKey?: string }
 
 export function isRetryableForFallback(error: unknown): boolean {
   if (!(error instanceof Error)) return false
+  // A response the provider ended as failed is not sent to another endpoint: its message names the
+  // provider's code, such as `vector_store_timeout`, which the matches below would misread.
+  if (error instanceof ModelResponseFailedError) return false
   const msg = error.message.toLowerCase()
   if (msg.includes('rate limit')) return true
   if (msg.includes('timeout')) return true

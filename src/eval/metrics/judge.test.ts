@@ -306,7 +306,7 @@ describe('app.evaluate.judge', () => {
 
   it(
     "A voice eval case file holds the run's start (`startedAtMs`), from which a judge's voice timeline measures every turn, so a re-score of the recorded run rebuilds the timeline its judges read.",
-    { meta: { claim: 'adk.voice-case-run-start', nodes: ['triage/background/agent-kit'] } },
+    { meta: { fixture: 'adk.voice-case-run-start' } },
     async () => {
       const { run } = await liveRun(new MockAdapter())
       // The case file the eval CLI writes: the run's evidence and its status.

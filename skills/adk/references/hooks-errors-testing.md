@@ -130,7 +130,15 @@ import {
 
 Actions are `throw`, `skip`, `abort`, `retry`, `fallback`, and `pass`.
 
-Custom handlers implement `canHandle(ctx)` and `handle(ctx)`.
+Custom handlers implement `canHandle(ctx)` and `handle(ctx)`. `ctx` holds the `phase` (`model`,
+`tool`, `callback` or `render`), the `attempt` at this model step or tool call, the `error`, and the
+run's `session`. A handler can read the session's state and events to decide, for example to
+retry a model step only in a session whose flag allows it. An OpenAI response that ends `failed`
+throws `ModelResponseFailedError`, whose `code` is the provider's own. Such a step has run no tool,
+so a `retry` sends the step again without running a tool twice. Text the step streamed before it
+failed is streamed again, so a consumer that shows deltas sees it twice. Retry only a code that
+repeating can change, such as `server_error` or `rate_limit_exceeded`. A run that still fails
+rejects with an error of the same class and message, without the `code` property.
 
 Common option names: `retryHandler({ maxAttempts, baseDelay, maxDelay, backoffMultiplier, retryable })`, `rateLimitHandler({ maxRetries, baseDelay })`, and `timeoutHandler({ fallbackResult })`.
 

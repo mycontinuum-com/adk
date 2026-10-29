@@ -2275,8 +2275,7 @@ describe('voice activity hooks', () => {
       'When GPT Live delegates caller words that a backend run it did not delegate already covers, with no caller words since, the backend runs once: a delegation that arrives while that run works is given its outcome, one that arrives after its outcome but before GPT Live speaks again is told the words were answered, and a delegation with new caller words still runs, in every forced-run join test of the ADK live handler.',
       {
         meta: {
-          claim: 'turn-taking.forced-run-join',
-          nodes: ['andi/operate/runtime/turn-taking'],
+          fixture: 'turn-taking.forced-run-join',
         },
       },
       async () => {

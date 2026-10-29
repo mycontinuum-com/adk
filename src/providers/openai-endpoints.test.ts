@@ -1,3 +1,4 @@
+import { ModelResponseFailedError } from '../errors/types'
 import {
   resolveModelName,
   getDefaultEndpoints,
@@ -194,6 +195,15 @@ describe('openai-endpoints', () => {
     it('should return false for other errors', () => {
       expect(isRetryableForFallback(new Error('Invalid request'))).toBe(false)
       expect(isRetryableForFallback(new Error('Unauthorized'))).toBe(false)
+    })
+
+    it('should return false for a failed response, whatever its code says', () => {
+      expect(
+        isRetryableForFallback(new ModelResponseFailedError('OpenAI', 'vector_store_timeout')),
+      ).toBe(false)
+      expect(isRetryableForFallback(new ModelResponseFailedError('OpenAI', 'server_error'))).toBe(
+        false,
+      )
     })
   })
 })
