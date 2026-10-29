@@ -36,6 +36,7 @@ Migration section:
 ### Changed
 
 - `Live caller speech not delegated` — logged at warn level, not error: the handler recovers by running the backend on the speech. Its text and `callId` are unchanged.
+- A voice eval case file holds the run's start (`startedAtMs`), from which a judge's voice timeline measures every turn, so a re-score of a recorded voice run rebuilds the timeline its judges read.
 
 ## [0.6.11] - 2026-10-28
 

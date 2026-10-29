@@ -12,17 +12,19 @@ import { adk } from '../../api'
 import { summarizeModelUsage } from '../../core/runner'
 import { openai } from '../../providers/models'
 import { configurePricing } from '../../providers/pricing'
+import { BaseSession } from '../../session/base'
 import { InMemoryStore } from '../../session/memory'
 import { sessionService } from '../../session/service'
 import { TEST_PRICING, useTestPricing } from '../../test-support/pricing-registry'
 import { UsageReportingAdapter } from '../../test-support/usage-adapter'
 import { MockAdapter, type MockAdapterConfig } from '../../testing'
 import { evalCli } from '../cli'
-import { voiceEvidence } from '../json'
+import { stringifyEvidence, voiceEvidence } from '../json'
 import { caseJudgeCost, generateReport } from '../report'
 import { createEvalSession } from '../session'
 import { buildSummary } from '../suite-runner'
 import { liveTranscriptTurns } from './index'
+import { renderJudgeEvidence } from './judge-evidence'
 
 const criteria = { 'asks-to-send': 'Asks whether to send the request to the practice.' }
 const verdict = (reason: string, passed: boolean) =>
@@ -63,6 +65,70 @@ function fragment(
 function userMessage(adapter: MockAdapter, call = 0): unknown {
   const user = adapter.stepCalls[call]!.ctx.events.find((event) => event.type === 'user')
   return JSON.parse(user && 'text' in user ? user.text : '')
+}
+
+/**
+ * A GPT Live run that ended at its duration limit: timed agent and caller speech, an `end_call`
+ * tool call and result on the run clock, what the caller heard, and the session's final state.
+ */
+async function liveRun(adapter: MockAdapter) {
+  const store = new InMemoryStore()
+  const schema = { session: { outcome: z.string().optional() } }
+  const app = adk({ name: 'judge', store, adapters: { openai: adapter }, schema })
+  const session = await app.sessions.create({ sessionId: 'live' })
+  session.state.update({ outcome: 'engaged' })
+  const base = { invocationId: 'inv', agentName: 'voice' }
+  await sessionService(store).appendEvent(session, {
+    ...base,
+    id: 'call',
+    type: 'tool_call',
+    createdAt: 12_100,
+    callId: 'c1',
+    name: 'end_call',
+    args: { reason: 'limit' },
+  } satisfies Event)
+  await sessionService(store).appendEvent(session, {
+    ...base,
+    id: 'result',
+    type: 'tool_result',
+    createdAt: 12_200,
+    callId: 'c1',
+    name: 'end_call',
+    result: { ended: true },
+  } satisfies Event)
+  const run: VoiceRunResult<typeof schema> = {
+    status: 'max_duration',
+    startedAtMs: 10_000,
+    session,
+    events: session.events,
+    voiceEvents: [],
+    transcript: [],
+    liveTranscript: {
+      callId: 'live',
+      receivedThrough: 5,
+      observations: [],
+      fragments: [
+        fragment(1, 'agent', 'Dzień dobry, ', 0, 900),
+        fragment(2, 'agent', 'tu przychodnia.', 1_100, 2_000),
+        fragment(3, 'agent', 'Czas rozmowy minął.', 3_500, 4_200),
+        fragment(4, 'caller', 'Dobrze, dziękuję.', 4_500, 5_200),
+        fragment(5, 'caller', ' Do widzenia.', 5_300, 5_800, 1),
+      ],
+    },
+    callerHeard: [
+      { text: 'Dzień dobry, tu przychodnia.', atMs: 2_300 },
+      { text: 'Czas rozmowy minął.', atMs: 4_400 },
+    ],
+    timing: {
+      responseTimes: [],
+      silenceGaps: [],
+      interruptions: { count: 0, byAgent: 0, byUser: 0 },
+      vadResolutionMs: 0,
+    },
+    recording: { path: '/synthetic/recording.wav' },
+    durationMs: 6_000,
+  }
+  return { app, run }
 }
 
 afterEach(() => configurePricing(false))
@@ -202,63 +268,7 @@ describe('app.evaluate.judge', () => {
 
   it('renders a Live run from joined transcript turns, tool use, callerHeard and status', async () => {
     const adapter = new MockAdapter({ responses: [{ text: verdict('Heard in full.', true) }] })
-    const store = new InMemoryStore()
-    const schema = { session: { outcome: z.string().optional() } }
-    const app = adk({ name: 'judge', store, adapters: { openai: adapter }, schema })
-    const session = await app.sessions.create({ sessionId: 'live' })
-    session.state.update({ outcome: 'engaged' })
-    const base = { invocationId: 'inv', agentName: 'voice' }
-    await sessionService(store).appendEvent(session, {
-      ...base,
-      id: 'call',
-      type: 'tool_call',
-      createdAt: 12_100,
-      callId: 'c1',
-      name: 'end_call',
-      args: { reason: 'limit' },
-    } satisfies Event)
-    await sessionService(store).appendEvent(session, {
-      ...base,
-      id: 'result',
-      type: 'tool_result',
-      createdAt: 12_200,
-      callId: 'c1',
-      name: 'end_call',
-      result: { ended: true },
-    } satisfies Event)
-    const run: VoiceRunResult<typeof schema> = {
-      status: 'max_duration',
-      startedAtMs: 10_000,
-      session,
-      events: session.events,
-      voiceEvents: [],
-      transcript: [],
-      liveTranscript: {
-        callId: 'live',
-        receivedThrough: 5,
-        observations: [],
-        fragments: [
-          fragment(1, 'agent', 'Dzień dobry, ', 0, 900),
-          fragment(2, 'agent', 'tu przychodnia.', 1_100, 2_000),
-          fragment(3, 'agent', 'Czas rozmowy minął.', 3_500, 4_200),
-          fragment(4, 'caller', 'Dobrze, dziękuję.', 4_500, 5_200),
-          fragment(5, 'caller', ' Do widzenia.', 5_300, 5_800, 1),
-        ],
-      },
-      callerHeard: [
-        { text: 'Dzień dobry, tu przychodnia.', atMs: 2_300 },
-        { text: 'Czas rozmowy minął.', atMs: 4_400 },
-      ],
-      timing: {
-        responseTimes: [],
-        silenceGaps: [],
-        interruptions: { count: 0, byAgent: 0, byUser: 0 },
-        vadResolutionMs: 0,
-      },
-      recording: { path: '/synthetic/recording.wav' },
-      durationMs: 6_000,
-    }
-
+    const { app, run } = await liveRun(adapter)
     const result = await app.evaluate
       .judge({ name: 'notice', criteria, model: openai('gpt-4o-mini') })
       .evaluate(run)
@@ -293,6 +303,32 @@ describe('app.evaluate.judge', () => {
       ' Do widzenia.',
     ])
   })
+
+  it(
+    "A voice eval case file holds the run's start (`startedAtMs`), from which a judge's voice timeline measures every turn, so a re-score of the recorded run rebuilds the timeline its judges read.",
+    { meta: { claim: 'adk.voice-case-run-start', nodes: ['triage/background/agent-kit'] } },
+    async () => {
+      const { run } = await liveRun(new MockAdapter())
+      // The case file the eval CLI writes: the run's evidence and its status.
+      const file = JSON.parse(
+        stringifyEvidence({ ...voiceEvidence(run), terminationReason: run.status }),
+      )
+      expect(file.startedAtMs).toBe(run.startedAtMs)
+
+      const { sessionId, sessionEvents, terminationReason, ...recorded } = file
+      const rebuilt = {
+        ...recorded,
+        status: terminationReason,
+        durationMs: run.durationMs,
+        session: BaseSession.fromSnapshot({
+          id: sessionId,
+          appName: run.session.appName,
+          events: sessionEvents,
+        }),
+      }
+      expect(renderJudgeEvidence(rebuilt)).toEqual(renderJudgeEvidence(run))
+    },
+  )
 
   it('puts Live speech on the run clock, so a line spoken after a tool result reads as after it', async () => {
     // The lMQOO9 case-3 shape (2026-09-27): the claim's audio offset (99,800 ms) is smaller than

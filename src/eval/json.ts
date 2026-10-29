@@ -40,6 +40,8 @@ export function serializeEvent(event: Event): Record<string, unknown> {
 export function voiceEvidence(run: VoiceRunResult) {
   return {
     sessionId: run.session.id,
+    // A judge's voice timeline measures every turn from the run's start.
+    startedAtMs: run.startedAtMs,
     sessionEvents: run.session.events.map(serializeEvent),
     ...(run.liveTranscript === undefined ? {} : { liveTranscript: run.liveTranscript }),
     ...(run.callerHeard === undefined ? {} : { callerHeard: run.callerHeard }),
