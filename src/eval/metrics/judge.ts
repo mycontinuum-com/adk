@@ -48,6 +48,7 @@ const DEFAULT_MODEL = openai('gpt-5.4-mini', { reasoning: { effort: 'low' } })
 const JUDGE_INSTRUCTIONS = `You judge a recorded conversation between a caller and an agent against a list of requirements.
 
 The user message is JSON. \`requirements\` maps each requirement id to one requirement. \`evidence\` records the run:
+- \`run\`: \`text\` or \`voice\`, how the conversation took place. Tell a voice call from a text run by this alone, never by \`finalState\`.
 - \`status\`: how the run ended.
 - \`timeline\`: what happened, in order. \`caller\` and \`agent\` entries carry what was said. \`tool_call\` and \`tool_result\` entries are the agent's tool use.
 - \`callerHeard\`: voice calls only. The caller's own transcription of the agent's audio.
@@ -58,7 +59,7 @@ Rules:
 - Quoted text in a requirement is a reference for meaning, unless the requirement says word for word.
 - In voice calls, \`said\` is speech recognition output. It may misspell names, split sentences or repeat fragments.
 - In voice calls, every \`atMs\` (speech, tool entries and \`callerHeard\`) is time from the start of the run, on one clock. The timeline is in that order: an entry listed after another came after it.
-- Judge a requirement about what the caller heard from \`callerHeard\` only.
+- In a voice call, judge a requirement about what the caller heard from \`callerHeard\` only. A text run has no \`callerHeard\`.
 - Fail a requirement when the evidence is missing or ambiguous, and say what is missing.
 - Judge each requirement on its own.
 

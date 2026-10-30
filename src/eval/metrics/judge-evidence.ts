@@ -4,6 +4,11 @@ import type { MetricRun } from './types'
 
 /** What a judge model reads about one run, serialised as JSON. Every text is passed verbatim. */
 export interface JudgeEvidence {
+  /**
+   * How the conversation took place, so a judge never infers it from the state: a text run's state
+   * can name voice features, and read as voice, it was failed for having no `callerHeard`.
+   */
+  run: 'text' | 'voice'
   /** Text: the run status. Voice: the voice run status, for example `max_duration`. */
   status?: string
   /** Speech and tool use in order. */
@@ -83,12 +88,14 @@ export function renderJudgeEvidence(run: MetricRun | VoiceRunResult): JudgeEvide
   const finalState = events.length ? run.session.stateAt(events.length - 1).sessionState : {}
   if (!('voiceEvents' in run)) {
     return {
+      run: 'text',
       ...('status' in run && typeof run.status === 'string' && { status: run.status }),
       timeline: events.flatMap(textTurn),
       finalState,
     }
   }
   return {
+    run: 'voice',
     status: run.status,
     timeline: voiceTimeline(run),
     ...(run.callerHeard && {

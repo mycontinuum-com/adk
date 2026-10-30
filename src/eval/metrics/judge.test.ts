@@ -253,6 +253,7 @@ describe('app.evaluate.judge', () => {
     expect(userMessage(adapter, 2)).toEqual({
       requirements: criteria,
       evidence: {
+        run: 'text',
         status: 'completed',
         timeline: [
           { kind: 'caller', said: 'Czy mam wysłać to zgłoszenie?' },
@@ -277,6 +278,7 @@ describe('app.evaluate.judge', () => {
     expect(userMessage(adapter)).toEqual({
       requirements: criteria,
       evidence: {
+        run: 'voice',
         status: 'max_duration',
         timeline: [
           { kind: 'agent', said: 'Dzień dobry, tu przychodnia.', atMs: 900 },
@@ -473,6 +475,7 @@ describe('app.evaluate.judge', () => {
     expect(userMessage(adapter)).toEqual({
       requirements: criteria,
       evidence: {
+        run: 'voice',
         status: 'completed',
         timeline: [
           { kind: 'agent', said: 'Czy mam wysłać zgłoszenie?', atMs: 0 },

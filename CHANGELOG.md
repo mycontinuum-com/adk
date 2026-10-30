@@ -44,6 +44,13 @@ Migration section:
 - A voice eval case file holds the run's start (`startedAtMs`), from which a judge's voice timeline measures every turn, so a re-score of a recorded voice run rebuilds the timeline its judges read.
 - A `failed` OpenAI response throws `ModelResponseFailedError` (message `OpenAI response failed: <code>`) instead of a plain `Error('OpenAI response failed')`.
 - `isRetryableForFallback` returns `false` for a `ModelResponseFailedError`: a failed response is not sent to the next endpoint, even when its code contains `timeout`.
+- `renderJudgeEvidence` — `JudgeEvidence` has a new `run: 'text' | 'voice'` field. The judge instructions tell a voice call from a text run by `run` alone, never by `finalState`, and judge a requirement about what the caller heard from `callerHeard` only in a voice call. A text run's state naming voice features no longer fails it for lacking `callerHeard`.
+
+### Migration from 0.6.11
+
+#### Judge evidence shape
+
+Tests that `toEqual` the `JudgeEvidence` or assert on the judge's user message now see `run` first; add `run: 'text'` or `run: 'voice'`.
 
 ## [0.6.11] - 2026-10-28
 
