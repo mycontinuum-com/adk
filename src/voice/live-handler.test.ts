@@ -2812,26 +2812,30 @@ describe('call recording and noise cancellation', () => {
     apiSecret: 'synthetic',
   }
 
-  test('starts egress at the setup key before the voice session, and stops it at close', async () => {
-    const f = await fixture({
-      recording: { egress },
-      callSetup: { recordingKey: 'org-1/call-1.ogg' },
-    })
-    const call = await f.call()
-    expect(f.egressStarts).toEqual([
-      {
-        room: 'room-1',
-        filepath: 'org-1/call-1.ogg',
-        bucket: 'synthetic-calls',
-        region: 'eu-west-2',
-        audioOnly: true,
-      },
-    ])
-    expect(f.egressStops).toEqual([])
-    await call.shutdown()
-    expect(f.egressStops).toEqual(['egress-1'])
-    expect(f.order).toEqual(['egress-start', 'voice-start', 'egress-stop'])
-  })
+  test(
+    'starts egress at the setup key before the voice session, and stops it at close',
+    { meta: { fixture: 'call-recording' } },
+    async () => {
+      const f = await fixture({
+        recording: { egress },
+        callSetup: { recordingKey: 'org-1/call-1.ogg' },
+      })
+      const call = await f.call()
+      expect(f.egressStarts).toEqual([
+        {
+          room: 'room-1',
+          filepath: 'org-1/call-1.ogg',
+          bucket: 'synthetic-calls',
+          region: 'eu-west-2',
+          audioOnly: true,
+        },
+      ])
+      expect(f.egressStops).toEqual([])
+      await call.shutdown()
+      expect(f.egressStops).toEqual(['egress-1'])
+      expect(f.order).toEqual(['egress-start', 'voice-start', 'egress-stop'])
+    },
+  )
 
   test('names the recording after the call session without a setup key', async () => {
     const f = await fixture({ recording: { egress }, setupId: 'call-7' })
