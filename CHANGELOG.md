@@ -31,6 +31,12 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## [0.6.13] - 2026-11-05
+
+### Added
+
+- `serviceTier: 'priority'` — the OpenAI adapter sends `service_tier: "priority"` (OpenAI's fast mode) with no fallback; Azure endpoints still get the default tier. A function `(ctx: RenderContext) => 'priority' | undefined` picks the tier for each step.
+
 ## [0.6.12] - 2026-10-30
 
 ### Added

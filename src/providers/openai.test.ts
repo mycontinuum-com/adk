@@ -944,6 +944,41 @@ describe('OpenAIAdapter flex service tier', () => {
     )
   })
 
+  it('sends a priority request at the priority tier, with no fallback', async () => {
+    const adapter = OpenAIAdapter.withFallback([{ type: 'openai' }])
+    const requests = recordRequests(adapter, ['Invalid API key'])
+    const steps = adapter.step(mockCtx, { ...flexConfig, serviceTier: 'priority' as const })
+
+    await expect(
+      (async () => {
+        for await (const _event of steps) {
+          // drain
+        }
+      })(),
+    ).rejects.toThrow('Invalid API key')
+
+    expect(requests.map((request) => request.service_tier)).toEqual(['priority'])
+  })
+
+  it('asks a tier function for each step', async () => {
+    const adapter = OpenAIAdapter.withFallback([{ type: 'openai' }])
+    const requests = recordRequests(adapter, ['Invalid API key', 'Invalid API key'])
+    const tiers: Array<'priority' | undefined> = ['priority', undefined]
+    const config = { ...flexConfig, serviceTier: () => tiers.shift() }
+
+    for (let step = 0; step < 2; step++) {
+      await expect(
+        (async () => {
+          for await (const _event of adapter.step(mockCtx, config)) {
+            // drain
+          }
+        })(),
+      ).rejects.toThrow('Invalid API key')
+    }
+
+    expect(requests.map((request) => request.service_tier)).toEqual(['priority', undefined])
+  })
+
   it('sends Azure the default-tier request only', async () => {
     const adapter = OpenAIAdapter.withFallback([
       { type: 'azure', baseUrl: 'https://azure.test', apiVersion: '2025-01-01' },

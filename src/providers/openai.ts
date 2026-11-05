@@ -229,7 +229,8 @@ export class OpenAIAdapter implements ModelAdapter {
 
   /**
    * A flex request first when the model asks for one, then the default tier if flex fails before
-   * any output.
+   * any output. A priority request, fixed or picked for this step, is sent once at the priority
+   * tier.
    */
   private async *executeTiers(
     ctx: RenderContext,
@@ -255,7 +256,14 @@ export class OpenAIAdapter implements ModelAdapter {
         if (emitted || signal?.aborted) throw error
       }
     }
-    return yield* this.executeStep(ctx, config, signal, endpoint)
+    const tier =
+      config.provider === 'openai' && typeof config.serviceTier === 'function'
+        ? config.serviceTier(ctx)
+        : config.provider === 'openai'
+          ? config.serviceTier
+          : undefined
+    const priority = tier === 'priority' && endpoint.type !== 'azure'
+    return yield* this.executeStep(ctx, config, signal, endpoint, priority ? 'priority' : undefined)
   }
 
   private async *executeStep(
@@ -263,7 +271,7 @@ export class OpenAIAdapter implements ModelAdapter {
     config: ProviderModelConfig,
     signal: AbortSignal | undefined,
     endpoint: OpenAIEndpoint,
-    serviceTier?: 'flex',
+    serviceTier?: 'flex' | 'priority',
   ): AsyncGenerator<StreamEvent, ModelStepResult> {
     const reasoning = config.provider === 'openai' ? config.reasoning : undefined
     const retryConfig = (config.provider === 'openai' ? config.retry : undefined) ?? {

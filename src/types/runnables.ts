@@ -71,9 +71,12 @@ export interface OpenAIModel extends BaseModelConfig {
   /**
    * `flex` asks OpenAI for flex processing: half the standard price, slower, and sometimes
    * unavailable. A flex request that fails before any output streams is sent again at the default
-   * tier on the same endpoint. Azure endpoints have no flex tier and get the default request.
+   * tier on the same endpoint. `priority` (OpenAI's "fast mode") costs more per token and is held
+   * to OpenAI's latency targets; it is sent as is, with no fallback. Azure endpoints have neither
+   * tier and get the default request. A function picks priority or the default tier for each step
+   * from its render context, such as a per-call feature flag in the session's state.
    */
-  serviceTier?: 'flex'
+  serviceTier?: 'flex' | 'priority' | ((ctx: RenderContext) => 'priority' | undefined)
   /**
    * Forwarded to the Responses API's `parallel_tool_calls`. Undefined leaves the provider's own
    * default (`true`) in place. Set `false` when a step that emits several same-named tool calls at
