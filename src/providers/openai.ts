@@ -283,6 +283,7 @@ export class OpenAIAdapter implements ModelAdapter {
     }
     let emitted = false
     const promptCache = config.provider === 'openai' ? config.promptCache : undefined
+    const verbosity = config.provider === 'openai' ? config.verbosity : undefined
     const { client, resolvedModel } = this.getOrCreateClient(endpoint, config.name)
 
     const createStream = async function* (): AsyncGenerator<StreamEvent, ModelStepResult> {
@@ -311,11 +312,12 @@ export class OpenAIAdapter implements ModelAdapter {
           reasoning,
           include: ['reasoning.encrypted_content'],
         }),
-        ...(useNativeStructuredOutput && {
-          text: {
-            format: serializeOutputSchema(ctx.outputSchema!),
-          },
-        }),
+        ...textOptions(
+          useNativeStructuredOutput
+            ? serializeOutputSchema(ctx.outputSchema!, ctx.outputJsonSchema)
+            : undefined,
+          verbosity,
+        ),
       } as Parameters<typeof client.responses.stream>[0]
       const stream = client.responses.stream(request)
 
@@ -395,10 +397,17 @@ export class OpenAIAdapter implements ModelAdapter {
 // Active OpenAI reasoning rejects temperature. Explicit effort none
 // allows sampling on models that support disabling reasoning.
 // Do not infer reasoning settings from a sampling parameter.
+function textOptions(format: unknown, verbosity: string | undefined) {
+  if (!format && !verbosity) return {}
+  return { text: { ...(format ? { format } : {}), ...(verbosity ? { verbosity } : {}) } }
+}
+
 function samplingOptions(config: ProviderModelConfig, reasoning: { effort?: string } | undefined) {
+  const samples = !reasoning || reasoning.effort === 'none'
+  const topP = config.provider === 'openai' ? config.topP : undefined
   return {
-    ...(config.temperature != null &&
-      (!reasoning || reasoning.effort === 'none') && { temperature: config.temperature }),
+    ...(config.temperature != null && samples && { temperature: config.temperature }),
+    ...(topP != null && samples && { top_p: topP }),
     ...(config.maxTokens != null && { max_output_tokens: config.maxTokens }),
   }
 }
@@ -819,12 +828,15 @@ export function parseResponse(
   }
 }
 
-export function serializeOutputSchema(schema: NonNullable<RenderContext['outputSchema']>) {
+export function serializeOutputSchema(
+  schema: NonNullable<RenderContext['outputSchema']>,
+  jsonSchema?: Record<string, unknown>,
+) {
   return {
     type: 'json_schema' as const,
     name: 'output_schema',
     strict: true,
-    schema: zodToToolSchema('output_schema', '', schema).parameters,
+    schema: jsonSchema ?? zodToToolSchema('output_schema', '', schema).parameters,
   }
 }
 

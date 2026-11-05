@@ -92,3 +92,58 @@ it('validates after coercion when the response contains a numeric string', async
     app.ask('Validate', { schema: z.object({ value: z.number().min(1) }), retries: 0 }),
   ).resolves.toEqual({ value: 2 })
 })
+
+async function requestSentWith(config: Parameters<typeof openai>[1]) {
+  const app = answerWith({ value: 2 })
+  const answer = globalThis.fetch
+  const requests: Record<string, unknown>[] = []
+  vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+    requests.push(JSON.parse(String(init.body)))
+    return answer(url, init)
+  })
+  await app.ask('Validate', {
+    schema: z.object({ value: z.number() }),
+    model: openai('synthetic', config),
+    retries: 0,
+  })
+  return requests[0]!
+}
+
+it('sends verbosity beside the output format', async () => {
+  const { text } = await requestSentWith({ verbosity: 'low' })
+  expect(text).toMatchObject({ verbosity: 'low', format: { type: 'json_schema' } })
+})
+
+it('sends top_p with temperature, and neither under active reasoning', async () => {
+  expect(await requestSentWith({ temperature: 0.2, topP: 0.95 })).toMatchObject({
+    temperature: 0.2,
+    top_p: 0.95,
+  })
+  const reasoning = await requestSentWith({
+    temperature: 0.2,
+    topP: 0.95,
+    reasoning: { effort: 'low' },
+  })
+  expect(reasoning).not.toHaveProperty('temperature')
+  expect(reasoning).not.toHaveProperty('top_p')
+})
+
+it('sends a given JSON Schema and still parses with the zod schema', async () => {
+  const jsonSchema = { $defs: {}, type: 'object', properties: { value: { type: 'number' } } }
+  const app = answerWith({ value: 2 })
+  const answer = globalThis.fetch
+  const formats: unknown[] = []
+  vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+    formats.push(JSON.parse(String(init.body)).text.format)
+    return answer(url, init)
+  })
+  const agent = app.agent({
+    name: 'exact',
+    model: openai('synthetic'),
+    context: [app.context.history({ scope: 'invocation' })],
+    output: { schema: z.object({ value: z.number().min(1) }), jsonSchema },
+  })
+  const result = await app.run(agent, { input: 'Validate' })
+  expect(formats[0]).toMatchObject({ schema: jsonSchema })
+  expect(result).toMatchObject({ status: 'completed', output: { value: { value: 2 } } })
+})
