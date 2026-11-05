@@ -29,7 +29,6 @@ function isObjectSchema(schema: unknown): boolean {
 interface OutputAnalysis {
   schema?: AnyZodSchema
   mode?: OutputMode
-  jsonSchema?: Record<string, unknown>
   outputTool?: FunctionTool
 }
 
@@ -40,7 +39,7 @@ function analyzeOutput(agent: Agent): OutputAnalysis {
     return { outputTool: output as FunctionTool }
   }
   if ('schema' in output && isObjectSchema(output.schema)) {
-    return { schema: output.schema, mode: output.mode ?? 'native', jsonSchema: output.jsonSchema }
+    return { schema: output.schema, mode: output.mode ?? 'native' }
   }
   return {}
 }
@@ -203,7 +202,7 @@ export function createRenderContext(
   agent: Agent,
   invocationId: string,
 ): RenderContext {
-  const { schema, mode, jsonSchema, outputTool } = analyzeOutput(agent)
+  const { schema, mode, outputTool } = analyzeOutput(agent)
   const { functionTools, providerTools } = partitionTools(agent.tools)
   return {
     invocationId,
@@ -216,7 +215,6 @@ export function createRenderContext(
     providerTools,
     outputSchema: schema,
     outputMode: mode,
-    outputJsonSchema: jsonSchema,
   }
 }
 
@@ -225,7 +223,7 @@ async function createRenderContextAsync(
   agent: Agent,
   invocationId: string,
 ): Promise<RenderContext> {
-  const { schema, mode, jsonSchema, outputTool } = analyzeOutput(agent)
+  const { schema, mode, outputTool } = analyzeOutput(agent)
   const { functionTools, providerTools } = await expandMCPTools(agent.tools)
   return {
     invocationId,
@@ -238,7 +236,6 @@ async function createRenderContextAsync(
     providerTools,
     outputSchema: schema,
     outputMode: mode,
-    outputJsonSchema: jsonSchema,
   }
 }
 

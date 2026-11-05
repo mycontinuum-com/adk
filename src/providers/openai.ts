@@ -313,9 +313,7 @@ export class OpenAIAdapter implements ModelAdapter {
           include: ['reasoning.encrypted_content'],
         }),
         ...textOptions(
-          useNativeStructuredOutput
-            ? serializeOutputSchema(ctx.outputSchema!, ctx.outputJsonSchema)
-            : undefined,
+          useNativeStructuredOutput ? serializeOutputSchema(ctx.outputSchema!) : undefined,
           verbosity,
         ),
       } as Parameters<typeof client.responses.stream>[0]
@@ -828,15 +826,12 @@ export function parseResponse(
   }
 }
 
-export function serializeOutputSchema(
-  schema: NonNullable<RenderContext['outputSchema']>,
-  jsonSchema?: Record<string, unknown>,
-) {
+export function serializeOutputSchema(schema: NonNullable<RenderContext['outputSchema']>) {
   return {
     type: 'json_schema' as const,
     name: 'output_schema',
     strict: true,
-    schema: jsonSchema ?? zodToToolSchema('output_schema', '', schema).parameters,
+    schema: zodToToolSchema('output_schema', '', schema).parameters,
   }
 }
 

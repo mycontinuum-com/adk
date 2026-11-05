@@ -322,7 +322,6 @@ export interface RenderContext<S extends StateSchema = StateSchema> {
   readonly providerTools: readonly ProviderTool[]
   readonly outputSchema?: AnyZodSchema
   readonly outputMode?: OutputMode
-  readonly outputJsonSchema?: Record<string, unknown>
   readonly toolChoice?: ToolChoice
   readonly allowedTools?: readonly string[]
 }
@@ -358,12 +357,6 @@ export interface OutputSchemaConfig<S extends StateSchema = StateSchema, T = unk
   key?: SessionKeyOf<S>
   schema: ZodSchema<T>
   mode?: OutputMode
-  /**
-   * The JSON Schema OpenAI's Responses API receives in place of `schema`'s conversion, for a caller
-   * that must hold a provider-visible schema exactly, since its shape can change what a model
-   * writes. `schema` still parses the answer. Other providers ignore it.
-   */
-  jsonSchema?: Record<string, unknown>
 }
 
 export type OutputConfig<S extends StateSchema = StateSchema, T = unknown> =

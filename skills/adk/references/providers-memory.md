@@ -324,7 +324,7 @@ Provider compatibility: [OpenAI](https://developers.openai.com/api/docs/guides/l
 
 Common provider options include `temperature`, `maxTokens`, and `retry`. Provider-specific options include:
 
-- OpenAI: `reasoning.effort`, `topP` (under temperature's rule), `verbosity`, `output.jsonSchema` (the exact schema it receives), explicit `promptCache` with prefixes marked by `app.context.cacheableUser(...)`.
+- OpenAI: `reasoning.effort`, `topP` (under temperature's rule), `verbosity`, explicit `promptCache` with prefixes marked by `app.context.cacheableUser(...)`.
 - Gemini: `thinkingConfig.thinkingBudget`, `thinkingConfig.thinkingLevel`, `thinkingConfig.includeThoughts`, `vertex`.
 - Claude: `thinking.budgetTokens`, `promptCache`, `vertex`.
 - Realtime: `voice`, `turnDetection`, `inputTranscription`, `noiseReduction`, `stt`, `tts`, `providerOptions`; `inputTranscription` and `noiseReduction` are OpenAI-only in current adapters.

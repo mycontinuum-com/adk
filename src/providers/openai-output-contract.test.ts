@@ -127,23 +127,3 @@ it('sends top_p with temperature, and neither under active reasoning', async () 
   expect(reasoning).not.toHaveProperty('temperature')
   expect(reasoning).not.toHaveProperty('top_p')
 })
-
-it('sends a given JSON Schema and still parses with the zod schema', async () => {
-  const jsonSchema = { $defs: {}, type: 'object', properties: { value: { type: 'number' } } }
-  const app = answerWith({ value: 2 })
-  const answer = globalThis.fetch
-  const formats: unknown[] = []
-  vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
-    formats.push(JSON.parse(String(init.body)).text.format)
-    return answer(url, init)
-  })
-  const agent = app.agent({
-    name: 'exact',
-    model: openai('synthetic'),
-    context: [app.context.history({ scope: 'invocation' })],
-    output: { schema: z.object({ value: z.number().min(1) }), jsonSchema },
-  })
-  const result = await app.run(agent, { input: 'Validate' })
-  expect(formats[0]).toMatchObject({ schema: jsonSchema })
-  expect(result).toMatchObject({ status: 'completed', output: { value: { value: 2 } } })
-})
