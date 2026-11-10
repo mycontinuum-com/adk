@@ -68,6 +68,8 @@ app.agent({
 
 Realtime models default `yields` to true. Text agents generally complete unless `yields` is set.
 
+A model reads the JSON Schema an `output` schema converts to, so its shape is part of the prompt. A zod schema used in several places is written out at each use. To define it once and reference it, write the schema with the ADK's own zod 4 (`import { z } from '@animahealth/adk'`) and give the shared piece an id: `z.object({ ... }).meta({ id: 'Item', description: '...' })`. A document coding stage whose item was repeated under six fields wrote search strings a third longer than with the item defined once. The ADK reads ids and descriptions from its own zod 4 instance, so a schema built with another copy of zod 4 loses them.
+
 Prefer agent-level `output` schemas over prompting for JSON. If output must be repaired after the fact, use parser/coercion utilities from the main entry rather than hand-written string parsing.
 
 ## Context And Tools

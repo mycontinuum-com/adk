@@ -1,4 +1,11 @@
 // App - primary API
+/**
+ * Zod 4, from the instance the ADK converts schemas with. A schema registered under an id (`.meta({
+ * id })`) is defined once in the provider's JSON Schema and referenced wherever it is used; the ADK
+ * reads ids and descriptions from this instance's registry, so a schema built with another copy of
+ * zod 4 loses them.
+ */
+export { z } from 'zod/v4'
 export { adk } from './api'
 export type {
   AdkConfig,
