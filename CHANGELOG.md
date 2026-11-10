@@ -31,6 +31,13 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## [Unreleased]
+
+### Added
+
+- `recordScorecard`, `checkoutOf`, `repositoryOf` and `Measure` exported from `@animahealth/adk/eval` — a tool outside the eval CLI records a scorecard through the same writer.
+- `recordScorecard` takes `measures` beside or instead of `cases`, and checks the file it writes with `parseScorecard`.
+
 ## [0.6.13] - 2026-11-05
 
 ### Added

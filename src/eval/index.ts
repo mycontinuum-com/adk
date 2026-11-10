@@ -95,6 +95,7 @@ export type {
 
 export type { AnyEvalCase, AnyEvalCaseResult, MixedEvalOptions, MixedEvalResult } from './types'
 
-// The scorecard file, for tools that read the scorecards a suite records.
-export { parseScorecard } from './scorecard'
-export type { Scorecard } from './scorecard'
+// The scorecard file, for tools that read the scorecards a suite records, or record one of measures
+// outside the eval CLI.
+export { checkoutOf, parseScorecard, recordScorecard, repositoryOf } from './scorecard'
+export type { Measure, Scorecard } from './scorecard'

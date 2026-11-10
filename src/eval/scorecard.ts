@@ -237,26 +237,43 @@ export async function readScorecard(file: string): Promise<Scorecard | undefined
   return recorded === undefined ? undefined : parseScorecard(recorded, file)
 }
 
-/** Atomically replaces the scorecard at `file` with `run`, keeping nothing of the earlier one. */
+/**
+ * An aggregate a scorecard holds when its cases cannot be named: a count out of runs, or a value
+ * over `n`.
+ */
+export type Measure = PassCount | { value: number; n: number }
+
+/**
+ * Atomically replaces the scorecard at `file` with `run`, keeping nothing of the earlier one. A run
+ * gives `cases`, `measures` or both: a suite whose answer key comes from production data records
+ * `measures` only.
+ */
 export async function recordScorecard(
   file: string,
   run: Pick<Scorecard, 'repo' | 'commit' | 'runner' | 'models' | 'judges' | 'costUsd'> & {
     repeat: number
-    cases: ReadonlyMap<string, PassCount>
+    cases?: ReadonlyMap<string, PassCount>
+    measures?: ReadonlyMap<string, Measure>
   },
 ): Promise<void> {
-  const scorecard: Scorecard = {
-    version: 2,
-    recorded: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
-    repo: run.repo,
-    commit: run.commit,
-    runner: run.runner,
-    models: run.models,
-    ...(run.judges !== undefined && { judges: run.judges }),
-    repeat: run.repeat,
-    ...(run.costUsd !== undefined && { costUsd: run.costUsd }),
-    cases: sortedByKey(run.cases),
-  }
+  if (run.cases === undefined && run.measures === undefined)
+    throw new Error('A scorecard needs cases, measures or both')
+  const scorecard: Scorecard = parseScorecard(
+    {
+      version: 2,
+      recorded: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+      repo: run.repo,
+      commit: run.commit,
+      runner: run.runner,
+      models: run.models,
+      ...(run.judges !== undefined && { judges: run.judges }),
+      repeat: run.repeat,
+      ...(run.costUsd !== undefined && { costUsd: run.costUsd }),
+      ...(run.cases !== undefined && { cases: sortedByKey(run.cases) }),
+      ...(run.measures !== undefined && { measures: sortedByKey(run.measures) }),
+    },
+    file,
+  )
   await mkdir(dirname(file), { recursive: true })
   // Two runs that record at once would write and rename one shared temporary file.
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`

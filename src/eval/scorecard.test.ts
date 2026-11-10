@@ -40,12 +40,13 @@ function runOf(repeat: number): Run {
 }
 
 /** The scorecard that recording `run` writes, whenever it was recorded. */
-function scorecardOf({ cases, ...run }: Run) {
+function scorecardOf({ cases, measures, ...run }: Run) {
   return {
     version: 2,
     recorded: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/),
     ...run,
-    cases: Object.fromEntries(cases),
+    ...(cases && { cases: Object.fromEntries(cases) }),
+    ...(measures && { measures: Object.fromEntries(measures) }),
   }
 }
 
@@ -164,6 +165,26 @@ describe('recordScorecard', () => {
       'cases',
     ])
     expect(Object.keys(written.cases)).toEqual(['a', 'b'])
+  })
+
+  it('writes measures alone, sorted, and refuses a run with neither cases nor measures', async () => {
+    const file = join(await mkdtemp(join(tmpdir(), 'adk-scorecard-')), NAME)
+    const run = {
+      ...WRITER,
+      repeat: 2,
+      measures: new Map([
+        ['net wanted per 100', { value: -49.2, n: 679 }],
+        ['added found', { passed: 3, runs: 7 }],
+      ]),
+    }
+    await recordScorecard(file, run)
+    const written = JSON.parse(await readFile(file, 'utf8'))
+    expect(written).toEqual(scorecardOf(run))
+    expect(Object.keys(written)).not.toContain('cases')
+    expect(Object.keys(written.measures)).toEqual(['added found', 'net wanted per 100'])
+    await expect(recordScorecard(file, { ...WRITER, repeat: 1 })).rejects.toThrow(
+      'A scorecard needs cases, measures or both',
+    )
   })
 
   it('gives two runs that record one path at once each a whole write, and leaves no temporary file', async () => {
