@@ -37,6 +37,7 @@ Migration section:
 
 - `recordScorecard`, `checkoutOf`, `repositoryOf` and `Measure` exported from `@animahealth/adk/eval` — a tool outside the eval CLI records a scorecard through the same writer.
 - `recordScorecard` takes `measures` beside or instead of `cases`, and checks the file it writes with `parseScorecard`.
+- `provideGenAI` and `GeminiAdapter` exported from `@animahealth/adk/gemini` — a caller hands the subpath's Gemini provider its imported `@google/genai` and passes that subpath's `GeminiAdapter` in `adapters`, so a bundle with no `node_modules` (a Lambda) can reach Gemini. The root entry builds its own copy of the provider, which `provideGenAI` does not reach.
 
 ## [0.6.13] - 2026-11-05
 

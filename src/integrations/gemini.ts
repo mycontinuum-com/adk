@@ -27,4 +27,4 @@ export const gemini: GeminiFactory = Object.assign(
 )
 
 export type { GeminiModel } from '../types/runnables'
-export { serializeToolConfig } from '../providers/gemini'
+export { GeminiAdapter, provideGenAI, serializeToolConfig } from '../providers/gemini'

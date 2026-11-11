@@ -11,6 +11,17 @@ import { normalizeSchema } from './normalizeSchema'
 import { zodToToolSchema } from './zodToJsonSchema'
 
 let _genai: typeof import('@google/genai')
+
+/**
+ * Gives the Gemini provider the SDK module, for a bundle that carries `@google/genai` but cannot
+ * follow the provider's runtime require of it, such as a Lambda bundled with no `node_modules`.
+ *
+ * @param genai - The `@google/genai` module, imported by the caller.
+ */
+export function provideGenAI(genai: typeof import('@google/genai')): void {
+  _genai = genai
+}
+
 function loadGenAI(): typeof import('@google/genai') {
   if (_genai) return _genai
   try {
