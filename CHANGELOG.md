@@ -38,6 +38,12 @@ Migration section:
 - `recordScorecard`, `checkoutOf`, `repositoryOf` and `Measure` exported from `@animahealth/adk/eval` — a tool outside the eval CLI records a scorecard through the same writer.
 - `recordScorecard` takes `measures` beside or instead of `cases`, and checks the file it writes with `parseScorecard`.
 - `provideGenAI` and `GeminiAdapter` exported from `@animahealth/adk/gemini` — a caller hands the subpath's Gemini provider its imported `@google/genai` and passes that subpath's `GeminiAdapter` in `adapters`, so a bundle with no `node_modules` (a Lambda) can reach Gemini. The root entry builds its own copy of the provider, which `provideGenAI` does not reach.
+- `ClaudeModel.effort` — `'low'` to `'max'`, sent as `output_config.effort`; the newest Claude models take it in place of a thinking budget.
+
+### Changed
+
+- The Claude adapter sends an agent's output schema as Claude's JSON output format (`output_config.format`), leaving out the constraints Claude rejects; it sent none, so a schema-bound answer came back as free text. Where a Vertex project's policy refuses structured outputs, it sends that model the schema in its system prompt instead.
+- The Claude adapter reaches Vertex's `eu` and `us` multi-regions on their own hosts (`aiplatform.<location>.rep.googleapis.com`), which the SDK does not build.
 
 ## [0.6.13] - 2026-11-05
 

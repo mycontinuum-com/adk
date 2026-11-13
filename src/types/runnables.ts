@@ -113,6 +113,11 @@ export interface ClaudeModel extends BaseModelConfig {
     budgetTokens?: number
   }
   /**
+   * How much the model thinks and spends, sent as `output_config.effort`. Models from Claude 4.6 on
+   * take it in place of a thinking budget, which the newest reject.
+   */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  /**
    * Vertex Claude prompt caching configuration.
    *
    * Vertex supports Anthropic prompt caching via `cache_control` blocks, with TTL defaulting to 5

@@ -86,6 +86,14 @@ claude('claude-sonnet-4-5', {
 
 Enable Claude models in Google Cloud Model Garden and grant Vertex AI permissions.
 
+Each model is enabled for a project one at a time, and a newer one may be served only on the `global`
+and multi-region (`eu`, `us`) routes; the adapter sends `eu` and `us` to their own hosts. `effort`
+on a Claude model is sent as `output_config.effort`, which the newest models take in place of a
+thinking budget. An agent's output schema goes as Claude's JSON output format; where a project's
+organisation policy refuses structured outputs (`constraints/vertexai.allowedPartnerModelFeatures`),
+the adapter sends that model the schema in its system prompt instead. The adapter still signs in
+from a credentials file only, and marks only the system prompt for caching.
+
 ## Self-hosted Chat Completions
 
 Connect an OpenAI-compatible Chat Completions endpoint through its own adapter. The native

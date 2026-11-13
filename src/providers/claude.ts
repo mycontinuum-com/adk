@@ -110,6 +110,66 @@ interface ClaudeTool {
   }
 }
 
+// Vertex serves the EU and US multi-regions on their own hosts, which the SDK does not build
+const MULTI_REGIONS = new Set(['eu', 'us'])
+
+// What Claude's JSON outputs cannot enforce; the ADK still validates the answer against the schema
+const UNENFORCEABLE = new Set([
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+  'minLength',
+  'maxLength',
+  'maxItems',
+])
+
+// Keys whose value maps names to schemas: a field may be named like a constraint
+const SCHEMA_MAPS = new Set(['properties', 'patternProperties', '$defs', 'definitions'])
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+
+/**
+ * A JSON schema with the constraints Claude's JSON outputs reject left out, at every depth. Only a
+ * schema's own keywords go: the field names of a `properties` map stay, whatever they are called.
+ */
+export function claudeOutputSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(claudeOutputSchema)
+  if (!isRecord(schema)) return schema
+  return Object.fromEntries(
+    Object.entries(schema).flatMap(([key, value]): [string, unknown][] => {
+      if (UNENFORCEABLE.has(key)) return []
+      if (key === 'minItems' && !(typeof value === 'number' && value <= 1)) return []
+      if (SCHEMA_MAPS.has(key) && isRecord(value))
+        return [
+          [
+            key,
+            Object.fromEntries(
+              Object.entries(value).map(([name, field]) => [name, claudeOutputSchema(field)]),
+            ),
+          ],
+        ]
+      return [[key, claudeOutputSchema(value)]]
+    }),
+  )
+}
+
+/**
+ * What the Vertex client is built with: the project and location, and for the `eu` and `us`
+ * multi-regions their own host.
+ */
+export function vertexClientOptions(vertex: Pick<ClaudeModel['vertex'], 'project' | 'location'>) {
+  return {
+    projectId: vertex.project,
+    region: vertex.location,
+    ...(MULTI_REGIONS.has(vertex.location) && {
+      baseURL: `https://aiplatform.${vertex.location}.rep.googleapis.com/v1`,
+    }),
+  }
+}
+
 function createClientKey(config: ClaudeModel['vertex']): string {
   const creds = config.credentials ?? 'env'
   return `${config.project}:${config.location}:${creds}`
@@ -129,6 +189,9 @@ function loadAnthropicVertex(): typeof AnthropicVertex {
 
 export class ClaudeAdapter implements ModelAdapter {
   private clientCache = new Map<string, AnthropicVertex>()
+  // Each project, location and model that refused structured outputs, which then gets the schema
+  // in its prompt
+  private structuredOutputsRefused = new Set<string>()
 
   private getClient(modelConfig: ProviderModelConfig): AnthropicVertex {
     if (modelConfig.provider !== 'claude') {
@@ -152,10 +215,7 @@ Either:
       }
       process.env.GOOGLE_APPLICATION_CREDENTIALS = credentials
       const AnthropicVertexCtor = loadAnthropicVertex()
-      client = new AnthropicVertexCtor({
-        projectId: modelConfig.vertex.project,
-        region: modelConfig.vertex.location,
-      })
+      client = new AnthropicVertexCtor(vertexClientOptions(modelConfig.vertex))
       this.clientCache.set(cacheKey, client)
     }
 
@@ -173,6 +233,18 @@ Either:
 
     const retryConfig = config.retry
     const thinkingConfig = config.thinking
+    const refusedModels = this.structuredOutputsRefused
+    const refusalKey = `${config.vertex.project}:${config.vertex.location}:${config.name}`
+    // An agent's output schema, as Claude's JSON outputs, so its answer parses
+    const outputFormat =
+      ctx.outputSchema && ctx.outputMode !== 'prompt'
+        ? {
+            type: 'json_schema' as const,
+            schema: claudeOutputSchema(
+              zodToToolSchema('output', '', normalizeSchema(ctx.outputSchema, 'output')).parameters,
+            ),
+          }
+        : undefined
     const promptCache = normalizePromptCache(config)
     const { messages, system } = serializeContext(ctx, { promptCache })
     const client = this.getClient(config)
@@ -202,7 +274,10 @@ Either:
         toolChoice = 'auto'
       }
 
-      const buildRequest = (overrideSystem?: typeof system) => ({
+      const buildRequest = (
+        overrideSystem?: typeof system,
+        format: typeof outputFormat | null = outputFormat,
+      ) => ({
         model: config.name,
         max_tokens: config.maxTokens ?? 4096,
         // Anthropic rejects any temperature other than the default (1) when
@@ -225,24 +300,40 @@ Either:
             budget_tokens: thinkingConfig.budgetTokens ?? 1024,
           },
         }),
+        // The installed SDK's types predate some effort levels and type a schema as a record
+        ...((config.effort || format) && {
+          output_config: {
+            ...(config.effort && { effort: config.effort }),
+            ...(format && { format }),
+          } as Parameters<typeof client.messages.create>[0]['output_config'],
+        }),
         stream: true as const,
       })
 
+      // A project may refuse structured outputs, explicit caching or both, in either order, so each
+      // refusal changes the one request until it is accepted or refused for another reason
       const createWithFallback = async () => {
-        try {
-          return await client.messages.create(buildRequest())
-        } catch (err) {
-          // If explicit prompt caching is disabled for this Vertex project (or unsupported),
-          // retry once without cache_control to avoid breaking existing users when caching
-          // is enabled by default.
-          if (promptCache.enabled && isPromptCachingUnsupportedError(err)) {
-            const fallbackSystem =
-              typeof system === 'string'
-                ? system
-                : system?.map((b) => ({ type: 'text' as const, text: b.text }))
-            return await client.messages.create(buildRequest(fallbackSystem))
+        let schemaInPrompt = Boolean(outputFormat) && refusedModels.has(refusalKey)
+        let cacheOff = false
+        for (;;) {
+          const base = cacheOff ? uncachedSystem(system) : system
+          try {
+            return await client.messages.create(
+              buildRequest(
+                schemaInPrompt ? systemWithSchema(base, outputFormat?.schema) : base,
+                schemaInPrompt ? null : outputFormat,
+              ),
+            )
+          } catch (err) {
+            if (outputFormat && !schemaInPrompt && isStructuredOutputsRefusedError(err)) {
+              refusedModels.add(refusalKey)
+              schemaInPrompt = true
+            } else if (promptCache.enabled && !cacheOff && isPromptCachingUnsupportedError(err)) {
+              cacheOff = true
+            } else {
+              throw err
+            }
           }
-          throw err
         }
       }
 
@@ -374,6 +465,18 @@ function normalizePromptCache(modelConfig: ClaudeModel): PromptCacheConfig {
   }
 }
 
+/**
+ * Whether Vertex refused structured outputs, as a project's organisation policy can
+ * (`constraints/vertexai.allowedPartnerModelFeatures`) for a partner model.
+ */
+function isStructuredOutputsRefusedError(error: unknown): boolean {
+  const message =
+    error && typeof error === 'object' && 'message' in error
+      ? String((error as { message?: unknown }).message ?? '')
+      : ''
+  return /structured_outputs|structured outputs/i.test(message)
+}
+
 function isPromptCachingUnsupportedError(error: unknown): boolean {
   const message =
     error && typeof error === 'object' && 'message' in error
@@ -465,6 +568,24 @@ function serializeSystem(
       },
     }),
   }))
+}
+
+/** The output schema as an instruction, for a project whose policy refuses structured outputs. */
+function systemWithSchema(
+  system: ReturnType<typeof serializeSystem>,
+  schema: unknown,
+): string | TextBlockParam[] {
+  const instruction = `Answer with one JSON object, and nothing else, that matches this JSON schema:\n${JSON.stringify(schema)}`
+  if (!system) return instruction
+  if (typeof system === 'string') return `${system}\n\n${instruction}`
+  return [...system, { type: 'text' as const, text: instruction }]
+}
+
+/** The system prompt without cache_control, for a project with explicit caching off. */
+function uncachedSystem(system: ReturnType<typeof serializeSystem>) {
+  return typeof system === 'string'
+    ? system
+    : system?.map((block) => ({ type: 'text' as const, text: block.text }))
 }
 
 export function serializeContext(

@@ -19,6 +19,8 @@ import {
   serializeTools,
   serializeToolChoice,
   ClaudeAdapter,
+  claudeOutputSchema,
+  vertexClientOptions,
 } from './claude'
 import { calculateCost, parsePricingCatalog } from './pricing'
 
@@ -661,17 +663,21 @@ describe('Claude provider', () => {
     })
   })
 
-  type CapturedClaudeRequest = { temperature?: number; thinking?: unknown }
+  type CapturedClaudeRequest = { temperature?: number; thinking?: unknown; output_config?: unknown }
 
   /**
    * Drives the adapter far enough to capture the request it builds. The request is assembled before
    * the response stream is read, so a stub that captures it and then throws a sentinel avoids
    * mocking Anthropic's event stream entirely.
    */
-  async function captureClaudeRequest(config: {
-    temperature?: number
-    thinking?: { budgetTokens?: number }
-  }): Promise<CapturedClaudeRequest> {
+  async function captureClaudeRequest(
+    config: {
+      temperature?: number
+      thinking?: { budgetTokens?: number }
+      effort?: 'low' | 'medium'
+    },
+    rendered: Partial<RenderContext> = {},
+  ): Promise<CapturedClaudeRequest> {
     const adapter = new ClaudeAdapter()
     let captured: CapturedClaudeRequest = {}
     const SENTINEL = '__captured__'
@@ -694,6 +700,7 @@ describe('Claude provider', () => {
       agentName: TEST_AGENT,
       agent: {},
       session: {},
+      ...rendered,
     } as unknown as RenderContext
 
     const stream = adapter.step(ctx, {
@@ -726,6 +733,245 @@ describe('Claude provider', () => {
       // so the adapter must omit it rather than fail the request.
       expect(request.thinking).toBeDefined()
       expect(request).not.toHaveProperty('temperature')
+    })
+  })
+
+  describe('Claude effort and output schema', () => {
+    it('sends the effort as output_config.effort, and no output_config without one', async () => {
+      expect((await captureClaudeRequest({ effort: 'medium' })).output_config).toStrictEqual({
+        effort: 'medium',
+      })
+      expect(await captureClaudeRequest({})).not.toHaveProperty('output_config')
+    })
+
+    it("sends an agent's output schema as Claude's JSON output format, without the constraints it rejects", async () => {
+      const outputSchema = z.object({
+        codes: z.array(z.object({ code: z.string().min(1).max(20), note: z.string().nullable() })),
+      })
+      const request = await captureClaudeRequest(
+        { effort: 'low' },
+        { outputSchema, outputMode: 'native' },
+      )
+      expect(request.output_config).toMatchObject({
+        effort: 'low',
+        format: {
+          type: 'json_schema',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['codes'],
+            properties: { codes: { type: 'array' } },
+          },
+        },
+      })
+      expect(JSON.stringify(request.output_config)).not.toMatch(/minLength|maxLength/)
+      const prompted = await captureClaudeRequest({}, { outputSchema, outputMode: 'prompt' })
+      expect(prompted).not.toHaveProperty('output_config')
+    })
+
+    it('puts the schema in the system prompt for a model whose project refuses structured outputs, and keeps doing so', async () => {
+      const adapter = new ClaudeAdapter()
+      const requests: { system?: unknown; output_config?: unknown }[] = []
+      const SENTINEL = '__captured__'
+      Object.assign(adapter, {
+        getClient: () => ({
+          messages: {
+            create: (request: { output_config?: { format?: unknown } }) => {
+              requests.push(request)
+              if (request.output_config?.format)
+                throw new Error(
+                  '400 Organization Policy constraint constraints/vertexai.allowedPartnerModelFeatures violated: disallowed feature structured_outputs',
+                )
+              throw new Error(SENTINEL)
+            },
+          },
+        }),
+      })
+      const ctx = {
+        events: [
+          { type: 'system', text: 'Read the letter.' },
+          { type: 'user', text: 'hi' },
+        ],
+        functionTools: [],
+        invocationId: TEST_INV_ID,
+        agentName: TEST_AGENT,
+        agent: {},
+        session: {},
+        outputSchema: z.object({ code: z.string() }),
+        outputMode: 'native',
+      } as unknown as RenderContext
+      const run = async () => {
+        const stream = adapter.step(ctx, {
+          provider: 'claude',
+          name: 'claude-haiku-5-5',
+          vertex: { project: 'p', location: 'eu' },
+          promptCache: { enabled: false },
+        } as never)
+        await expect(
+          (async () => {
+            let next = await stream.next()
+            while (!next.done) next = await stream.next()
+          })(),
+        ).rejects.toThrow(SENTINEL)
+      }
+      await run()
+      expect(requests).toHaveLength(2)
+      expect(requests[1]).not.toHaveProperty('output_config')
+      expect(String(requests[1]?.system)).toMatch(
+        /^Read the letter\.\n\nAnswer with one JSON object/,
+      )
+      expect(String(requests[1]?.system)).toContain('"additionalProperties":false')
+      await run()
+      // The refusal is remembered, so the next call goes straight to the prompt
+      expect(requests).toHaveLength(3)
+      expect(requests[2]).not.toHaveProperty('output_config')
+    })
+
+    it('keeps a field named like a constraint, and leaves out the constraints inside it', () => {
+      expect(
+        claudeOutputSchema({
+          type: 'object',
+          additionalProperties: false,
+          required: ['minimum', 'maxLength'],
+          properties: {
+            minimum: { type: 'number', minimum: 0 },
+            maxLength: { type: 'string', maxLength: 9 },
+          },
+          $defs: { maxItems: { type: 'array', maxItems: 3, items: { type: 'string' } } },
+        }),
+      ).toStrictEqual({
+        type: 'object',
+        additionalProperties: false,
+        required: ['minimum', 'maxLength'],
+        properties: { minimum: { type: 'number' }, maxLength: { type: 'string' } },
+        $defs: { maxItems: { type: 'array', items: { type: 'string' } } },
+      })
+    })
+
+    it('reaches the eu and us multi-regions on their own hosts, and any other location as the SDK does', () => {
+      expect(vertexClientOptions({ project: 'p', location: 'eu' })).toStrictEqual({
+        projectId: 'p',
+        region: 'eu',
+        baseURL: 'https://aiplatform.eu.rep.googleapis.com/v1',
+      })
+      expect(vertexClientOptions({ project: 'p', location: 'us' })).toMatchObject({
+        baseURL: 'https://aiplatform.us.rep.googleapis.com/v1',
+      })
+      for (const location of ['global', 'europe-west1'])
+        expect(vertexClientOptions({ project: 'p', location })).toStrictEqual({
+          projectId: 'p',
+          region: location,
+        })
+    })
+
+    it('remembers a refusal for its own project only, and recovers when a project refuses caching too', async () => {
+      const STRUCTURED =
+        '400 constraints/vertexai.allowedPartnerModelFeatures: disallowed feature structured_outputs'
+      const CACHING = '400 explicit caching is disabled for this project'
+      const SENTINEL = '__captured__'
+      const run = async (options: { project: string; refuses: string[] }) => {
+        const adapter = new ClaudeAdapter()
+        const requests: { system?: unknown; output_config?: { format?: unknown } }[] = []
+        Object.assign(adapter, {
+          getClient: () => ({
+            messages: {
+              create: (request: { system?: unknown; output_config?: { format?: unknown } }) => {
+                requests.push(request)
+                if (options.refuses.includes('structured') && request.output_config?.format)
+                  throw new Error(STRUCTURED)
+                if (
+                  options.refuses.includes('caching') &&
+                  JSON.stringify(request.system).includes('cache_control')
+                )
+                  throw new Error(CACHING)
+                throw new Error(SENTINEL)
+              },
+            },
+          }),
+        })
+        return { adapter, requests }
+      }
+      const ctx = {
+        events: [
+          { type: 'system', text: 'Read the letter.' },
+          { type: 'user', text: 'hi' },
+        ],
+        functionTools: [],
+        invocationId: TEST_INV_ID,
+        agentName: TEST_AGENT,
+        agent: {},
+        session: {},
+        outputSchema: z.object({ code: z.string() }),
+        outputMode: 'native',
+      } as unknown as RenderContext
+      const step = async (adapter: ClaudeAdapter, project: string) => {
+        const stream = adapter.step(ctx, {
+          provider: 'claude',
+          name: 'claude-haiku-5-5',
+          vertex: { project, location: 'eu' },
+        } as never)
+        await expect(
+          (async () => {
+            let next = await stream.next()
+            while (!next.done) next = await stream.next()
+          })(),
+        ).rejects.toThrow(SENTINEL)
+      }
+
+      const both = await run({ project: 'a', refuses: ['structured', 'caching'] })
+      await step(both.adapter, 'a')
+      const last = both.requests.at(-1)
+      expect(last).not.toHaveProperty('output_config')
+      expect(JSON.stringify(last?.system)).not.toContain('cache_control')
+      expect(JSON.stringify(last?.system)).toContain('Answer with one JSON object')
+
+      // The adapter remembers project a's refusal, and still sends project b the format
+      both.requests.length = 0
+      Object.assign(both.adapter, {
+        getClient: () => ({
+          messages: {
+            create: (request: { system?: unknown; output_config?: { format?: unknown } }) => {
+              both.requests.push(request)
+              throw new Error(SENTINEL)
+            },
+          },
+        }),
+      })
+      await step(both.adapter, 'b')
+      expect(both.requests[0]?.output_config).toMatchObject({ format: { type: 'json_schema' } })
+      await step(both.adapter, 'a')
+      expect(both.requests[1]).not.toHaveProperty('output_config')
+    })
+
+    it('leaves out numeric, length and long array constraints at every depth, and keeps the rest', () => {
+      expect(
+        claudeOutputSchema({
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            score: { type: 'number', minimum: 0, maximum: 1 },
+            tags: {
+              type: 'array',
+              minItems: 2,
+              maxItems: 5,
+              items: { type: 'string', maxLength: 9 },
+            },
+            first: {
+              type: 'array',
+              minItems: 1,
+              items: { anyOf: [{ type: 'string', minLength: 1 }] },
+            },
+          },
+        }),
+      ).toStrictEqual({
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          score: { type: 'number' },
+          tags: { type: 'array', items: { type: 'string' } },
+          first: { type: 'array', minItems: 1, items: { anyOf: [{ type: 'string' }] } },
+        },
+      })
     })
   })
 
