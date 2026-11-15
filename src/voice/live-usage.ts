@@ -2,6 +2,7 @@ import type { ModelCallSource } from '../core/model-calls'
 import type { ModelEndEvent, ModelStartEvent, ModelUsage } from '../types/events'
 import type { LiveVoiceSessionUsage } from './live-types'
 
+import { cutOffUsage } from '../context/build'
 import { calculateSessionCost, type PricingCatalog } from '../providers/pricing'
 
 interface Connection {
@@ -143,15 +144,10 @@ export class ModelCallLedger {
       .filter((call) => call.source === source)
       .map((call) =>
         !call.end || (!call.end.usage && call.end.finishReason === 'error')
-          ? estimatedUsage(call.start)
+          ? cutOffUsage(call.start)
           : call.end.usage,
       )
   }
-}
-
-function estimatedUsage(start: ModelStartEvent | undefined): ModelUsage | undefined {
-  const input = start?.estimatedInput
-  return input && { ...input, outputTokens: 0, estimated: true }
 }
 
 /**

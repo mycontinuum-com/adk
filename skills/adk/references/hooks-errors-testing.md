@@ -44,7 +44,7 @@ Interception hooks:
 
 A hook can answer an easy step itself and leave the rest to the model. Which hook to use depends on whether the answer has to be waited for:
 
-- `beforeModel` runs first, and the model call waits for it. Use it when the hook can tell at once, from state or the transcript. A step it returns means no model call is made.
+- `beforeModel` runs first, and the model call waits for it. Use it when the hook can tell at once, from state or the transcript. A step it returns means no model call is made, so the step's `model_end` reports zero tokens unless the step carries its own `usage`.
 - `duringModel` runs while the model call is already in flight. Use it when the answer takes time, such as a call to [`app.decide`](runnables.md#one-shot-calls). A step the hook declines then starts no later than it would with no hook, where a `beforeModel` hook would delay it by the time the decision took.
 
 Ask a fast closed question with `app.decide` and return a tool call only when the answer is confident:
@@ -88,7 +88,7 @@ Limits:
 - Only the step's first model attempt is raced. A model error while the hook is still working goes to the error handlers as usual, the events held from that attempt are dropped, and a retry runs without the hook.
 - The hook's `signal` aborts once its answer can no longer be used: the model's step completed or failed first, or the caller aborted. It does not abort when the hook answers or declines in time. Pass it to whatever the hook waits on, as the example passes it to `app.decide`, so a hook that has lost stops there. `ctx.signal` is the run's signal and does not tell the hook this. A hook that ignores `signal` runs on. Its answer is ignored, but what it does on the way still happens, late, and the next step asks it again while that call is in flight.
 - `duringModel` cannot transfer. Return a runnable from `beforeModel` or `afterModel` for that.
-- The provider may bill the cancelled call, and the ADK never learns its usage. The step's `model_end` has no usage, so the run's cost reads `unavailable`, not free.
+- The provider may bill the cancelled call, and the ADK never learns its usage. Unless the hook's step carries its own `usage`, the step's `model_end` counts the call at the input estimated when it started (`model_start` `estimatedInput`), with no output and `estimated: true`, so the run's cost reads `estimated`, not free.
 
 Observation hooks:
 

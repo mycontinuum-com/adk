@@ -94,6 +94,15 @@ export function estimateTokens(characters: number): number {
   return Math.ceil(characters / 4)
 }
 
+/**
+ * What a model call cut off before it reported usage spent: the input estimated when it started,
+ * and no output. `undefined` when it started without an estimate.
+ */
+export function cutOffUsage(start: ModelStartEvent | undefined): ModelUsage | undefined {
+  const input = start?.estimatedInput
+  return input && { ...input, outputTokens: 0, estimated: true }
+}
+
 export function createStartEvent(
   ctx: RenderContext,
   stepIndex: number,

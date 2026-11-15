@@ -24,7 +24,9 @@ import type {
   ParsedOutput,
   MediaPart,
   ModelAdapter,
+  ModelStartEvent,
   ModelStepResult,
+  ModelUsage,
 } from '../types'
 import type { Session } from '../types'
 import type { InternalRunConfig } from '../types/runtime'
@@ -34,6 +36,7 @@ import {
   buildContext,
   createStartEvent,
   createEndEvent,
+  cutOffUsage,
   offeredFunctionTools,
 } from '../context/build'
 import { DEFAULT_MAX_STEPS, MAX_TOOL_RETRY_ATTEMPTS } from '../core/constants'
@@ -643,6 +646,20 @@ interface ModelStepOutcome {
   synthetic?: boolean
 }
 
+/**
+ * A step a hook answered in place of the model, with what the model call spent: the step's own
+ * usage when the hook gives one, else `spent`.
+ */
+function answeredStep({
+  step,
+  spent,
+}: {
+  step: ModelStepResult
+  spent: ModelUsage | undefined
+}): ModelStepResult {
+  return step.usage || !spent ? step : { ...step, usage: spent }
+}
+
 async function* modelStepBesideHook(
   callModel: (signal: AbortSignal) => ReturnType<ModelAdapter['step']>,
   askHook: (signal: AbortSignal) => Promise<ModelStepResult | void> | undefined,
@@ -687,6 +704,7 @@ async function* modelStepBesideHook(
 async function* executeModelStep(
   mctx: ModelStepContext,
   renderCtx: import('../types').RenderContext,
+  start: ModelStartEvent,
   stepStartTime: number,
   signal: AbortSignal,
 ): AsyncGenerator<StreamEvent, ModelStepOutcome> {
@@ -705,7 +723,12 @@ async function* executeModelStep(
     }
   }
   if (skipModel) {
-    return { stepResult: skipModel, shouldAbort: false, synthetic: true }
+    // No request was sent, so the step spent nothing.
+    return {
+      stepResult: answeredStep({ step: skipModel, spent: { inputTokens: 0, outputTokens: 0 } }),
+      shouldAbort: false,
+      synthetic: true,
+    }
   }
 
   let modelAttempt = 0
@@ -723,7 +746,14 @@ async function* executeModelStep(
           modelAttempt === 1 ? composedHook.duringModel?.(ctx, renderCtx, hookSignal) : undefined,
         signal,
       )
-      if (raced.synthetic) return { stepResult: raced.step, shouldAbort: false, synthetic: true }
+      if (raced.synthetic) {
+        // The request was sent and cut off before it reported usage.
+        return {
+          stepResult: answeredStep({ step: raced.step, spent: cutOffUsage(start) }),
+          shouldAbort: false,
+          synthetic: true,
+        }
+      }
       stepResult = raced.step
       if (!stepResult) {
         throw new Error('No step result from adapter')
@@ -1351,6 +1381,7 @@ async function* runAgentIteration(
   const { stepResult, modelError, shouldAbort, transfer, synthetic } = yield* executeModelStep(
     mctx,
     renderCtx,
+    startEvent,
     stepStartTime,
     scope.effectiveSignal,
   )

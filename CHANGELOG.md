@@ -44,6 +44,7 @@ Migration section:
 
 - The Claude adapter sends an agent's output schema as Claude's JSON output format (`output_config.format`), leaving out the constraints Claude rejects; it sent none, so a schema-bound answer came back as free text. Where a Vertex project's policy refuses structured outputs, it sends that model the schema in its system prompt instead.
 - The Claude adapter reaches Vertex's `eu` and `us` multi-regions on their own hosts (`aiplatform.<location>.rep.googleapis.com`), which the SDK does not build.
+- A step a `beforeModel` hook answers ends with zero usage, and a model call cut off by a `duringModel` hook's answer ends with the input estimated at its start (`estimated: true`, no output). Both ended without usage, which made the cost of the run, and of every GPT Live call that had one, `unavailable`. A step the hook gives its own `usage` keeps it.
 
 ## [0.6.13] - 2026-11-05
 

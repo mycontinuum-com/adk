@@ -1,8 +1,16 @@
 import { realtime } from '@livekit/agents-plugin-openai'
+import { AsyncLocalStorage } from 'node:async_hooks'
 
+import type { Hook } from '../hook/types'
+import type { ModelAdapter, ModelStartEvent, ModelStepResult, RenderContext } from '../types'
+
+import { BaseRunner } from '../core'
+import { createEventId } from '../core/constants'
+import { installModelCallContext, observeModelCalls } from '../core/model-calls'
 import { summarizeModelUsage } from '../core/runner'
 import { calculateCost, calculateSessionCost, sumCosts, usageCost } from '../providers/pricing'
 import { TEST_PRICING } from '../test-support/pricing-registry'
+import { createTestSession, testAgent } from '../testing'
 import {
   isRealtimeMetrics,
   LiveVoiceMeter,
@@ -214,7 +222,8 @@ describe('model call ledger', () => {
     ledger.observe(end('g', 50), 'run')
     ledger.observe(start('c', 30), 'run')
     ledger.observe(start('e'), 'run')
-    // f ended without failing and without usage, as a skipped step does: unknown, not estimated.
+    // f ended without failing and without usage, as a provider that reports none does: unknown,
+    // not estimated.
     expect(ledger.usage('run')).toEqual([
       { modelName: 'gpt-4o-mini', inputTokens: 10, outputTokens: 0 },
       estimated(20),
@@ -273,6 +282,141 @@ describe('model call ledger', () => {
     })
     expect(usageCost(usage)).toEqual({ basis: 'estimated', totalCost: 0.3, currency: 'USD' })
   })
+})
+
+const SPENT = { inputTokens: 1_000_000, outputTokens: 0 }
+const PRICED = { provider: 'openai', modelName: 'gpt-4o-mini', ...SPENT }
+
+function reply({ ctx, usage }: { ctx: RenderContext; usage?: typeof SPENT }): ModelStepResult {
+  return {
+    stepEvents: [
+      {
+        id: createEventId(),
+        type: 'assistant',
+        createdAt: Date.now(),
+        invocationId: ctx.invocationId,
+        agentName: ctx.agentName,
+        text: 'Thanks.',
+      },
+    ],
+    toolCalls: [],
+    terminal: true,
+    ...(usage && { usage }),
+  }
+}
+
+/** A model step that streams nothing and reports `SPENT`. */
+async function* answers(ctx: RenderContext): ReturnType<ModelAdapter['step']> {
+  return reply({ ctx, usage: SPENT })
+}
+
+/** One backend run, as a Live call makes for each caller turn. */
+function backendRun({ step, hook = {} }: { step: ModelAdapter['step']; hook?: Hook }) {
+  return new BaseRunner({ adapters: { openai: { step } } }).run(
+    testAgent(),
+    createTestSession('Hello'),
+    { hooks: [hook] },
+  )
+}
+
+describe('backend steps a hook answers', () => {
+  installModelCallContext(new AsyncLocalStorage())
+
+  test(
+    'a step beforeModel answers sent nothing, so the call keeps its price',
+    { meta: { fixture: 'agent-kit.hook-step-cost' } },
+    async () => {
+      const ledger = new ModelCallLedger()
+      await observeModelCalls(ledger.observe, async () => {
+        await backendRun({ step: answers })
+        await backendRun({
+          step: answers,
+          hook: { beforeModel: (_ctx, renderCtx) => reply({ ctx: renderCtx }) },
+        })
+      })
+
+      const calls = ledger.usage('run')
+      expect(calls).toEqual([
+        PRICED,
+        { provider: 'openai', modelName: 'gpt-4o-mini', inputTokens: 0, outputTokens: 0 },
+      ])
+      expect(usageCost(summarizeModelUsage(calls, TEST_PRICING))).toEqual({
+        basis: 'reported',
+        totalCost: 0.15,
+        currency: 'USD',
+      })
+    },
+  )
+
+  test(
+    "a hook's step that reports its own usage keeps it",
+    { meta: { fixture: 'agent-kit.hook-step-cost' } },
+    async () => {
+      const ledger = new ModelCallLedger()
+      await observeModelCalls(ledger.observe, async () => {
+        await backendRun({
+          step: answers,
+          hook: { beforeModel: (_ctx, renderCtx) => reply({ ctx: renderCtx, usage: SPENT }) },
+        })
+      })
+
+      expect(ledger.usage('run')).toEqual([PRICED])
+    },
+  )
+
+  test(
+    'a model call duringModel cuts off counts at its estimated input',
+    { meta: { fixture: 'agent-kit.hook-step-cost' } },
+    async () => {
+      const ledger = new ModelCallLedger()
+      const starts: ModelStartEvent[] = []
+      let modelCalled = () => {}
+      const called = new Promise<void>((resolve) => {
+        modelCalled = resolve
+      })
+      const cutOff: ModelAdapter['step'] = async function* (_ctx, _config, signal) {
+        modelCalled()
+        return await new Promise<never>((_, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })
+        })
+      }
+      await observeModelCalls(ledger.observe, async () => {
+        await backendRun({ step: answers })
+        await backendRun({
+          step: cutOff,
+          hook: {
+            onEvent: (event) => {
+              if (event.type === 'model_start') starts.push(event)
+            },
+            duringModel: async (_ctx, renderCtx) => {
+              await called
+              return reply({ ctx: renderCtx })
+            },
+          },
+        })
+      })
+
+      const estimatedTokens = starts[0]?.estimatedInput?.inputTokens ?? 0
+      expect(estimatedTokens).toBeGreaterThan(0)
+      const calls = ledger.usage('run')
+      expect(calls).toEqual([
+        PRICED,
+        {
+          provider: 'openai',
+          modelName: 'gpt-4o-mini',
+          inputTokens: estimatedTokens,
+          outputTokens: 0,
+          estimated: true,
+        },
+      ])
+      const cost = usageCost(summarizeModelUsage(calls, TEST_PRICING))
+      expect(cost.basis).toBe('estimated')
+      expect(cost.basis !== 'unavailable' && cost.totalCost).toBeCloseTo(
+        0.15 + estimatedTokens * 1.5e-7,
+        12,
+      )
+    },
+  )
 })
 
 describe('cost totals', () => {
