@@ -137,7 +137,9 @@ export function logModelUsage(event: ModelStartEvent | ModelEndEvent): void {
 
 /**
  * Writes the `provider.usage` line of a request billed by its tokens, such as a model call or an
- * embedding, priced from the price list in use.
+ * embedding, priced from the price list in use. The ADK writes one for every call it makes; code
+ * that calls a provider without the ADK, such as over raw HTTP, writes its own with this, from the
+ * usage the provider reported, or with `usage` undefined when it reported none.
  */
 export function logTokenUsage({
   operation,

@@ -367,8 +367,26 @@ included, or that an abort, a timeout or the step limit cut off writes its own l
 when the provider answered with an HTTP error status or a retry was aborted before it was sent,
 else the input estimated at the call's start (`usageBasis: "estimated"`). A retry a provider SDK
 makes inside one request is part of that request's line, and a SageMaker embedding endpoint, billed
-by instance time, writes none. A provider called without the ADK writes no line; only its invoice
-shows it.
+by instance time, writes none. A provider called without the ADK, such as over raw HTTP, writes a
+line only when the calling code reports it with `logTokenUsage`, from the usage the provider
+reported; otherwise only its invoice shows it.
+
+```ts
+import { logTokenUsage } from '@animahealth/adk'
+
+const startedAt = Date.now()
+const answer = await rerank(query, documents) // a raw call to Voyage's rerank endpoint
+logTokenUsage({
+  operation: 'search.rerank',
+  durationMs: Date.now() - startedAt,
+  usage: {
+    provider: 'voyage',
+    modelName: 'rerank-2-lite',
+    inputTokens: answer.usage.total_tokens,
+    outputTokens: 0,
+  },
+})
+```
 
 An adapter's `decide` that sends a decision on to another endpoint after one fails passes that
 endpoint's error to its `onAbandoned` argument before asking the next, so each endpoint asked is a
