@@ -160,6 +160,9 @@ import { dynamoStore } from '@animahealth/adk/stores/dynamodb'
 - `inMemoryStore()`: default, no peer dependency, in-process atomicity.
 - `postgresStore(...)`: `pg` peer dependency, transactional commits and scoped state.
 - `dynamoStore(...)`: AWS SDK peer dependencies, optimistic metadata commit with scoped-state writes after the guarded metadata write.
+  A fork's first commit writes a `fork` index row instead of copying the events it inherits, naming the nearest session along the fork chain that stores the fork point, and `load` reads them from there, so a fork writes only its own events. A fork copies every event when no session along the chain stores the fork point or the chain would pass 32 forks. Deleting a session makes the forks that index it unloadable.
+  Event, delete and scoped-state writes go in batches of 25; items DynamoDB refuses get up to 10 attempts with jittered backoff between them, and the next batch waits as long as that batch's last retry might.
+  Each operation has one deadline (`operationTimeoutMs`, default 10 s) that its requests, retries and backoff spend from; each request is cancelled at the smaller of `requestTimeoutMs` (default 3 s) and the time left. Running out of time throws `DynamoDBStoreTimeoutError`, whose `outcome` is `indeterminate` once a write was sent.
 
 All stores implement `SessionStore` and must satisfy the shared compliance suite. Store implementations persist metadata/events/scoped state; orchestration, scope binding, event buffering, dirty tracking, and cursor management belong in `sessionService()`.
 
@@ -200,6 +203,8 @@ const index = session.eventIndexOf(eventId)
 const snapshot = session.stateAt(index)
 const fork = session.forkAt(index)
 ```
+
+A fork records `fork.forkedFrom`: the session it came from and the last event it inherits.
 
 Standalone utilities exported from the main entry:
 

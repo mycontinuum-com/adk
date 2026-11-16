@@ -300,6 +300,90 @@ export function runSessionStoreTests(
       })
     })
 
+    describe('forks', () => {
+      test('a fork loads its parent history up to the fork point, then its own events', async () => {
+        const parentEvents = [makeEvent(0), makeEvent(1), makeEvent(2)]
+        await store.commit(makeSession({ id: 'f-parent', appName: 'app' }), parentEvents, 0)
+        const [first, second, third] = parentEvents
+        const own = makeEvent(10)
+        const fork = makeSession({
+          id: 'f-child',
+          appName: 'app',
+          forkedFrom: { sessionId: 'f-parent', throughEventId: second.id },
+        })
+
+        await store.commit(fork, [first, second, own], 0)
+        await store.commit(makeSession({ id: 'f-parent', appName: 'app' }), [makeEvent(3)], 1)
+
+        const loaded = await store.load('app', 'f-child')
+        expect(loaded!.events.map((e) => e.id)).toEqual([first.id, second.id, own.id])
+        expect(loaded!.events.map((e) => e.id)).not.toContain(third.id)
+      })
+
+      test("a fork's later commits append after its inherited history", async () => {
+        const parentEvents = [makeEvent(0), makeEvent(1)]
+        await store.commit(makeSession({ id: 'f2-parent', appName: 'app' }), parentEvents, 0)
+        const fork = makeSession({
+          id: 'f2-child',
+          appName: 'app',
+          forkedFrom: { sessionId: 'f2-parent', throughEventId: parentEvents[1].id },
+        })
+        const later = makeEvent(20)
+
+        await store.commit(fork, parentEvents, 0)
+        await store.commit({ ...fork, version: 1 }, [later], 1)
+
+        const loaded = await store.load('app', 'f2-child')
+        expect(loaded!.session.version).toBe(2)
+        expect(loaded!.events.map((e) => e.id)).toEqual([...parentEvents, later].map((e) => e.id))
+      })
+
+      test('a fork of a fork loads the whole chain', async () => {
+        const rootEvents = [makeEvent(0), makeEvent(1)]
+        await store.commit(makeSession({ id: 'f3-root', appName: 'app' }), rootEvents, 0)
+        const middleOwn = makeEvent(30)
+        await store.commit(
+          makeSession({
+            id: 'f3-middle',
+            appName: 'app',
+            forkedFrom: { sessionId: 'f3-root', throughEventId: rootEvents[1].id },
+          }),
+          [...rootEvents, middleOwn],
+          0,
+        )
+        const leafOwn = makeEvent(31)
+
+        await store.commit(
+          makeSession({
+            id: 'f3-leaf',
+            appName: 'app',
+            forkedFrom: { sessionId: 'f3-middle', throughEventId: middleOwn.id },
+          }),
+          [...rootEvents, middleOwn, leafOwn],
+          0,
+        )
+
+        const loaded = await store.load('app', 'f3-leaf')
+        expect(loaded!.events.map((e) => e.id)).toEqual(
+          [...rootEvents, middleOwn, leafOwn].map((e) => e.id),
+        )
+      })
+
+      test('a fork whose parent never stored the fork point keeps every event', async () => {
+        const events = [makeEvent(0), makeEvent(1)]
+        const fork = makeSession({
+          id: 'f4-child',
+          appName: 'app',
+          forkedFrom: { sessionId: 'f4-unsaved-parent', throughEventId: events[1].id },
+        })
+
+        await store.commit(fork, events, 0)
+
+        const loaded = await store.load('app', 'f4-child')
+        expect(loaded!.events.map((e) => e.id)).toEqual(events.map((e) => e.id))
+      })
+    })
+
     describe('delete', () => {
       test('removes session and events', async () => {
         await store.commit(makeSession({ id: 'd1', appName: 'app' }), [makeEvent(0)], 0)

@@ -60,6 +60,8 @@ export interface Session<S extends StateSchema = StateSchema> {
   readonly input: SessionInputNamespace<S>
   readonly output: Output
   readonly createdAt: number
+  /** Set on a session made by `forkAt`: the session and event it inherits its history from. */
+  readonly forkedFrom?: ForkOrigin
 
   boundState<T extends StateSchema = S>(invocationId: string): TypedState<T>
   clone(): Session<S>
@@ -92,6 +94,20 @@ export interface StoredSession {
   version: number
   scopes: Partial<Record<SharedScope, string>>
   createdAt: number
+  /**
+   * A store may keep a fork's inherited events as this reference to its parent instead of copying
+   * them; a store that ignores it stores every event, which is also correct.
+   */
+  forkedFrom?: ForkOrigin
+}
+
+/**
+ * Where a forked session's history comes from: the parent session's events up to and including
+ * `throughEventId`.
+ */
+export interface ForkOrigin {
+  sessionId: string
+  throughEventId: string
 }
 
 export type CommitResult =

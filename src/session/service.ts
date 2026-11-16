@@ -32,6 +32,7 @@ function sessionToStoredSession(session: Session): StoredSession {
     version: session.version ?? 0,
     scopes: { ...session.scopes },
     createdAt: session.createdAt,
+    ...(session.forkedFrom && { forkedFrom: session.forkedFrom }),
   }
 }
 
@@ -203,6 +204,7 @@ export function sessionService(store: SessionStore): SessionService {
         events,
         scopes: stored.scopes,
         createdAt: stored.createdAt,
+        forkedFrom: stored.forkedFrom,
       })
 
       await loadAndBindScopes(session, stored.scopes)

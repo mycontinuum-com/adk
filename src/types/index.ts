@@ -83,6 +83,7 @@ export type {
   MessageInput,
   ToolInput,
   StoredSession,
+  ForkOrigin,
   CommitResult,
   SessionStore,
   SessionService,

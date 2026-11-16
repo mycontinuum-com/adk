@@ -19,6 +19,7 @@ import type {
 import type { Output } from '../types/runtime'
 import type { StateSchema, TypedState, ScopeState } from '../types/schema'
 import type {
+  ForkOrigin,
   Session,
   SessionStatus,
   StateChangeListener,
@@ -210,6 +211,7 @@ export interface BaseSessionOptions {
   scopes?: Partial<Record<SharedScope, string>>
   version?: number
   createdAt?: number
+  forkedFrom?: ForkOrigin
 }
 
 export class BaseSession<S extends StateSchema = StateSchema> implements Session<S> {
@@ -218,6 +220,7 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
   private _version?: number
   scopes: Partial<Record<SharedScope, string>>
   readonly createdAt: number
+  readonly forkedFrom?: ForkOrigin
   private _events: Event[] = []
   private stateChangeCallback?: (event: StateChangeEvent) => void
   private stateChangeListeners = new Set<StateChangeListener>()
@@ -233,6 +236,7 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
     this._version = options?.version
     this._events = []
     this.createdAt = options?.createdAt ?? Date.now()
+    this.forkedFrom = options?.forkedFrom
   }
 
   get version(): number | undefined {
@@ -766,6 +770,7 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
       id: this.id,
       scopes: { ...this.scopes },
       version: this.version,
+      forkedFrom: this.forkedFrom,
     })
     cloned._events = structuredClone(this._events)
     cloned.stateChangeCallback = this.stateChangeCallback
@@ -809,6 +814,7 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
       scopes: { ...this.scopes },
       version: this.version,
       createdAt: Date.now(),
+      forkedFrom: { sessionId: this.id, throughEventId: this._events[eventIndex].id },
     })
 
     forked._events = eventsUpTo
@@ -852,6 +858,7 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
     version?: number
     scopes?: Partial<Record<SharedScope, string>>
     createdAt?: number
+    forkedFrom?: ForkOrigin
     events: Event[]
     scopedStates?: Partial<Record<SharedScope, Record<string, unknown>>>
   }): BaseSession {
@@ -860,6 +867,7 @@ export class BaseSession<S extends StateSchema = StateSchema> implements Session
       createdAt: data.createdAt,
       scopes: data.scopes,
       version: data.version,
+      forkedFrom: data.forkedFrom,
     })
     session._events = [...data.events]
     if (data.scopedStates) {

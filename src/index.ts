@@ -296,6 +296,7 @@ export type {
   MediaSource,
   MediaPart,
   StoredSession,
+  ForkOrigin,
   CommitResult,
   SessionStore,
   SessionService,
