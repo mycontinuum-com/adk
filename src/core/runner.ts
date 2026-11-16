@@ -43,7 +43,7 @@ import { runAgent } from '../agents/reasoning'
 import { runSequence, type SequenceResumeContext } from '../agents/sequential'
 import { runStep, type StepResumeContext } from '../agents/step'
 import { InMemoryChannel } from '../channels/inMemory'
-import { createEndEvent, estimateTokens } from '../context/build'
+import { createEndEvent, spentByFailedAttempt } from '../context/build'
 import { PipelineStructureChangedError } from '../errors/pipeline'
 import { DecisionsUnavailableError } from '../errors/types'
 import { composeHooks } from '../hook/compose'
@@ -64,7 +64,8 @@ import { ADAPTER, REALTIME_ADAPTER, getSymbol } from './adapter-symbol'
 import { createEventId } from './constants'
 import { assertAnswersMatch } from './decisions'
 import { createInvocationId } from './invocation'
-import { modelCallObservers, type ModelCallObserver } from './model-calls'
+import { modelCallObservers, reportModelCall, type ModelCallObserver } from './model-calls'
+import { estimateTokens } from './usage-log'
 
 /** Prevents executing against a session started with a different agent configuration. */
 function validatePipelineFingerprint(session: Session, currentFingerprint: string): void {
@@ -419,13 +420,34 @@ export function resolveRunResult(
   }
 }
 
+/** The `model_start` of one attempt at a decision, its input estimated from the request. */
+function decisionStart(
+  call: Pick<ModelStartEvent, 'invocationId' | 'agentName' | 'stepIndex'>,
+  request: DecisionRequest,
+  config: Pick<ProviderModelConfig, 'provider' | 'name'>,
+): ModelStartEvent {
+  return {
+    id: createEventId(),
+    type: 'model_start',
+    createdAt: Date.now(),
+    ...call,
+    messageCount: 1,
+    tools: [],
+    estimatedInput: {
+      provider: config.provider,
+      modelName: config.name,
+      inputTokens: estimateTokens(JSON.stringify(request).length),
+    },
+  }
+}
+
 /** Reports a `decide()` call's model event to the call observers and the hooks' `onEvent`. */
 function notifyDecision(
   observers: readonly ModelCallObserver[],
   onEvent: ((event: StreamEvent) => void) | undefined,
   event: ModelStartEvent | ModelEndEvent,
 ): void {
-  for (const observe of observers) observe(event, 'decision')
+  reportModelCall({ observers, event, source: 'decision' })
   onEvent?.(event)
 }
 
@@ -554,59 +576,54 @@ export class BaseRunner implements Runner {
     const config = getInnerModel(model)
     const onEvent = composeHooks(this.hooks).onEvent
     const call = { invocationId: createInvocationId(), agentName: 'decide', stepIndex: 1 }
-    const startedAt = Date.now()
-    notifyDecision(observers, onEvent, {
-      id: createEventId(),
-      type: 'model_start',
-      createdAt: startedAt,
-      ...call,
-      messageCount: 1,
-      tools: [],
-      estimatedInput: {
-        provider: config.provider,
-        modelName: config.name,
-        inputTokens: estimateTokens(JSON.stringify(request).length),
-      },
-    })
-
-    // Failing before the request was sent spends nothing; once sent, the provider's usage is kept.
-    let spent: ModelUsage | undefined = withModelIdentity(
-      { inputTokens: 0, outputTokens: 0 },
-      config,
-    )
-    let served: DecisionResponse
-    try {
-      if (!adapter.decide) throw new DecisionsUnavailableError(config)
-      signal?.throwIfAborted()
-      spent = undefined
-      served = await adapter.decide(request, config, signal)
-      spent = withModelIdentity(served.usage, config)
-      signal?.throwIfAborted()
-      assertAnswersMatch(request.questions, served.answers)
-    } catch (error) {
+    let start = decisionStart(call, request, config)
+    notifyDecision(observers, onEvent, start)
+    const end = ({ usage, error }: { usage: ModelUsage | undefined; error?: unknown }) =>
       notifyDecision(
         observers,
         onEvent,
         createEndEvent({
           ...call,
-          durationMs: Date.now() - startedAt,
-          finishReason: 'error',
-          usage: spent,
-          error: error instanceof Error ? error.message : String(error),
+          durationMs: Date.now() - start.createdAt,
+          finishReason: error === undefined ? 'stop' : 'error',
+          usage: withModelIdentity(usage, config),
+          ...(error !== undefined && {
+            error: error instanceof Error ? error.message : String(error),
+          }),
         }),
       )
+
+    // A decision never sent to a decisions endpoint spent nothing.
+    let sent = false
+    let served: DecisionResponse
+    try {
+      if (!adapter.decide) throw new DecisionsUnavailableError(config)
+      signal?.throwIfAborted()
+      sent = true
+      // Each endpoint the adapter asks is a call of its own, with its own start and end.
+      served = await adapter.decide(request, config, signal, (error) => {
+        end({ error, usage: spentByFailedAttempt({ error, start }) })
+        start = decisionStart(call, request, config)
+        notifyDecision(observers, onEvent, start)
+      })
+    } catch (error) {
+      const reached = sent && !(error instanceof DecisionsUnavailableError)
+      end({
+        error,
+        usage: reached
+          ? spentByFailedAttempt({ error, start })
+          : { inputTokens: 0, outputTokens: 0 },
+      })
       throw error
     }
-    notifyDecision(
-      observers,
-      onEvent,
-      createEndEvent({
-        ...call,
-        durationMs: Date.now() - startedAt,
-        finishReason: 'stop',
-        usage: spent,
-      }),
-    )
+    try {
+      signal?.throwIfAborted()
+      assertAnswersMatch(request.questions, served.answers)
+    } catch (error) {
+      end({ error, usage: served.usage })
+      throw error
+    }
+    end({ usage: served.usage })
     return served.answers
   }
 
@@ -709,14 +726,9 @@ export class BaseRunner implements Runner {
     // in the same order. Hooks observe on enqueue, so they keep observing if the consumer stops
     // reading, and keep receiving work a run that yielded or failed left running.
     const ownership = trackOwnership()
-    const observers = modelCallObservers()
     const eventChannel = new InMemoryChannel({
       onEvent: (event) => {
         ownership.observe(event)
-        if (event.type === 'model_start' || event.type === 'model_end')
-          for (const observe of observers) observe(event, 'run')
-        // Start the first registry fetch while later steps run, so the result rarely waits for it.
-        if (event.type === 'model_end' && isPriceable(event.usage)) void loadPricing()
         composed.onEvent?.(event)
       },
     })
@@ -724,6 +736,7 @@ export class BaseRunner implements Runner {
     const mergedConfig: InternalRunConfig = {
       ...config,
       onStep: composed.onStep,
+      modelCallObservers: modelCallObservers(),
     }
 
     let resumeContext = computeResumeContext(session.events, runnable)
@@ -803,7 +816,7 @@ export class BaseRunner implements Runner {
     const generator = this.execute(
       runnable,
       session,
-      config,
+      { ...config, modelCallObservers: modelCallObservers() },
       channel.signal,
       config?.id,
       resumeContext,

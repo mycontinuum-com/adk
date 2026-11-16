@@ -204,6 +204,7 @@
   "scripts": {
     "build": "rm -rf dist && node scripts/build.mjs && tsc -p tsconfig.json --emitDeclarationOnly && node scripts/postbuild-dts-aliases.cjs && node scripts/postbuild-terminal-cjs-wrapper.cjs && node scripts/verify-package-exports.cjs",
     "dev": "node scripts/build.mjs --watch",
+    "prices": "node scripts/update-prices.mjs",
     "test": "vp test run",
     "test:postgres": "vp test run src/**/postgres.test.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",

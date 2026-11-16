@@ -414,7 +414,7 @@ describe('what the app hooks see of app.decide', () => {
     ])
   })
 
-  it('records a failed decision as a model call without usage', async () => {
+  it('records a failed decision as a model call at the input estimated when it started', async () => {
     const seen: StreamEvent[] = []
     const failure = new Error('503 unavailable')
     const app = observedApp(
@@ -425,7 +425,18 @@ describe('what the app hooks see of app.decide', () => {
     await expect(app.decide(INPUT, { questions: urgentOnly })).rejects.toBe(failure)
     expect(eventSummary(seen)).toEqual([
       'model_start',
-      ['model_end', 'decide', undefined, failure.message],
+      [
+        'model_end',
+        'decide',
+        {
+          provider: 'openai',
+          modelName: 'gpt-6-luna',
+          inputTokens: 33,
+          outputTokens: 0,
+          estimated: true,
+        },
+        failure.message,
+      ],
     ])
   })
 

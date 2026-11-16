@@ -1,5 +1,7 @@
 import type { ModelEndEvent, ModelStartEvent } from '../types/events'
 
+import { logModelUsage } from './usage-log'
+
 /** Where a model call came from: a run's agent step, or `decide()`. */
 export type ModelCallSource = 'run' | 'decision'
 
@@ -44,7 +46,23 @@ export function observeModelCalls<R>(observer: ModelCallObserver, fn: () => R): 
   return observers.includes(observer) ? fn() : context.run([...observers, observer], fn)
 }
 
-/** The observers of the current scope. A run or decision reads them once, when it starts. */
+/**
+ * The observers of the current scope, the usage log first. A run or decision reads them once, when
+ * it starts.
+ */
 export function modelCallObservers(): readonly ModelCallObserver[] {
-  return holder[CONTEXT]?.getStore() ?? []
+  return [logModelUsage, ...(holder[CONTEXT]?.getStore() ?? [])]
+}
+
+/** Reports one model call's event to each observer of the run or decision that made it. */
+export function reportModelCall({
+  observers,
+  event,
+  source,
+}: {
+  observers: readonly ModelCallObserver[]
+  event: ModelStartEvent | ModelEndEvent
+  source: ModelCallSource
+}): void {
+  for (const observe of observers) observe(event, source)
 }

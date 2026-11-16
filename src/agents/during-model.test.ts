@@ -382,6 +382,7 @@ describe('duringModel', () => {
     expect(await outcome).toMatchObject({ message: RUN_ABORTED })
     await f.run.settled
     expect(hookToldOnAbort).toBe(true)
-    expect(stepTypes(f.session)).toEqual(STEP_EVENT_TYPES.slice(0, 1))
+    // The model call the abort cut off still ends, as a failed call
+    expect(stepTypes(f.session)).toEqual(STEP_EVENT_TYPES.slice(0, 2))
   })
 })

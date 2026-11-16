@@ -39,6 +39,7 @@ import { buildContextAsync } from '../context/build'
 import { createStateAccessor } from '../context/state'
 import { createEventId } from '../core/constants'
 import { createInvocationContext } from '../core/ctx'
+import { modelCallObservers, reportModelCall } from '../core/model-calls'
 import { createRunHandler } from '../core/orchestration'
 import { BaseRunner } from '../core/runner'
 import { isRunnable } from '../core/tools'
@@ -1198,6 +1199,8 @@ export function wireEventListeners(opts: {
     onTranscript,
   } = opts
   const queue = createEventQueue()
+  // LiveKit calls the listeners outside any async context, so the observers are read once, here.
+  const observers = modelCallObservers()
   const turnUsage = new Map<number, ModelUsage>()
   let hasMetrics = false
   const aggregated: AggregatedUsage = {
@@ -1262,6 +1265,8 @@ export function wireEventListeners(opts: {
 
   async function appendAndNotify(event: Event) {
     await sessionService.appendEvent(session, event)
+    if (event.type === 'model_start' || event.type === 'model_end')
+      reportModelCall({ observers, event, source: 'run' })
     getAgentState().composedHook.onEvent?.(event)
   }
 

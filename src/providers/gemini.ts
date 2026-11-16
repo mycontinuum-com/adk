@@ -54,6 +54,7 @@ import type {
 } from '../types/runnables'
 import type { AnyZodSchema } from '../types/zod'
 
+import { abandonedAttemptEnd } from '../context/build'
 import { withStreamRetry } from '../core/retry'
 import { createEventId, createCallId } from '../session'
 import { createStreamAccumulator, type RawDeltaEvent } from './accumulator'
@@ -150,6 +151,8 @@ Either:
     const retryConfig = config.provider === 'gemini' ? config.retry : undefined
     const { contents, systemInstruction } = serializeContext(ctx)
     const client = this.getClient(config)
+    // A call through Vertex bills its location's regional endpoint uplift, unless it is `global`
+    const vertex = (config.provider === 'gemini' && config.vertex) || this.defaultConfig.vertex
 
     const createStream = async function* (): AsyncGenerator<StreamEvent, ModelStepResult> {
       if (signal?.aborted) {
@@ -203,14 +206,30 @@ Either:
         }
       }
 
-      return parseResponse(allParts, usageMetadata, finishReason, ctx.invocationId, ctx.agentName)
+      const step = parseResponse(
+        allParts,
+        usageMetadata,
+        finishReason,
+        ctx.invocationId,
+        ctx.agentName,
+      )
+      return withEndpointRegion(step, vertex?.location)
     }
 
     return yield* withStreamRetry(createStream, {
       config: retryConfig,
       signal,
+      onRetry: ({ error, durationMs }) => abandonedAttemptEnd({ ctx, error, durationMs }),
     })
   }
+}
+
+/** The step's usage with the region of the endpoint that served it, when there is one. */
+function withEndpointRegion(
+  step: ModelStepResult,
+  endpointRegion: string | undefined,
+): ModelStepResult {
+  return endpointRegion && step.usage ? { ...step, usage: { ...step.usage, endpointRegion } } : step
 }
 
 function samplingOptions(config: ProviderModelConfig) {

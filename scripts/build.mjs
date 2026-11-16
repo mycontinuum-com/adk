@@ -103,6 +103,7 @@ const builds = [
     external: [...new Set(allExternal)].filter((name) => !isBundled(name, bundled)),
     plugins,
     logLevel: 'warning',
+    define: { __ADK_VERSION__: JSON.stringify(pkg.version) },
   }
   return [
     { ...shared, format: 'cjs', outExtension: { '.js': '.js' } },

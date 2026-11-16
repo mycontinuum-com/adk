@@ -15,7 +15,9 @@ import type { LiveAgent } from '../types/runnables'
 import type { StateSchema } from '../types/schema'
 import type { AnyZodSchema } from '../types/zod'
 
+import { failedWithoutSpending } from '../core/retry'
 import { partitionTools, expandMCPTools, signalOutput, isOutputSignal } from '../core/tools'
+import { estimateTokens } from '../core/usage-log'
 import { getInnerModel } from '../providers/models'
 import { zodToToolSchema } from '../providers/zodToJsonSchema'
 import { createEventId } from '../session'
@@ -87,18 +89,12 @@ function getOutputSchemaName(ctx: RenderContext): string | undefined {
 }
 
 /**
- * Tokens in a request of `characters` characters, at about four a token, the usual rate for
- * English. It sizes a request that never reported its usage.
- */
-export function estimateTokens(characters: number): number {
-  return Math.ceil(characters / 4)
-}
-
-/**
  * What a model call cut off before it reported usage spent: the input estimated when it started,
  * and no output. `undefined` when it started without an estimate.
  */
-export function cutOffUsage(start: ModelStartEvent | undefined): ModelUsage | undefined {
+export function cutOffUsage(
+  start: Pick<ModelStartEvent, 'estimatedInput'> | undefined,
+): ModelUsage | undefined {
   const input = start?.estimatedInput
   return input && { ...input, outputTokens: 0, estimated: true }
 }
@@ -108,13 +104,25 @@ export function createStartEvent(
   stepIndex: number,
   invocationId: string,
 ): ModelStartEvent {
-  let messageCount = 0
+  return {
+    id: createEventId(),
+    type: 'model_start',
+    createdAt: Date.now(),
+    invocationId,
+    agentName: ctx.agentName,
+    stepIndex,
+    messageCount: ctx.events.filter((event) => eventToMessageSummary(event)).length,
+    tools: ctx.functionTools.map(toolToSummary),
+    outputSchema: ctx.outputSchema ? getOutputSchemaName(ctx) : undefined,
+    estimatedInput: estimatedInputOf(ctx),
+  }
+}
+
+/** The model a request goes to and its input, estimated from the characters it sends. */
+function estimatedInputOf(ctx: RenderContext): NonNullable<ModelStartEvent['estimatedInput']> {
   let characters = 0
   for (const event of ctx.events) {
-    const message = eventToMessageSummary(event)
-    if (!message) continue
-    messageCount++
-    characters += message.content.length
+    characters += eventToMessageSummary(event)?.content.length ?? 0
   }
   for (const tool of ctx.functionTools) {
     characters += JSON.stringify(zodToToolSchema(tool.name, tool.description, tool.schema)).length
@@ -125,23 +133,53 @@ export function createStartEvent(
     ).length
   }
   const model = ctx.agent.kind === 'agent' ? getInnerModel(ctx.agent.model) : ctx.agent.model
-
   return {
-    id: createEventId(),
-    type: 'model_start',
-    createdAt: Date.now(),
-    invocationId,
-    agentName: ctx.agentName,
-    stepIndex,
-    messageCount,
-    tools: ctx.functionTools.map(toolToSummary),
-    outputSchema: ctx.outputSchema ? getOutputSchemaName(ctx) : undefined,
-    estimatedInput: {
-      provider: model.provider,
-      modelName: model.name,
-      inputTokens: estimateTokens(characters),
-    },
+    provider: model.provider,
+    modelName: model.name,
+    inputTokens: estimateTokens(characters),
   }
+}
+
+/** What a failed model request spent: nothing when `failedWithoutSpending`, otherwise `cutOffUsage`. */
+export function spentByFailedAttempt({
+  error,
+  start,
+}: {
+  error: unknown
+  start: Pick<ModelStartEvent, 'estimatedInput'> | undefined
+}): ModelUsage | undefined {
+  if (!failedWithoutSpending(error)) return cutOffUsage(start)
+  const model = start?.estimatedInput
+  return {
+    ...(model?.provider && { provider: model.provider }),
+    ...(model?.modelName && { modelName: model.modelName }),
+    inputTokens: 0,
+    outputTokens: 0,
+  }
+}
+
+/**
+ * The `model_end` of a request an adapter abandoned to retry or fall back, which the runner records
+ * as a model call of the step under way.
+ */
+export function abandonedAttemptEnd({
+  ctx,
+  error,
+  durationMs,
+}: {
+  ctx: RenderContext
+  error: unknown
+  durationMs: number
+}): ModelEndEvent {
+  return createEndEvent({
+    invocationId: ctx.invocationId,
+    agentName: ctx.agentName,
+    stepIndex: 0,
+    durationMs,
+    usage: spentByFailedAttempt({ error, start: { estimatedInput: estimatedInputOf(ctx) } }),
+    finishReason: 'error',
+    error: error instanceof Error ? error.message : String(error),
+  })
 }
 
 export interface CreateEndEventOptions {

@@ -660,7 +660,9 @@ export interface ModelAdapter {
   endInvocation?(invocationId: string): void
   /**
    * Answers closed questions about an input on the provider's decisions endpoint, with exactly one
-   * answer per question. An adapter without this method has no decisions endpoint.
+   * answer per question. An adapter without this method has no decisions endpoint. An adapter that
+   * sends the request on to another endpoint after one fails passes that endpoint's error to
+   * `onAbandoned` before asking the next, so each endpoint asked is a model call of its own.
    *
    * @throws {DecisionsUnavailableError} When the provider does not serve the model there.
    */
@@ -668,5 +670,6 @@ export interface ModelAdapter {
     request: DecisionRequest,
     config: ProviderModelConfig,
     signal?: AbortSignal,
+    onAbandoned?: (error: unknown) => void,
   ): Promise<DecisionResponse>
 }

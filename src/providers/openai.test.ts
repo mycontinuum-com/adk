@@ -16,7 +16,9 @@ import type {
 } from '../types'
 import type { OpenAIEndpoint } from './openai-endpoints'
 
+import { buildContext } from '../context'
 import { createEventId, createCallId } from '../session'
+import { createTestSession, testAgent } from '../testing/context'
 import {
   serializeContext,
   parseResponse,
@@ -799,12 +801,7 @@ describe('OpenAIAdapter fallback', () => {
     apiVersion: '2025-01-01',
   }
   const openaiEndpoint: OpenAIEndpoint = { type: 'openai' }
-  const mockCtx = {
-    events: [{ id: '1', type: 'user', text: 'Hi', createdAt: Date.now() }],
-    tools: [],
-    session: {} as never,
-    agent: {} as never,
-  } as never
+  const mockCtx = buildContext(createTestSession('Hi'), testAgent(), 'synthetic')
   const mockConfig = { provider: 'openai' as const, name: 'gpt-5-mini' }
 
   async function consumeStream(adapter: OpenAIAdapter): Promise<StreamEvent[]> {
@@ -895,13 +892,7 @@ describe('OpenAIAdapter fallback', () => {
 })
 
 describe('OpenAIAdapter flex service tier', () => {
-  const mockCtx = {
-    events: [{ id: '1', type: 'user', text: 'Hi', createdAt: Date.now() }],
-    functionTools: [],
-    providerTools: [],
-    session: {} as never,
-    agent: {} as never,
-  } as never
+  const mockCtx = buildContext(createTestSession('Hi'), testAgent(), 'synthetic')
   const flexConfig = {
     provider: 'openai' as const,
     name: 'gpt-6.1-sol',

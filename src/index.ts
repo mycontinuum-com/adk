@@ -61,6 +61,8 @@ export { claude } from './providers/models'
 
 // Cost estimation from the live pricing registry
 export { configurePricing, type PricingOptions } from './providers/pricing'
+// Where each paid call's `provider.usage` line goes
+export { configureUsageLog, type UsageLogOptions } from './core/usage-log'
 
 // Memory (standalone - not schema-dependent)
 export {

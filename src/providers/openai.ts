@@ -30,6 +30,7 @@ import type {
   ProviderTool,
 } from '../types/runnables'
 
+import { abandonedAttemptEnd } from '../context/build'
 import { CALL_ID_PREFIX } from '../core/constants'
 import { withStreamRetry } from '../core/retry'
 import { DecisionsUnavailableError, ModelResponseFailedError } from '../errors/types'
@@ -92,6 +93,26 @@ function createEndpointKey(endpoint: OpenAIEndpoint, model?: string): string {
 
 class PrematureOpenAIStreamError extends Error {}
 
+/** OpenAI's names for its standard tier, which bills at the standard rates. */
+const STANDARD_TIERS = new Set(['default', 'auto'])
+
+/**
+ * The tier a response was billed at, as it reports it, else the one requested; none for the
+ * standard tier.
+ */
+function billedTier(tier: string | null | undefined): Pick<ModelUsage, 'serviceTier'> {
+  return tier && !STANDARD_TIERS.has(tier) ? { serviceTier: tier } : {}
+}
+
+/** OpenAI's regional hosts, such as `eu.api.openai.com`, bill a regional processing uplift. */
+const REGIONAL_HOST = /^([a-z]+)\.api\.openai\.com$/
+
+function billedRegion(endpoint: OpenAIEndpoint): Pick<ModelUsage, 'endpointRegion'> {
+  if (endpoint.type !== 'openai' || !endpoint.baseUrl) return {}
+  const region = REGIONAL_HOST.exec(new URL(endpoint.baseUrl).hostname)?.[1]
+  return region ? { endpointRegion: region } : {}
+}
+
 /** The stream's terminal response, or the error for a stream that has none or a failed one. */
 function settledResponse(response: ProviderResponse | undefined): ProviderResponse {
   if (!response)
@@ -127,6 +148,7 @@ export class OpenAIAdapter implements ModelAdapter {
     for (let i = 0; i < this.endpoints.length; i++) {
       const endpoint = this.endpoints[i]
       const isLast = i === this.endpoints.length - 1
+      const startedAt = Date.now()
 
       try {
         return yield* this.executeTiers(ctx, config, signal, endpoint)
@@ -135,6 +157,7 @@ export class OpenAIAdapter implements ModelAdapter {
         if (isLast || !isRetryableForFallback(error)) {
           throw error
         }
+        yield abandonedAttemptEnd({ ctx, error, durationMs: Date.now() - startedAt })
       }
     }
 
@@ -155,12 +178,12 @@ export class OpenAIAdapter implements ModelAdapter {
     request: DecisionRequest,
     config: ProviderModelConfig,
     signal?: AbortSignal,
+    onAbandoned?: (error: unknown) => void,
   ): Promise<DecisionResponse> {
-    let failure: unknown
+    // The Decisions API is an OpenAI platform route. An Azure deployment has none.
+    const endpoints = this.endpoints.filter((endpoint) => endpoint.type !== 'azure')
 
-    for (const endpoint of this.endpoints) {
-      // The Decisions API is an OpenAI platform route. An Azure deployment has none.
-      if (endpoint.type === 'azure') continue
+    for (const [index, endpoint] of endpoints.entries()) {
       const { client, resolvedModel } = this.getOrCreateClient(endpoint, config.name)
       try {
         // The pinned SDK predates `client.decisions`, so the request goes through its generic path.
@@ -175,17 +198,20 @@ export class OpenAIAdapter implements ModelAdapter {
           },
           signal,
         })
-        return parseDecisionResponse(body)
+        const decided = parseDecisionResponse(body)
+        return {
+          ...decided,
+          usage: decided.usage && { ...decided.usage, ...billedRegion(endpoint) },
+        }
       } catch (error) {
         if (error instanceof NotFoundError) {
           throw new DecisionsUnavailableError(config, { cause: error })
         }
-        if (!isRetryableForFallback(error)) throw error
-        failure = error
+        if (index === endpoints.length - 1 || !isRetryableForFallback(error)) throw error
+        onAbandoned?.(error)
       }
     }
 
-    if (failure) throw failure
     throw new DecisionsUnavailableError(config)
   }
 
@@ -244,16 +270,18 @@ export class OpenAIAdapter implements ModelAdapter {
       endpoint.type !== 'azure'
     ) {
       const flex = this.executeStep(ctx, config, signal, endpoint, 'flex')
+      const startedAt = Date.now()
       let emitted = false
       try {
         for (;;) {
           const next = await flex.next()
           if (next.done) return next.value
-          emitted = true
+          emitted ||= next.value.type !== 'model_end'
           yield next.value
         }
       } catch (error) {
         if (emitted || signal?.aborted) throw error
+        yield abandonedAttemptEnd({ ctx, error, durationMs: Date.now() - startedAt })
       }
     }
     const tier =
@@ -370,13 +398,22 @@ export class OpenAIAdapter implements ModelAdapter {
         }
 
         await stream.finalResponse()
-        return parseResponse(
-          settledResponse(terminalResponse),
+        const response = settledResponse(terminalResponse)
+        const step = parseResponse(
+          response,
           endpoint,
           ctx.invocationId,
           ctx.agentName,
           accumulator.getAccumulatedText(),
         )
+        return {
+          ...step,
+          usage: step.usage && {
+            ...step.usage,
+            ...billedTier(response.service_tier ?? serviceTier),
+            ...billedRegion(endpoint),
+          },
+        }
       } finally {
         cleanup?.()
       }
@@ -388,6 +425,7 @@ export class OpenAIAdapter implements ModelAdapter {
         retryableErrors: (error) => !emitted && (retryConfig.retryableErrors?.(error) ?? true),
       },
       signal,
+      onRetry: ({ error, durationMs }) => abandonedAttemptEnd({ ctx, error, durationMs }),
     })
   }
 }

@@ -1,13 +1,19 @@
 import { vi } from 'vitest'
 
 import type { ComposedErrorHandler } from '../errors/types'
+import type { Agent } from '../types'
 import type { CreateSessionOptions } from '../types/session'
 import type { ToolBridgeContext } from './livekit-tools'
 import type { LKAgentSession, LKImports, VoiceDeps } from './livekit-types'
 import type { VoiceSession, VoiceReply, VoiceHandlerConfig, VoiceEvent, VoiceHook } from './types'
 
 import { signalOutput } from '../core/tools'
+import { configureUsageLog } from '../core/usage-log'
 import { realtime } from '../providers/models'
+import { configurePricing } from '../providers/pricing'
+import { InMemoryStore } from '../session/memory'
+import { sessionService as inMemorySessionService } from '../session/service'
+import { useTestPricing } from '../test-support/pricing-registry'
 import { wireEventListeners, voiceHandler as _voiceHandler } from './handler'
 import { createLiveKitAgent as _createLiveKitAgent } from './livekit-agent'
 import { createLiveKitModel as _createLiveKitModel } from './livekit-model'
@@ -32,6 +38,65 @@ function mockLKSession(overrides?: Partial<LKAgentSession>): LKAgentSession {
     generateReply: vi.fn<LKAgentSession['generateReply']>().mockReturnValue({}),
     ...overrides,
   }
+}
+
+/** A receptionist on gpt-realtime, wired to LiveKit session events, whose turns write to `lines`. */
+async function realtimeReceptionist() {
+  const lines: Array<Record<string, unknown>> = []
+  configureUsageLog({ write: (line) => lines.push(JSON.parse(line)) })
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>()
+  const lkSession = mockLKSession({
+    on: vi.fn<LKAgentSession['on']>((event, listener) => {
+      listeners.set(event, [...(listeners.get(event) ?? []), listener])
+    }),
+  })
+  const emit = (event: string, payload: unknown) => {
+    for (const listener of listeners.get(event) ?? []) listener(payload)
+  }
+  const sessions = inMemorySessionService(new InMemoryStore())
+  const agent: Agent = {
+    kind: 'agent',
+    name: 'receptionist',
+    model: realtime({ model: { provider: 'openai', name: 'gpt-realtime' } }),
+    context: [],
+    tools: [],
+  }
+  const tracker = wireEventListeners({
+    lkSession,
+    sessionService: sessions,
+    session: await sessions.createSession('voice-test'),
+    getAgentState: () => ({
+      agent,
+      invocationId: 'inv_1',
+      composedHook: {},
+      composedErrorHandler: { handle: vi.fn<ComposedErrorHandler['handle']>() },
+      functionTools: [],
+    }),
+  })
+  return { lines, emit, tracker }
+}
+
+/**
+ * One realtime turn as LiveKit reports it: 10 uncached and 10 cached text and 80 audio tokens in,
+ * 10 text and 40 audio tokens out.
+ */
+async function takeRealtimeTurn({
+  emit,
+  tracker,
+}: Awaited<ReturnType<typeof realtimeReceptionist>>) {
+  emit('agent_state_changed', { oldState: 'listening', newState: 'thinking' })
+  emit('metrics_collected', {
+    metrics: {
+      type: 'realtime_model_metrics',
+      inputTokens: 100,
+      outputTokens: 50,
+      inputTokenDetails: { audioTokens: 80, cachedTokens: 10 },
+      outputTokenDetails: { audioTokens: 40 },
+    },
+  })
+  emit('agent_state_changed', { oldState: 'thinking', newState: 'speaking' })
+  emit('agent_state_changed', { oldState: 'speaking', newState: 'listening' })
+  await tracker.queue.drain()
 }
 
 // ---- Mock LiveKit dependencies via DI (no module mocking needed) ----
@@ -3321,6 +3386,51 @@ describe('Voice module', () => {
       expect(usage!.audioOutputTokens).toBe(240)
       expect(usage!.cachedTokens).toBe(60)
       expect(usage!.audioCachedTokens).toBe(15)
+    })
+
+    describe('usage lines', () => {
+      afterEach(() => {
+        configureUsageLog(false)
+        configurePricing(false)
+      })
+
+      test(
+        'a realtime turn writes one provider.usage line with its tokens and its price',
+        { meta: { fixture: 'agent-kit.voice-usage-line' } },
+        async () => {
+          await useTestPricing()
+          const receptionist = await realtimeReceptionist()
+
+          await takeRealtimeTurn(receptionist)
+
+          expect(receptionist.lines).toEqual([
+            {
+              ts: expect.any(String),
+              level: 'info',
+              component: 'adk',
+              event: 'provider.usage',
+              operation: 'receptionist',
+              invocationId: 'inv_1',
+              provider: 'openai',
+              model: 'gpt-realtime',
+              kind: 'tokens',
+              inputTokens: 100,
+              cachedTokens: 10,
+              cacheWriteTokens: 0,
+              outputTokens: 50,
+              reasoningTokens: 0,
+              audioInputTokens: 80,
+              audioOutputTokens: 40,
+              usageBasis: 'reported',
+              costUsd: expect.closeTo(0.005324, 12),
+              costBasis: 'reported',
+              finishReason: 'stop',
+              durationMs: expect.any(Number),
+              adkVersion: expect.any(String),
+            },
+          ])
+        },
+      )
     })
 
     test('AgentStateChanged emits model_start on thinking and model_end on transition out', async () => {

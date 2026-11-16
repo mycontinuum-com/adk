@@ -270,6 +270,16 @@ export interface ModelUsage {
    * estimated from the request and the output is unknown.
    */
   estimated?: true
+  /**
+   * The service tier the provider billed the call at, as it names it, such as `flex`, `priority` or
+   * `fast`; absent for the standard tier. The price list prices it from that tier's rates.
+   */
+  serviceTier?: string
+  /**
+   * The region of the endpoint the call went to, such as `eu` for OpenAI's EU endpoint or a Vertex
+   * location; `global` and an absent region add no regional uplift.
+   */
+  endpointRegion?: string
 }
 
 export interface ModelEndEvent extends EventBase {

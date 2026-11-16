@@ -1,8 +1,10 @@
+import type { PricedUsage } from '../../providers/pricing'
 import type { RetryConfig } from '../../types/runnables'
 import type { Embedder, EmbedResult, VoyageModel } from '../types'
 
-import { withRetry } from '../../core/retry'
+import { failedWithoutSpending, withRetry } from '../../core/retry'
 import { requestTimeoutMs } from '../../core/timeout'
+import { estimateTokens, logTokenUsage } from '../../core/usage-log'
 
 const DEFAULT_BATCH_SIZE = 128
 
@@ -29,7 +31,7 @@ interface VoyageClient {
     requestOptions: { timeoutInSeconds: number; maxRetries: number; abortSignal: AbortSignal },
   ): Promise<{
     data?: Array<{ embedding?: number[]; index?: number }>
-    usage?: { total_tokens?: number }
+    usage?: { totalTokens?: number }
   }>
 }
 
@@ -106,6 +108,7 @@ export function createVoyageEmbedder(config: VoyageModel): Embedder {
     // The SDK's timer stops at the response headers, so the signal is the timer and also bounds
     // reading the body; the SDK's is set past it.
     const deadline = AbortSignal.timeout(timeoutMs)
+    const startedAt = Date.now()
     const response = await client
       .embed(
         {
@@ -120,10 +123,25 @@ export function createVoyageEmbedder(config: VoyageModel): Embedder {
         { timeoutInSeconds: timeoutMs / 1000 + 1, maxRetries: 0, abortSignal: deadline },
       )
       .catch((error: unknown) => {
+        logTokenUsage({
+          operation: 'memory.embed',
+          durationMs: Date.now() - startedAt,
+          usage: voyageUsage(
+            config.name,
+            failedWithoutSpending(error)
+              ? { inputTokens: 0 }
+              : { inputTokens: estimateTokens(charactersIn(input)), estimated: true },
+          ),
+        })
         if (!deadline.aborted) throw error
         throw new Error(`Voyage request timed out after ${timeoutMs}ms`, { cause: error })
       })
 
+    logTokenUsage({
+      operation: 'memory.embed',
+      durationMs: Date.now() - startedAt,
+      usage: voyageUsage(config.name, { inputTokens: response.usage?.totalTokens ?? 0 }),
+    })
     const embeddings =
       response.data
         ?.toSorted((a, b) => (a.index ?? 0) - (b.index ?? 0))
@@ -132,8 +150,8 @@ export function createVoyageEmbedder(config: VoyageModel): Embedder {
     return {
       embeddings,
       model: config.name,
-      ...(response.usage?.total_tokens
-        ? { usage: { totalTokens: response.usage.total_tokens } }
+      ...(response.usage?.totalTokens
+        ? { usage: { totalTokens: response.usage.totalTokens } }
         : {}),
     }
   }
@@ -192,4 +210,13 @@ export function createVoyageEmbedder(config: VoyageModel): Embedder {
   }
 
   return embedder
+}
+
+/** A Voyage request's usage: the input it read, as an embedding writes no output. */
+function voyageUsage(model: string, input: { inputTokens: number; estimated?: true }): PricedUsage {
+  return { provider: 'voyage', modelName: model, outputTokens: 0, ...input }
+}
+
+function charactersIn(input: string[]): number {
+  return input.reduce((characters, text) => characters + text.length, 0)
 }

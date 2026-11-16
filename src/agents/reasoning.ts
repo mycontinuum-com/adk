@@ -24,6 +24,7 @@ import type {
   ParsedOutput,
   MediaPart,
   ModelAdapter,
+  ModelEndEvent,
   ModelStartEvent,
   ModelStepResult,
   ModelUsage,
@@ -38,6 +39,7 @@ import {
   createEndEvent,
   cutOffUsage,
   offeredFunctionTools,
+  spentByFailedAttempt,
 } from '../context/build'
 import { DEFAULT_MAX_STEPS, MAX_TOOL_RETRY_ATTEMPTS } from '../core/constants'
 import { createEventId } from '../core/constants'
@@ -48,6 +50,7 @@ import {
   type InvocationBoundaryOptions,
   type ResumeContext,
 } from '../core/invocation'
+import { modelCallObservers, reportModelCall } from '../core/model-calls'
 import { withRetry } from '../core/retry'
 import { isYieldSignal, isRunnable } from '../core/tools'
 import {
@@ -640,10 +643,28 @@ interface ModelStepContext {
 
 interface ModelStepOutcome {
   stepResult: import('../types').ModelStepResult | null
-  modelError?: string
   shouldAbort: boolean
   transfer?: TransferInfo
   synthetic?: boolean
+}
+
+/**
+ * Appends a model call's event to the session and reports it to the run's call observers there, so
+ * a call an abort cuts off, or one a parallel branch makes before it fails, is still reported.
+ */
+async function recordModelEvent({
+  scope,
+  event,
+}: {
+  scope: Pick<ModelStepContext, 'session' | 'runnerConfig' | 'config'>
+  event: ModelStartEvent | ModelEndEvent
+}): Promise<void> {
+  await scope.runnerConfig.sessionService.appendEvent(scope.session, event)
+  reportModelCall({
+    observers: scope.config?.modelCallObservers ?? modelCallObservers(),
+    event,
+    source: 'run',
+  })
 }
 
 /**
@@ -660,11 +681,22 @@ function answeredStep({
   return step.usage || !spent ? step : { ...step, usage: spent }
 }
 
-async function* modelStepBesideHook(
-  callModel: (signal: AbortSignal) => ReturnType<ModelAdapter['step']>,
-  askHook: (signal: AbortSignal) => Promise<ModelStepResult | void> | undefined,
-  signal: AbortSignal,
-): AsyncGenerator<StreamEvent, { step: ModelStepResult; synthetic: boolean }> {
+/**
+ * Runs the model call beside a `duringModel` hook, holding its stream until the hook settles. The
+ * `model_end` of an attempt the adapter abandoned is a call already made, so it is recorded and
+ * passed on at once, never held.
+ */
+async function* modelStepBesideHook({
+  callModel,
+  askHook,
+  recordAbandoned,
+  signal,
+}: {
+  callModel: (signal: AbortSignal) => ReturnType<ModelAdapter['step']>
+  askHook: (signal: AbortSignal) => Promise<ModelStepResult | void> | undefined
+  recordAbandoned: (event: ModelEndEvent) => Promise<ModelEndEvent>
+  signal: AbortSignal
+}): AsyncGenerator<StreamEvent, { step: ModelStepResult; synthetic: boolean }> {
   const modelCall = new AbortController()
   const hookCall = new AbortController()
   const stream = callModel(AbortSignal.any([signal, modelCall.signal]))
@@ -691,7 +723,8 @@ async function* modelStepBesideHook(
         yield* heldUntilHookSettles.splice(0)
         return { step: settled.value, synthetic: false }
       } else {
-        if (answer) heldUntilHookSettles.push(settled.value)
+        if (settled.value.type === 'model_end') yield await recordAbandoned(settled.value)
+        else if (answer) heldUntilHookSettles.push(settled.value)
         else yield settled.value
         next = stream.next()
       }
@@ -705,10 +738,9 @@ async function* executeModelStep(
   mctx: ModelStepContext,
   renderCtx: import('../types').RenderContext,
   start: ModelStartEvent,
-  stepStartTime: number,
   signal: AbortSignal,
 ): AsyncGenerator<StreamEvent, ModelStepOutcome> {
-  const { agent, composedHook, runnerConfig, ctx, errorHandler, invocationId, iterations } = mctx
+  const { agent, composedHook, runnerConfig, ctx, errorHandler, invocationId } = mctx
   const adapter = await runnerConfig.getAdapter(agent.model)
 
   signal.throwIfAborted()
@@ -733,19 +765,24 @@ async function* executeModelStep(
 
   let modelAttempt = 0
   let stepResult: import('../types').ModelStepResult | null = null
-  let modelError: string | undefined
   let shouldAbort = false
 
   while (stepResult === null && !shouldAbort) {
     signal.throwIfAborted()
     modelAttempt++
+    const attemptStartedAt = Date.now()
     try {
-      const raced = yield* modelStepBesideHook(
-        (callSignal) => adapter.step(renderCtx, getInnerModel(agent.model), callSignal),
-        (hookSignal) =>
+      const raced = yield* modelStepBesideHook({
+        callModel: (callSignal) => adapter.step(renderCtx, getInnerModel(agent.model), callSignal),
+        askHook: (hookSignal) =>
           modelAttempt === 1 ? composedHook.duringModel?.(ctx, renderCtx, hookSignal) : undefined,
+        recordAbandoned: async (abandoned) => {
+          const event = { ...abandoned, stepIndex: start.stepIndex }
+          await recordModelEvent({ scope: mctx, event })
+          return event
+        },
         signal,
-      )
+      })
       if (raced.synthetic) {
         // The request was sent and cut off before it reported usage.
         return {
@@ -759,25 +796,26 @@ async function* executeModelStep(
         throw new Error('No step result from adapter')
       }
     } catch (err) {
-      const { recovery } = await handleError(err as Error, ctx, 'model', modelAttempt, errorHandler)
+      // Each failed attempt is a model call of its own, ended with what it spent before an error
+      // handler runs, so a handler that throws cannot lose it.
+      const endEvent = createEndEvent({
+        invocationId,
+        agentName: agent.name,
+        stepIndex: start.stepIndex,
+        durationMs: Date.now() - attemptStartedAt,
+        usage: spentByFailedAttempt({ error: err, start }),
+        finishReason: 'error',
+        error: (err as Error).message,
+      })
+      await recordModelEvent({ scope: mctx, event: endEvent })
+      yield endEvent
 
+      const { recovery } = await handleError(err as Error, ctx, 'model', modelAttempt, errorHandler)
       switch (recovery.action) {
-        case 'throw': {
-          const endEvent = createEndEvent({
-            invocationId,
-            agentName: agent.name,
-            stepIndex: iterations,
-            durationMs: Date.now() - stepStartTime,
-            finishReason: 'error',
-            error: (err as Error).message,
-          })
-          await runnerConfig.sessionService.appendEvent(mctx.session, endEvent)
-          yield endEvent
+        case 'throw':
           throw err
-        }
         case 'abort':
           shouldAbort = true
-          modelError = (err as Error).message
           break
         case 'retry':
           if (recovery.delay) {
@@ -787,14 +825,13 @@ async function* executeModelStep(
         case 'skip':
         case 'pass':
         default:
-          modelError = (err as Error).message
           stepResult = null
           break
       }
     }
   }
 
-  return { stepResult, modelError, shouldAbort }
+  return { stepResult, shouldAbort }
 }
 
 interface ToolExecutionResult {
@@ -1280,9 +1317,8 @@ async function* completeModelStep(
   scope: AgentLoopScope,
   stepResult: import('../types').ModelStepResult,
   iterations: number,
-  stepStartTime: number,
 ): AsyncGenerator<StreamEvent, IterationOutcome> {
-  const { agent, composedHook, session, config, invocationId, runnerConfig, ctx, mctx } = scope
+  const { agent, composedHook, session, config, runnerConfig, ctx, mctx } = scope
 
   let finalStepResult = stepResult
   const modifiedResult = await composedHook.afterModel?.(ctx, stepResult)
@@ -1304,17 +1340,6 @@ async function* completeModelStep(
     }
   }
   if (modifiedResult) finalStepResult = modifiedResult
-
-  const endEvent = createEndEvent({
-    invocationId,
-    agentName: agent.name,
-    stepIndex: iterations,
-    durationMs: Date.now() - stepStartTime,
-    usage: usageWithModelDefaults(finalStepResult, agent),
-    finishReason: finalStepResult.finishReason,
-  })
-  await runnerConfig.sessionService.appendEvent(session, endEvent)
-  yield endEvent
 
   enrichToolCallsWithYieldFlag(finalStepResult.toolCalls, functionToolsOf(agent))
 
@@ -1370,19 +1395,18 @@ async function* runAgentIteration(
   scope: AgentLoopScope,
   loop: { iterations: number },
 ): AsyncGenerator<StreamEvent, IterationOutcome> {
-  const { agent, effectiveAgent, session, invocationId, runnerConfig, mctx } = scope
+  const { agent, effectiveAgent, session, invocationId, mctx } = scope
   const renderCtx = buildContext(session, effectiveAgent, invocationId)
   const stepStartTime = Date.now()
 
   const startEvent = createStartEvent(renderCtx, loop.iterations + 1, invocationId)
-  await runnerConfig.sessionService.appendEvent(session, startEvent)
+  await recordModelEvent({ scope, event: startEvent })
   yield startEvent
 
-  const { stepResult, modelError, shouldAbort, transfer, synthetic } = yield* executeModelStep(
+  const { stepResult, shouldAbort, transfer, synthetic } = yield* executeModelStep(
     mctx,
     renderCtx,
     startEvent,
-    stepStartTime,
     scope.effectiveSignal,
   )
 
@@ -1392,9 +1416,22 @@ async function* runAgentIteration(
   }
   const iterations = loop.iterations
 
-  if (iterations >= scope.maxSteps) {
-    return { type: 'break', outcome: 'max_steps' }
+  // A step that returned a result ends here, before a hook or the step limit can stop or transfer
+  // the run, so its model call is always recorded.
+  if (stepResult) {
+    const endEvent = createEndEvent({
+      invocationId,
+      agentName: agent.name,
+      stepIndex: iterations,
+      durationMs: Date.now() - stepStartTime,
+      usage: usageWithModelDefaults(stepResult, agent),
+      finishReason: stepResult.finishReason,
+    })
+    await recordModelEvent({ scope, event: endEvent })
+    yield endEvent
   }
+
+  if (iterations >= scope.maxSteps) return { type: 'break', outcome: 'max_steps' }
 
   if (transfer) {
     return {
@@ -1414,21 +1451,12 @@ async function* runAgentIteration(
     }
   }
 
+  // Each failed attempt already ended as a model call of its own.
   if (shouldAbort || !stepResult) {
-    const endEvent = createEndEvent({
-      invocationId,
-      agentName: agent.name,
-      stepIndex: iterations,
-      durationMs: Date.now() - stepStartTime,
-      finishReason: 'error',
-      error: modelError,
-    })
-    await runnerConfig.sessionService.appendEvent(session, endEvent)
-    yield endEvent
     return shouldAbort ? { type: 'break', outcome: 'aborted' } : { type: 'continue' }
   }
 
-  return yield* completeModelStep(scope, stepResult, iterations, stepStartTime)
+  return yield* completeModelStep(scope, stepResult, iterations)
 }
 
 function yieldBudget(

@@ -1,3 +1,4 @@
+import type { ModelCallObserver } from '../core/model-calls'
 import type { ErrorHandler } from '../errors/types'
 import type { Hook } from '../hook/types'
 import type { Event, StreamEvent, ToolYieldEvent, AssistantEvent, MediaPart } from './events'
@@ -37,6 +38,8 @@ export interface RunConfig {
 
 export interface InternalRunConfig extends RunConfig {
   onStep?: (stepEvents: Event[], session: Session, runnable: Runnable<ErasedStateSchema>) => void
+  /** The call observers in scope when the run started, which each model call is reported to. */
+  modelCallObservers?: readonly ModelCallObserver[]
 }
 
 export interface CostEstimate {

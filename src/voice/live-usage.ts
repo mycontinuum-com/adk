@@ -24,7 +24,7 @@ export class LiveVoiceMeter {
   private stoppedAt: number | undefined
 
   constructor(
-    private readonly modelName: string,
+    readonly modelName: string,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -80,7 +80,11 @@ export class LiveVoiceMeter {
     }
   }
 
-  private seconds(): { seconds: number; basis: 'reported' | 'estimated' } | undefined {
+  /**
+   * The seconds the session was connected: the provider's reported usage once every connection has
+   * reported and closed, else an estimate. `undefined` when neither is known.
+   */
+  seconds(): { seconds: number; basis: 'reported' | 'estimated' } | undefined {
     const observed = [...this.connections.values()]
     const reportedSeconds = observed.reduce((total, entry) => total + entry.milliseconds, 0) / 1000
     if (observed.length && observed.every((entry) => entry.reported && entry.closed))

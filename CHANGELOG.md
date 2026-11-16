@@ -31,6 +31,45 @@ Migration section:
   // Before / // After code block only when the prose alone is ambiguous.
 -->
 
+## [Unreleased]
+
+### Added
+
+- `provider.usage` line — each paid attempt the ADK makes writes one JSON line to standard error, with nothing to install: each model call a run or `app.decide` makes, each realtime voice turn, each GPT Live session and each Voyage embedding attempt, a failed one included. The line carries the operation, model, tokens and cost, priced from the price list in use. A GPT Live session's line, written when the call ends however it ends, has `kind: 'session'` and its `seconds`.
+- `ModelAdapter.decide` takes an optional `onAbandoned(error)`, which an adapter that sends a decision on to another endpoint calls before asking the next, so each endpoint asked is a model call with its own start and end.
+- `configureUsageLog` — the one switch: it sends the line elsewhere or turns it off. It and `configurePricing` reach the lines of every entry point, each CommonJS bundle included.
+- `ModelUsage.serviceTier` and `ModelUsage.endpointRegion` — the OpenAI adapter sets the tier the response says it was billed at, such as `flex`, `priority` or `fast`, else the one requested, and none for the standard tier (`default` or `auto`), and the region of a regional host such as `eu.api.openai.com`; Claude and Gemini on Vertex set their location. The price list's rates for that tier (any rate with the tier's suffix, such as `_flex`, `_priority` or `_ultrafast`) and its regional processing and Vertex endpoint uplifts price the call; a tier it has no rates for leaves the call's cost unavailable. Its `voyage/` entries are priced.
+
+### Changed
+
+- Each failed model attempt ends with its own `model_end` — a retried, abandoned or aborted attempt, one an adapter retried or sent to another tier or endpoint, and the call a run timeout cuts off. It spent nothing when the provider answered with an HTTP error status or a retry was aborted before its request was sent, else the input estimated at the call's start. `usage.modelCalls` counts every attempt, and an aborted step no longer gets a second `model_end`. A decision the OpenAI adapter sends on to its next endpoint ends the attempt it abandoned the same way. A retry a provider SDK makes inside one request is not an attempt of its own. The `model_end` is recorded before the agent's error handlers run, so a handler that throws cannot lose it. A failed Voyage embedding attempt writes its line the same way, its input estimated from the characters it sent.
+- A step's `model_end` is recorded as soon as the model returns, before `afterModel` runs, with the usage and finish reason the adapter reported. The call the step limit stops at, and one an `afterModel` hook hands to another agent, now end with their usage; neither had a `model_end`.
+- Call observers receive a run's model events as the run records them, not as its stream delivers them, so a call an abort cuts off, or one a failing parallel branch made, is still observed.
+- Prices come from a snapshot of LiteLLM's price map that each release ships (`src/providers/price-list.gen.ts`, refreshed with `pnpm --filter @animahealth/adk run prices`), so pricing makes no network request and a process prices its first call; it fetched the map from GitHub at runtime. `configurePricing({ url })` opts a host into a live map, priced from the snapshot until it loads or while it cannot be reached.
+- The Voyage embedder reports `usage.totalTokens`; it read the SDK's response as `total_tokens` and never reported tokens.
+
+### Migration from 0.6.14
+
+#### Tests and the usage log
+
+A process now writes a `provider.usage` line for each model call, tests on mock adapters included. Call `configureUsageLog(false)` in test setup to keep it out of test output.
+
+#### Prices without a network request
+
+Pricing no longer downloads LiteLLM's map from GitHub: it reads the snapshot in the package, so a test that asserted no request, or a request only to its provider, sees none for prices. A host that relied on prices newer than its ADK passes `configurePricing({ url: 'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json' })`.
+
+#### Hosts with their own log format
+
+The line goes to standard error as plain JSON with no request or call context, so a program that speaks JSON lines over standard output, such as a CLI or an MCP stdio server, keeps it clean; Lambda and ECS ship standard error to CloudWatch like standard output. A host whose output must carry its own envelope or correlation id, such as a voice agent that tags every line with its call, passes `configureUsageLog({ write })` a function that re-emits the line through its own logger.
+
+#### `model_end` comes before `afterModel`
+
+A step's `model_end` now records what the adapter returned, before `afterModel` runs. A hook that changed a result's `usage` or `finishReason` changes the step that follows, not its `model_end`.
+
+#### Failed calls carry usage
+
+A `model_end` with `finishReason: 'error'` now carries the usage the attempt spent: none when the provider answered with an error status, else the input estimated at the call's start. Code that read `usage === undefined` as "the call failed" reads `finishReason` instead.
+
 ## [0.6.14] - 2026-11-15
 
 ### Added

@@ -16,6 +16,7 @@ import type {
 import type { NoiseCancellationType, RecordingConfig, SoundConfig } from './types'
 
 import { adk } from '../api'
+import { configureUsageLog } from '../core/usage-log'
 import { openai } from '../providers/models'
 import { serializeContext } from '../providers/openai'
 import { configurePricing } from '../providers/pricing'
@@ -113,6 +114,8 @@ async function fixture(
     detachedEnter?: boolean
     renderGate?: ReturnType<typeof gate>
     failEnter?: boolean
+    /** The voice session connects, runs this, then its start fails before the agent enters. */
+    failStart?: () => void
     startPending?: boolean
     enterGate?: ReturnType<typeof gate>
     agentScope?: boolean
@@ -273,6 +276,10 @@ async function fixture(
       order.push('voice-start')
       startOptions.push({ inputOptions })
       this.agent = agent
+      if (options.failStart) {
+        options.failStart()
+        throw new Error('Start failed')
+      }
       if (options.speakingAgent) agent.duplexSession.voice = this
       const entered = agent.onEnter()
       if (options.detachedEnter) void entered.catch((error) => entryErrors.push(error))
@@ -2559,9 +2566,14 @@ describe('voice activity hooks', () => {
   })
 })
 
+type LiveCall = Awaited<ReturnType<Awaited<ReturnType<typeof fixture>>['call']>>
+
 describe('Live call usage', () => {
   beforeEach(useTestPricing)
-  afterEach(() => configurePricing(false))
+  afterEach(() => {
+    configurePricing(false)
+    configureUsageLog(false)
+  })
 
   function usageMetric(connection: string, seconds: number) {
     return {
@@ -2623,6 +2635,92 @@ describe('Live call usage', () => {
       cost,
     })
   })
+
+  test.each([
+    ['the worker shuts down', async (call: LiveCall) => call.shutdown()],
+    [
+      'the caller hangs up',
+      async (call: LiveCall) => call.session.emit('close', { reason: 'participant_disconnected' }),
+    ],
+    [
+      'the transport fails',
+      async (call: LiveCall) =>
+        call.session.emit('close', { reason: 'error', error: new Error('Transport failed') }),
+    ],
+  ] as const)(
+    'a call that ends when %s writes one provider.usage line for its GPT Live session',
+    { meta: { fixture: 'agent-kit.voice-usage-line' } },
+    async (_, end) => {
+      const lines: Array<Record<string, unknown>> = []
+      configureUsageLog({ write: (line) => lines.push(JSON.parse(line)) })
+      const f = await fixture()
+      const call = await f.call()
+      call.session.emit('metrics_collected', usageMetric('connection-one', 15))
+      call.live.emit('openai_server_event_received', { type: 'session.closed' })
+
+      await end(call)
+      await vi.waitFor(() => expect(f.exited).toHaveBeenCalledTimes(1))
+      await call.shutdown()
+
+      expect(lines).toEqual([
+        {
+          ts: expect.any(String),
+          level: 'info',
+          component: 'adk',
+          event: 'provider.usage',
+          operation: 'voice',
+          provider: 'openai',
+          model: 'gpt-live-1',
+          kind: 'session',
+          seconds: 15,
+          usageBasis: 'reported',
+          durationMs: 15000,
+          costUsd: 0.0125,
+          costBasis: 'reported',
+          adkVersion: expect.any(String),
+        },
+      ])
+    },
+  )
+
+  test(
+    'a call whose voice session starts but never enters still writes its GPT Live session line',
+    { meta: { fixture: 'agent-kit.voice-usage-line' } },
+    async () => {
+      const lines: Array<Record<string, unknown>> = []
+      configureUsageLog({ write: (line) => lines.push(JSON.parse(line)) })
+      let clock = 1_000
+      const f = await fixture({
+        clock: () => clock,
+        failStart: () => {
+          clock += 30_000
+        },
+      })
+
+      await expect(f.call()).rejects.toThrow('Start failed')
+      await f.shutdowns[0]?.()
+
+      expect(f.exited).not.toHaveBeenCalled()
+      expect(lines).toEqual([
+        {
+          ts: expect.any(String),
+          level: 'info',
+          component: 'adk',
+          event: 'provider.usage',
+          operation: 'voice',
+          provider: 'openai',
+          model: 'gpt-live-1',
+          kind: 'session',
+          seconds: 30,
+          usageBasis: 'estimated',
+          durationMs: 30000,
+          costUsd: 0.025,
+          costBasis: 'estimated',
+          adkVersion: expect.any(String),
+        },
+      ])
+    },
+  )
 
   test('falls back to connection time when the provider reports no usage', async () => {
     let clock = 1_000

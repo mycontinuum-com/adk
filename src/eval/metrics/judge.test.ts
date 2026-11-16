@@ -603,7 +603,7 @@ describe('app.evaluate.judge', () => {
 
 describe('judge cost', () => {
   it('adds the judge cost to the metric, the case, the suite total and report.md', async () => {
-    useTestPricing()
+    await useTestPricing()
     const adapter = new UsageReportingAdapter({ responses: [{ text: verdict('Asked.', true) }] })
     const app = adk({ name: 'judge', adapters: { openai: adapter } })
     const evalCase = app.evaluate.case({
@@ -653,7 +653,7 @@ describe('judge cost', () => {
   })
 
   it("keeps a run's known cost when a metric errors", async () => {
-    useTestPricing()
+    await useTestPricing()
     const answer = { text: 'Shall I send it?' }
     const asked = { text: verdict('Asked.', true) }
     const adapter = new UsageReportingAdapter({ responses: [answer, asked, answer, asked] })
@@ -685,8 +685,8 @@ describe('judge cost', () => {
     )
   })
 
-  it('records what a failed judge spent, and the known part when a call went unrecorded', async () => {
-    useTestPricing()
+  it('records what a failed judge spent, a call that failed without usage at its estimated input', async () => {
+    await useTestPricing()
     const missing = { text: JSON.stringify({ other: { reason: 'Unrelated.', passed: true } }) }
     const adapter = new UsageReportingAdapter({
       responses: [missing, missing, missing, { error: new Error('503') }],
@@ -716,15 +716,15 @@ describe('judge cost', () => {
     expect(result.results.map((r) => r.metrics.consent.usage?.modelCalls)).toEqual([3, 1])
     expect(result.results.map(caseJudgeCost)).toEqual([
       { basis: 'reported', totalCost: 0.15 + 0.15 + 0.15, currency: 'USD' },
-      { basis: 'unavailable' },
+      { basis: 'estimated', totalCost: 0.0000828, currency: 'USD' },
     ])
     expect(generateReport(result)).toContain(
-      '**Cost:** unavailable ($0.4500 known across 1 of 2 cases) — cases $0.000000 (reported), judge unavailable',
+      '**Cost:** $0.4501 (estimated) — cases $0.000000 (reported), judge $0.4501 (estimated)',
     )
   })
 
   it('counts a malformed attempt that a parse retry recovered', async () => {
-    useTestPricing()
+    await useTestPricing()
     const adapter = new UsageReportingAdapter({
       responses: [{ text: 'not json' }, { text: verdict('Asked.', true) }],
     })

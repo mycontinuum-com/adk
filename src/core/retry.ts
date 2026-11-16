@@ -38,11 +38,55 @@ export async function withRetry<T>(
   )
 }
 
+/**
+ * A stream retry aborted before its request was sent, such as during the wait before a retry. The
+ * attempt spent nothing. Matched by name, since each bundled entry of the package has its own copy
+ * of this class.
+ */
+class RequestNotSentError extends Error {
+  override readonly name = 'RequestNotSentError'
+
+  constructor() {
+    super('Aborted')
+  }
+}
+
+/** Whether `error` is a `RequestNotSentError` from any copy of the package. */
+function isRequestNotSent(error: unknown): boolean {
+  return error instanceof Error && error.name === 'RequestNotSentError'
+}
+
+/**
+ * Whether a failed request spent nothing: the provider answered it with an HTTP error status, such
+ * as a 429, or it was a retry aborted before it was sent. Any other failure, such as a reset
+ * connection, a timeout, a stream that ended early or an abort mid-request, may have been
+ * processed.
+ */
+export function failedWithoutSpending(error: unknown): boolean {
+  return answeredWithErrorStatus(error) || isRequestNotSent(error)
+}
+
+/**
+ * Whether the provider answered the request with an HTTP error status. The OpenAI, Anthropic and
+ * Google SDKs each throw an error carrying the response's numeric `status`, and Voyage's carries
+ * `statusCode`; one raised without a response, such as a connection error, carries neither.
+ */
+function answeredWithErrorStatus(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const status =
+    'status' in error ? error.status : 'statusCode' in error ? error.statusCode : undefined
+  return typeof status === 'number' && status >= 400 && status < 600
+}
+
 export interface StreamRetryOptions<TYield> {
   config?: RetryConfig
   signal?: AbortSignal
-  onRetry?: (error: Error, attempt: number, maxAttempts: number, invocationId: string) => TYield
-  invocationId?: string
+  /**
+   * Ends an attempt abandoned to retry; what it returns is yielded before the next attempt. A model
+   * adapter returns the attempt's `model_end` (`abandonedAttemptEnd`), so the attempt writes its
+   * usage line.
+   */
+  onRetry: (abandoned: { error: Error; durationMs: number }) => TYield
 }
 
 export async function* withStreamRetry<TYield, TReturn>(
@@ -53,9 +97,10 @@ export async function* withStreamRetry<TYield, TReturn>(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (options.signal?.aborted) {
-      throw new Error('Aborted')
+      throw new RequestNotSentError()
     }
 
+    const startedAt = Date.now()
     try {
       return yield* createStream()
     } catch (error) {
@@ -67,6 +112,7 @@ export async function* withStreamRetry<TYield, TReturn>(
         throw err
       }
 
+      yield options.onRetry({ error: err, durationMs: Date.now() - startedAt })
       await sleep(computeRetryDelay(options.config!, attempt))
     }
   }

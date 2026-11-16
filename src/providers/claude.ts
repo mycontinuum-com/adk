@@ -18,6 +18,7 @@ import type {
   ToolChoice,
 } from '../types/runnables'
 
+import { abandonedAttemptEnd } from '../context/build'
 import { withStreamRetry } from '../core/retry'
 import { createEventId, createCallId } from '../session'
 import { createStreamAccumulator, type RawDeltaEvent } from './accumulator'
@@ -434,18 +435,24 @@ Either:
         }
       }
 
-      return parseResponse(
+      const step = parseResponse(
         contentBlocks,
         normalizeAnthropicUsage(usage),
         stopReason,
         ctx.invocationId,
         ctx.agentName,
       )
+      // A Vertex location other than `global` bills the regional endpoint uplift
+      return {
+        ...step,
+        usage: step.usage && { ...step.usage, endpointRegion: config.vertex.location },
+      }
     }
 
     return yield* withStreamRetry(createStream, {
       config: retryConfig,
       signal,
+      onRetry: ({ error, durationMs }) => abandonedAttemptEnd({ ctx, error, durationMs }),
     })
   }
 }

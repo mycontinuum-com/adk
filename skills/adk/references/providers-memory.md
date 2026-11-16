@@ -285,31 +285,109 @@ so runs without complete USD charges omitted the combined `reportedCostUSD` tota
 
 ## Cost Estimates
 
-`usage.cost` is estimated from token counts and live prices in
+`usage.cost` is estimated from token counts and the prices in
 [LiteLLM's public price map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
-The ADK bundles no prices. Each process starts fetching the map when a model call first reports
-priceable usage, serves it from memory for an hour, then refreshes it in the background. A finished
-run waits at most one second for that first fetch; if it is not ready, that run has no cost and later
-runs use the map once it arrives. Runs without model usage, such as scripted tests, never contact the
-registry. New models are priced once the registry lists them.
+Each ADK release ships a snapshot of the rows it prices from (`src/providers/price-list.gen.ts`,
+written by `pnpm --filter @animahealth/adk run prices` before a release), so pricing makes no
+network request and a process prices its first call. A host that wants prices newer than its ADK
+passes `configurePricing({ url })`: the ADK then fetches that map, serves it from memory for an hour
+and refreshes it in the background, starting the load the first time anything is priced, and
+prices from the snapshot until it loads or while it cannot be reached. Tests turn pricing off with `configurePricing(false)`. A model released after the
+snapshot is priced once a release's snapshot lists it.
 
 A model resolves by provider and name: OpenAI names match OpenAI entries, Gemini names prefer
-`gemini/<name>`, and Claude names prefer `vertex_ai/<name>`, then Anthropic. Dated snapshots and
+`gemini/<name>`, or `vertex_ai/<name>` for a call through Vertex, and Claude names prefer
+`vertex_ai/<name>`, then Anthropic. Voyage models resolve to `voyage/<name>`. Dated snapshots and
 `@version` suffixes fall back to the base model. Resellers such as Bedrock or OpenRouter are never
 matched. Chat Completions and EUrouter calls are not priced here.
 
+A call billed at a service tier other than the standard one (`usage.serviceTier`) is priced at that
+tier's rates, long-context ones included: the registry's rates with the tier's suffix, such as
+`input_cost_per_token_flex`, `_priority` or `_ultrafast`. The OpenAI adapter takes the tier from the
+response's `service_tier`, which can differ from the one requested (`gpt-6-luna` answers a priority
+request with `fast`), and from the request when the response does not say; `default` and `auto`
+are the standard tier. A tier the registry has no rates for leaves the call unpriced
+(`costBasis: 'unavailable'`), since it may cost more than the standard one. A call to a regional host, such as `eu.api.openai.com`, adds the
+registry's `regional_processing_uplift_multiplier_<region>`, and a call to a Vertex location other
+than `global` adds its `regional_endpoint_uplift_multiplier` (`usage.endpointRegion`).
+
 Models billed by connected time, such as GPT Live, use the registry's per-second rate.
 Audio and cached tokens are billed as subsets of the reported totals. Gemini thinking tokens are
-billed on top of output tokens because Gemini reports them separately. When the registry is
-unreachable, the model is unknown, or a billed token category has no published rate, the cost is
-omitted rather than guessed. A failed fetch logs `adk.pricing.unavailable` and is retried after
-five minutes.
+billed on top of output tokens because Gemini reports them separately. When the model is unknown,
+or a billed token category has no published rate, the cost is omitted rather than guessed. A
+failed live fetch logs `adk.pricing.unavailable` and is retried after five minutes.
 
 ```ts
 import { configurePricing } from '@animahealth/adk'
 
-configurePricing(false) // tests: never fetch prices
-configurePricing({ url: 'https://prices.internal/litellm.json' }) // contract prices, same format
+configurePricing(false) // tests: no cost estimates
+configurePricing({ url: 'https://prices.internal/litellm.json' }) // a live map, same format
+```
+
+## Usage Log
+
+Each paid attempt the ADK makes writes one JSON line to standard error, with nothing to install:
+each model call a run or `app.decide` makes, each realtime voice turn, each GPT Live session, and
+each Voyage embedding attempt. A model call's line, shown across lines here:
+
+```jsonc
+{
+  "ts": "2026-11-15T19:04:11.512Z",
+  "level": "info",
+  "component": "adk",
+  "event": "provider.usage",
+  "operation": "coder", // the agent's name, `decide`, or `memory.embed`
+  "invocationId": "inv_1",
+  "provider": "openai",
+  "model": "gpt-6-luna",
+  "endpointRegion": "eu",
+  "kind": "tokens",
+  "inputTokens": 23,
+  "cachedTokens": 0,
+  "cacheWriteTokens": 0,
+  "outputTokens": 5,
+  "reasoningTokens": 0,
+  "audioInputTokens": 0,
+  "audioOutputTokens": 0,
+  "usageBasis": "reported", // or `estimated`
+  "costUsd": 0.00000528,
+  "costBasis": "reported", // or `estimated`, or `unavailable` with no `costUsd`
+  "finishReason": "stop",
+  "durationMs": 812,
+  "adkVersion": "<the package version>"
+}
+```
+
+`serviceTier` appears when the provider billed a tier other than the standard one. A GPT Live
+session's line, written when the call ends however it ends, has `kind: "session"` and `seconds` in
+place of token counts. A line holds no prompt, output or error text.
+
+A request that failed, that an adapter retried or sent to another tier or endpoint, a decision's
+included, or that an abort, a timeout or the step limit cut off writes its own line: zero tokens
+when the provider answered with an HTTP error status or a retry was aborted before it was sent,
+else the input estimated at the call's start (`usageBasis: "estimated"`). A retry a provider SDK
+makes inside one request is part of that request's line, and a SageMaker embedding endpoint, billed
+by instance time, writes none. A provider called without the ADK writes no line; only its invoice
+shows it.
+
+An adapter's `decide` that sends a decision on to another endpoint after one fails passes that
+endpoint's error to its `onAbandoned` argument before asking the next, so each endpoint asked is a
+call of its own, with its own `model_start`, line and duration.
+
+Every line is priced from the price list in use: the snapshot of LiteLLM's price map the package
+ships, or a live map `configurePricing({ url })` loads. A process's first call is priced too.
+
+Standard error keeps standard output free for a program that speaks a protocol over it, such as a
+JSON-lines CLI or an MCP stdio server; Lambda and ECS ship it to CloudWatch as they do standard
+output. `configureUsageLog` is the one switch. The log's writer and the price map are shared by every entry
+point of the package, so `configureUsageLog` and `configurePricing` through one reach the lines
+every other entry writes.
+
+```ts
+import { configureUsageLog } from '@animahealth/adk'
+
+configureUsageLog(false) // tests: write no lines
+configureUsageLog({ write: (line) => sink.write(line) })
 ```
 
 ## Shared Model Options

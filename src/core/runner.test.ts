@@ -4,6 +4,7 @@ import type { ErrorHandler } from '../errors'
 import type { ModelAdapter, StreamEvent } from '../types'
 
 import { adk } from '../api'
+import { PRICE_LIST } from '../providers/price-list.gen'
 import { configurePricing } from '../providers/pricing'
 import { BaseSession } from '../session'
 import { inMemoryStore } from '../session/memory'
@@ -285,7 +286,7 @@ describe('BaseRunner', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1)
       })
 
-      test('returns without a cost when the registry does not answer', async () => {
+      test('prices from the shipped list when a live registry does not answer', async () => {
         fetchMock.mockImplementation(() => new Promise(() => {}))
         const runner = new BaseRunner({ adapters: { openai: pricedAdapter } })
 
@@ -294,14 +295,21 @@ describe('BaseRunner', () => {
           createTestSession('Test'),
         )
 
-        expect(result.usage?.cost).toBeUndefined()
+        const rates = PRICE_LIST['gpt-4o-mini']
+        expect(result.usage?.cost?.totalCost).toBeCloseTo(
+          1000 * Number(rates.input_cost_per_token) + 100 * Number(rates.output_cost_per_token),
+          12,
+        )
         expect(result.usage?.totalInputTokens).toBe(1000)
       })
 
-      test('does not contact the registry when no call reports usage', async () => {
-        const runner = new BaseRunner({ adapters: { openai: mockAdapter } })
+      test('does not contact the registry for a model it cannot price', async () => {
+        const runner = new BaseRunner({ adapters: { eurouter: mockAdapter } })
 
-        await runner.run(testAgent(), createTestSession('Test'))
+        await runner.run(
+          testAgent({ model: { provider: 'eurouter', name: 'mistral-large' } }),
+          createTestSession('Test'),
+        )
 
         expect(fetchMock).not.toHaveBeenCalled()
       })

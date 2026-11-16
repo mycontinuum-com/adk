@@ -17,6 +17,7 @@ import type {
   RenderContext,
 } from '../types/runnables'
 
+import { abandonedAttemptEnd } from '../context/build'
 import { createCallId, createEventId } from '../session'
 import { normalizeSchema } from './normalizeSchema'
 import { zodToToolSchema } from './zodToJsonSchema'
@@ -601,6 +602,7 @@ export class ChatCompletionsCore implements ModelAdapter {
     for (let attempt = 1; attempt <= attempts; attempt++) {
       signal?.throwIfAborted()
       const acc = createStreamAccumulator(config.name)
+      const startedAt = Date.now()
       try {
         const stream = await client.chat.completions.create(request, { signal })
         const completionId = createEventId()
@@ -634,6 +636,7 @@ export class ChatCompletionsCore implements ModelAdapter {
         }
         const retry = config.retry
         if (!retry) throw error
+        yield abandonedAttemptEnd({ ctx, error, durationMs: Date.now() - startedAt })
         await waitBeforeRetry(retry, attempt, signal)
       }
     }

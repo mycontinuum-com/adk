@@ -27,6 +27,7 @@ import type { VoiceHandlerHandle } from './types'
 
 import { installModelCallContext, observeModelCalls } from '../core/model-calls'
 import { summarizeModelUsage } from '../core/runner'
+import { logSessionUsage } from '../core/usage-log'
 import { safeErrorFields } from '../errors/safe-error'
 import {
   loadPricing,
@@ -1451,6 +1452,7 @@ class LiveCall<S extends StateSchema, T> {
       await this.voiceSession.close()
     } finally {
       this.meter.stop()
+      this.recordSession()
       // The thinking sound is best effort, so a player that fails to close does not hold up close.
       await this.thinkingPlayer?.close().catch(() => {})
       try {
@@ -1477,12 +1479,26 @@ class LiveCall<S extends StateSchema, T> {
     }
   }
 
+  /** Writes the call's GPT Live session line once its meter stops, however the call ended. */
+  private recordSession(): void {
+    const measured = this.meter.seconds()
+    if (!measured) return
+    logSessionUsage({
+      operation: this.runtime.config.agent.name,
+      provider: 'openai',
+      model: this.meter.modelName,
+      seconds: measured.seconds,
+      usageBasis: measured.basis,
+    })
+  }
+
   private async exitHooks(ledger: Session<S> | undefined): Promise<void> {
     const context = this.context
     if (!context || !ledger) return
     try {
+      const usage = this.usage(await loadPricing({ maxWaitMs: RESULT_PRICING_WAIT_MS }))
       const exit = Object.assign(liveContext({ ...context, session: ledger }, context.voice), {
-        usage: this.usage(await loadPricing({ maxWaitMs: RESULT_PRICING_WAIT_MS })),
+        usage,
       })
       for (const hook of this.hooks) {
         // react-doctor-disable-next-line react-doctor/async-await-in-loop -- onExit hooks run in registration order, one at a time

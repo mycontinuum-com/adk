@@ -1037,6 +1037,7 @@ describe('Claude provider', () => {
         outputTokens: 250,
         cachedTokens: 3000,
         cacheWriteTokens: 900,
+        endpointRegion: 'l',
       })
 
       const catalog = parsePricingCatalog({
@@ -1091,6 +1092,7 @@ describe('Claude provider', () => {
         outputTokens: 30,
         cachedTokens: 500,
         cacheWriteTokens: 40,
+        endpointRegion: 'l',
       })
     })
   })

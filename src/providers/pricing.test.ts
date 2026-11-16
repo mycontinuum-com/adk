@@ -1,16 +1,25 @@
 import type { ModelUsage } from '../types'
 
 import { summarizeModelUsage } from '../core/runner'
+import { TEST_PRICING } from '../test-support/pricing-registry'
+import { PRICE_LIST } from './price-list.gen'
 import {
   calculateCost,
   calculateSessionCost,
   configurePricing,
   formatCost,
   getPricing,
+  loadedPricing,
   loadPricing,
   parsePricingCatalog,
   usageCost,
+  type PricingCatalog,
 } from './pricing'
+
+/** The registry key an OpenAI model is priced under in `catalog`, if any. */
+function openAIKey(catalog: PricingCatalog | undefined, modelName: string): string | undefined {
+  return catalog && getPricing(catalog, { provider: 'openai', modelName })?.key
+}
 
 const REGISTRY = {
   sample_spec: { input_cost_per_token: 0, litellm_provider: 'one of https://docs.litellm.ai' },
@@ -182,6 +191,72 @@ describe('calculateCost', () => {
   })
 })
 
+describe('service tiers, regions, and services outside the model providers', () => {
+  const fixture = { meta: { fixture: 'agent-kit.tier-region-price' } }
+  const luna = { provider: 'openai', modelName: 'gpt-6-luna' } as const
+  const total = (usage: Parameters<typeof calculateCost>[0]) =>
+    calculateCost(usage, TEST_PRICING)?.totalCost
+
+  it('prices a call at the service tier it was billed at', fixture, () => {
+    const usage = { ...luna, inputTokens: 200_000, outputTokens: 100_000 }
+    expect(total(usage)).toBeCloseTo(0.07, 12)
+    expect(total({ ...usage, serviceTier: 'priority' })).toBeCloseTo(0.14, 12)
+    expect(total({ ...usage, serviceTier: 'flex' })).toBeCloseTo(0.035, 12)
+  })
+
+  it('prices a call at any tier the price list names by a rate suffix', fixture, () => {
+    const ultrafast = parsePricingCatalog({
+      'gpt-9': {
+        litellm_provider: 'openai',
+        input_cost_per_token: 1e-6,
+        input_cost_per_token_ultrafast: 3e-6,
+        output_cost_per_token: 4e-6,
+        output_cost_per_token_ultrafast: 1.2e-5,
+      },
+    })
+    const usage = {
+      provider: 'openai',
+      modelName: 'gpt-9',
+      inputTokens: 1_000_000,
+      outputTokens: 100_000,
+    } as const
+    expect(calculateCost({ ...usage, serviceTier: 'ultrafast' }, ultrafast)?.totalCost).toBeCloseTo(
+      4.2,
+      12,
+    )
+    expect(calculateCost(usage, ultrafast)?.totalCost).toBeCloseTo(1.4, 12)
+  })
+
+  it(
+    'prices a priority call past the long-context threshold at its priority long-context rates',
+    fixture,
+    () => {
+      expect(
+        total({ ...luna, serviceTier: 'priority', inputTokens: 300_000, outputTokens: 100_000 }),
+      ).toBeCloseTo(0.27, 12)
+    },
+  )
+
+  it('adds the regional endpoint uplift on Vertex for any location but global', fixture, () => {
+    const opus = {
+      provider: 'claude',
+      modelName: 'claude-opus-5',
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+    } as const
+    expect(total({ ...opus, endpointRegion: 'europe-west1' })).toBeCloseTo(5.5, 12)
+    expect(total({ ...opus, endpointRegion: 'global' })).toBeCloseTo(5, 12)
+    const flash = {
+      provider: 'gemini',
+      modelName: 'gemini-3.5-flash',
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+    } as const
+    expect(total({ ...flash, endpointRegion: 'europe-west1' })).toBeCloseTo(0.33, 12)
+    expect(total(flash)).toBeCloseTo(0.3, 12)
+  })
+})
+
 describe('calculateSessionCost', () => {
   it('prices connected seconds at the registry per-second rate, including dated ids', () => {
     expect(calculateSessionCost('gpt-live-1', 90, catalog)).toBe(0.075)
@@ -307,10 +382,10 @@ describe('loadPricing', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
-  it('returns no catalog when the registry fails, and backs off before retrying', async () => {
+  it('prices from the shipped list while a live map fails, and backs off before retrying', async () => {
     fetchMock.mockImplementation(async () => new Response('down', { status: 503 }))
-    expect(await loadPricing()).toBeUndefined()
-    expect(await loadPricing()).toBeUndefined()
+    expect(openAIKey(await loadPricing(), 'gpt-6.1-terra')).toBe('gpt-6.1-terra')
+    expect(openAIKey(await loadPricing(), 'gpt-6.1-terra')).toBe('gpt-6.1-terra')
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(console.warn).toHaveBeenCalledWith('adk.pricing.unavailable', {
       url: 'https://prices.test/registry.json',
@@ -319,28 +394,69 @@ describe('loadPricing', () => {
 
     vi.advanceTimersByTime(5001)
     fetchMock.mockImplementation(async () => Response.json(REGISTRY))
-    expect(await loadPricing()).toBeDefined()
+    const live = await loadPricing()
+    expect(openAIKey(live, 'gpt-4o')).toBe('gpt-4o')
+    expect(openAIKey(live, 'gpt-6.1-terra')).toBeUndefined()
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
-  it('stops waiting for a first fetch after maxWaitMs and keeps it for later calls', async () => {
+  it('serves the shipped list while a first live fetch is slow, then the live map', async () => {
     let respond = (_: Response) => {}
     fetchMock.mockImplementation(() => new Promise((resolve) => (respond = resolve)))
 
     const waiting = loadPricing({ maxWaitMs: 100 })
     await vi.advanceTimersByTimeAsync(100)
-    expect(await waiting).toBeUndefined()
+    expect(openAIKey(await waiting, 'gpt-6.1-terra')).toBe('gpt-6.1-terra')
+    expect(openAIKey(loadedPricing(), 'gpt-6.1-terra')).toBe('gpt-6.1-terra')
 
     respond(Response.json(REGISTRY))
-    await vi.waitFor(async () => expect(await loadPricing()).toBeDefined())
+    await vi.waitFor(async () =>
+      expect(openAIKey(await loadPricing(), 'gpt-6.1-terra')).toBeUndefined(),
+    )
+    expect(openAIKey(loadedPricing(), 'gpt-4o')).toBe('gpt-4o')
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+
+  it(
+    'prices from the shipped list, with no request, when no live map is configured',
+    { meta: { fixture: 'agent-kit.shipped-price-list' } },
+    async () => {
+      configurePricing({})
+      expect(openAIKey(await loadPricing(), 'gpt-6.1-terra')).toBe('gpt-6.1-terra')
+      expect(openAIKey(loadedPricing(), 'gpt-6.1-terra')).toBe('gpt-6.1-terra')
+      expect(fetchMock).not.toHaveBeenCalled()
+    },
+  )
 
   it('does not fetch when pricing is disabled', async () => {
     configurePricing(false)
     expect(await loadPricing()).toBeUndefined()
     expect(fetchMock).not.toHaveBeenCalled()
   })
+})
+
+describe('the shipped price list', () => {
+  it(
+    'prices the models the ADK serves in production under the provider each is called through',
+    { meta: { fixture: 'agent-kit.shipped-price-list' } },
+    () => {
+      const shipped = parsePricingCatalog(PRICE_LIST)
+      const lookups = [
+        { provider: 'openai', modelName: 'gpt-6.1-terra' },
+        { provider: 'openai', modelName: 'gpt-6-luna' },
+        { provider: 'openai', modelName: 'gpt-5.6-luna' },
+        { provider: 'gemini', modelName: 'gemini-3.8-flash', endpointRegion: 'eu' },
+        { provider: 'voyage', modelName: 'voyage-large-2' },
+      ] as const
+      expect(lookups.map((lookup) => getPricing(shipped, lookup)?.key)).toEqual([
+        'gpt-6.1-terra',
+        'gpt-6-luna',
+        'gpt-5.6-luna',
+        'vertex_ai/gemini-3.8-flash',
+        'voyage/voyage-large-2',
+      ])
+    },
+  )
 })
 
 describe('formatCost', () => {

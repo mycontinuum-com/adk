@@ -5,6 +5,7 @@ import { z } from 'zod'
 
 import { adk } from '../api'
 import { BaseRunner } from '../core/runner'
+import { configureUsageLog } from '../core/usage-log'
 import { chatCompletions, ChatCompletionsAdapter } from '../integrations/chat-completions'
 import { BaseSession } from '../session/base'
 import { SQLiteStore } from '../session/sqlite'
@@ -579,5 +580,67 @@ it.each(['same', 'host', 'alias', 'model', 'unscoped'])(
       await reader.close()
       rmSync(directory, { recursive: true, force: true })
     }
+  },
+)
+
+it(
+  'an attempt the adapter retries writes a provider.usage line of its own',
+  { meta: { fixture: 'agent-kit.failed-attempt-line' } },
+  async () => {
+    const lines: Array<Record<string, unknown>> = []
+    configureUsageLog({ write: (line) => lines.push(JSON.parse(line)) })
+    onTestFinished(() => configureUsageLog(false))
+    const responses = [
+      new Response('{"error":{"message":"overloaded"}}', {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      sse([
+        chunk({ content: 'Done' }, 'stop'),
+        { ...chunk({}), choices: [], usage: { prompt_tokens: 10, completion_tokens: 2 } },
+      ]),
+    ]
+    const app = adk({
+      adapters: {
+        'chat-completions': new ChatCompletionsAdapter({
+          baseURL: 'http://127.0.0.1:30000/v1',
+          fetch: async () => responses.shift() ?? Response.error(),
+        }),
+      },
+    })
+    const agent = app.agent({
+      name: 'backend',
+      model: chatCompletions('fixture-model', {
+        retry: { maxAttempts: 2, initialDelayMs: 1, maxDelayMs: 1, backoffMultiplier: 1 },
+      }),
+      context: [app.context.history()],
+    })
+
+    await app.run(agent, { input: 'Hello' })
+
+    expect(
+      lines.map(({ model, inputTokens, outputTokens, usageBasis, finishReason }) => ({
+        model,
+        inputTokens,
+        outputTokens,
+        usageBasis,
+        finishReason,
+      })),
+    ).toEqual([
+      {
+        model: 'fixture-model',
+        inputTokens: 0,
+        outputTokens: 0,
+        usageBasis: 'reported',
+        finishReason: 'error',
+      },
+      {
+        model: 'fixture-model',
+        inputTokens: 10,
+        outputTokens: 2,
+        usageBasis: 'reported',
+        finishReason: 'stop',
+      },
+    ])
   },
 )
