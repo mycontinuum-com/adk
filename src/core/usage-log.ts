@@ -62,6 +62,8 @@ type RequestFields = TokenCounts & {
   serviceTier?: string
   usageBasis: 'reported' | 'estimated' | 'unknown'
   finishReason?: ModelEndEvent['finishReason']
+  /** A digest the caller gives to name the request, such as a cache key; never its text. */
+  requestKey?: string
   durationMs: number
 }
 
@@ -146,12 +148,14 @@ export function logTokenUsage({
   invocationId,
   usage,
   finishReason,
+  requestKey,
   durationMs,
 }: {
   operation: string
   invocationId?: string
   usage: PricedUsage | undefined
   finishReason?: ModelEndEvent['finishReason']
+  requestKey?: string
   durationMs: number
 }): void {
   writeLine({
@@ -160,6 +164,7 @@ export function logTokenUsage({
     ...usageFields(usage),
     ...costOf(usage),
     ...(finishReason && { finishReason }),
+    ...(requestKey && { requestKey }),
     durationMs,
   })
 }

@@ -369,7 +369,9 @@ else the input estimated at the call's start (`usageBasis: "estimated"`). A retr
 makes inside one request is part of that request's line, and a SageMaker embedding endpoint, billed
 by instance time, writes none. A provider called without the ADK, such as over raw HTTP, writes a
 line only when the calling code reports it with `logTokenUsage`, from the usage the provider
-reported; otherwise only its invoice shows it.
+reported; otherwise only its invoice shows it. Its optional `requestKey` names the request with a
+digest the caller chooses, such as a cache key, so the same request can be matched across callers;
+it must never hold the request's text.
 
 ```ts
 import { logTokenUsage } from '@animahealth/adk'
