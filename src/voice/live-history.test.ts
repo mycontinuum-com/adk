@@ -214,3 +214,49 @@ test('gives the backend the caller’s consecutive fragments as one message, up 
   })
   await recorder.close()
 })
+
+test(
+  'keeps the caller’s words a run started without a delegation had heard before its work',
+  { meta: { fixture: 'actual-caller-turns' } },
+  async () => {
+    const recorder = await createGPTLiveTranscript(new InMemoryStore(), 'call', () => {})
+    const source = Object.assign(new EventEmitter(), { sessionId: 'connection' })
+    recorder.attach(source)
+    const said = (text: string, start: number) =>
+      source.emit('openai_server_event_received', {
+        type: 'session.input_transcript.delta',
+        event_id: text,
+        delta: text,
+        start_ms: start,
+        end_ms: start + 150,
+      })
+    said('Yes', 0)
+    said(' please', 200)
+    // The app starts a run here: GPT Live delegates nothing, so no delegation ends the message.
+    const heard = recorder.snapshot()
+    said(' go', 400)
+    said(' on', 600)
+    const base = { createdAt: 0, invocationId: 'app-run', agentName: 'backend' }
+    // The call session holds the run's mark, then its carried work, as `transferBackendWork` writes them.
+    const events: Event[] = [
+      {
+        ...base,
+        id: 'batch',
+        type: 'annotation',
+        kind: 'mark',
+        label: 'live-backend-work',
+        data: { transcriptThrough: heard.receivedThrough },
+      },
+      { ...base, id: 'start', type: 'invocation_start', kind: 'agent' },
+      { ...base, id: 'end', type: 'invocation_end', reason: 'completed' },
+    ]
+    const history = liveHistory(events, recorder.snapshot(), 'backend')
+    expect(history.map((event) => ('text' in event ? event.text : event.type))).toEqual([
+      'Yes please',
+      'invocation_start',
+      'invocation_end',
+      ' go on',
+    ])
+    await recorder.close()
+  },
+)

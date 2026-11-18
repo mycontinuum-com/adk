@@ -12,16 +12,17 @@ const backendEventTypes = new Set<Event['type']>([
 
 /**
  * Projects transcript fragments into user and assistant events, in receipt order. The caller's
- * consecutive fragments on one connection are one event, up to the next delegation: GPT Live
- * transcribes the caller in word-sized deltas that carry their own spacing, and a spelled name
- * given to the backend one letter per message was misread. A joined event keeps its first
- * fragment's ID and start offset and its last fragment's sequence and end offset. Assistant
- * fragments stay one event each, since their deltas can split a word. The backend and eval results
- * read this one view.
+ * consecutive fragments on one connection are one event, up to the next delegation or receipt in
+ * `boundaries`: GPT Live transcribes the caller in word-sized deltas that carry their own spacing,
+ * and a spelled name given to the backend one letter per message was misread. A joined event keeps
+ * its first fragment's ID and start offset and its last fragment's sequence and end offset.
+ * Assistant fragments stay one event each, since their deltas can split a word. The backend and
+ * eval results read this one view.
  */
 export function transcriptMessages(
   snapshot: GPTLiveTranscriptSnapshot,
   agentName: string,
+  boundaries: readonly number[] = [],
 ): Array<UserEvent | AssistantEvent> {
   const delegations = snapshot.observations
     .filter(({ payload }) => payload.kind === 'delegation')
@@ -35,7 +36,8 @@ export function transcriptMessages(
       previous?.type === 'user' &&
       joined &&
       joined.connection.index === fragment.connection.index &&
-      !delegations.some((sequence) => sequence > joined.sequence && sequence < fragment.sequence)
+      !delegations.some((sequence) => sequence > joined.sequence && sequence < fragment.sequence) &&
+      !boundaries.some((through) => through >= joined.sequence && through < fragment.sequence)
     ) {
       messages[messages.length - 1] = {
         ...previous,
@@ -68,21 +70,34 @@ export function transcriptMessages(
   return messages
 }
 
+const workThrough = (event: Event): number | undefined =>
+  event.type === 'annotation' && event.label === 'live-backend-work'
+    ? (event.data?.transcriptThrough as number)
+    : undefined
+
 /**
  * Builds a delegation's backend history. Each earlier batch of backend work is placed after the
- * transcript at its receipt boundary, followed by the transcript that arrived later.
+ * transcript at its receipt boundary, followed by the transcript that arrived later. The caller's
+ * fragments are not joined across a boundary, so words a run had heard stay before its work: a run
+ * the app or handler started has no delegation in the transcript to end the caller's message at,
+ * and the message joined across it was placed after that run's work, as if the caller had said
+ * nothing before it.
  */
 export function liveHistory(
   events: readonly Event[],
   snapshot: GPTLiveTranscriptSnapshot,
   agentName: string,
 ): Event[] {
-  const messages = transcriptMessages(snapshot, agentName)
+  const messages = transcriptMessages(
+    snapshot,
+    agentName,
+    events.flatMap((event) => workThrough(event) ?? []),
+  )
   const history: Event[] = []
   let index = 0
   for (const event of events) {
-    if (event.type === 'annotation' && event.label === 'live-backend-work') {
-      const through = event.data?.transcriptThrough as number
+    const through = workThrough(event)
+    if (through !== undefined) {
       while (index < messages.length && messages[index]!.transcriptFragment!.sequence <= through)
         history.push(messages[index++]!)
     } else if (backendEventTypes.has(event.type)) history.push(event)
