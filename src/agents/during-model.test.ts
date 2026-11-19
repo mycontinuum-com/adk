@@ -327,6 +327,7 @@ describe('duringModel', () => {
         throw error
       },
       [Symbol.asyncIterator]: () => stream,
+      [Symbol.asyncDispose]: async () => {},
     }
     const f = startTurn(
       () => stream,
