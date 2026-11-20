@@ -2,6 +2,8 @@
 
 A TypeScript framework for production multi-agent AI systems — schema-first, event-sourced, and provider-agnostic. Built and used in production at [Anima](https://www.animahealth.com) to run clinical and operational agent workflows.
 
+[![Anima Agent Development Kit on StartupScores](https://startupscores.com/badge/anima-agent-development-kit.svg?style=shield&v=combo&theme=dark)](https://startupscores.com/open-source/anima-agent-development-kit)
+
 **Documentation: [adk.animahealth.com](https://adk.animahealth.com)** — runnable docs: every code cell on the site executes this shipped package in your browser.
 
 The ADK is a library, not a platform: no infrastructure dependency beyond a database you choose (or none — the in-memory and SQLite backends need nothing). Every layer is independently useful.
