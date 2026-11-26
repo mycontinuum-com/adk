@@ -94,9 +94,12 @@ function getOutputSchemaName(ctx: RenderContext): string | undefined {
  */
 export function cutOffUsage(
   start: Pick<ModelStartEvent, 'estimatedInput'> | undefined,
+  serviceTier?: string,
 ): ModelUsage | undefined {
   const input = start?.estimatedInput
-  return input && { ...input, outputTokens: 0, estimated: true }
+  return (
+    input && { ...input, outputTokens: 0, estimated: true, ...(serviceTier && { serviceTier }) }
+  )
 }
 
 export function createStartEvent(
@@ -140,15 +143,20 @@ function estimatedInputOf(ctx: RenderContext): NonNullable<ModelStartEvent['esti
   }
 }
 
-/** What a failed model request spent: nothing when `failedWithoutSpending`, otherwise `cutOffUsage`. */
+/**
+ * What a failed model request spent: nothing when `failedWithoutSpending`, otherwise `cutOffUsage`
+ * at the tier the request was sent at, so a cut-off flex request is priced at flex rates.
+ */
 export function spentByFailedAttempt({
   error,
   start,
+  serviceTier,
 }: {
   error: unknown
   start: Pick<ModelStartEvent, 'estimatedInput'> | undefined
+  serviceTier?: string
 }): ModelUsage | undefined {
-  if (!failedWithoutSpending(error)) return cutOffUsage(start)
+  if (!failedWithoutSpending(error)) return cutOffUsage(start, serviceTier)
   const model = start?.estimatedInput
   return {
     ...(model?.provider && { provider: model.provider }),
@@ -166,17 +174,24 @@ export function abandonedAttemptEnd({
   ctx,
   error,
   durationMs,
+  serviceTier,
 }: {
   ctx: RenderContext
   error: unknown
   durationMs: number
+  /** The tier the abandoned request was sent at, when not the standard one. */
+  serviceTier?: string
 }): ModelEndEvent {
   return createEndEvent({
     invocationId: ctx.invocationId,
     agentName: ctx.agentName,
     stepIndex: 0,
     durationMs,
-    usage: spentByFailedAttempt({ error, start: { estimatedInput: estimatedInputOf(ctx) } }),
+    usage: spentByFailedAttempt({
+      error,
+      start: { estimatedInput: estimatedInputOf(ctx) },
+      serviceTier,
+    }),
     finishReason: 'error',
     error: error instanceof Error ? error.message : String(error),
   })

@@ -144,13 +144,16 @@ function agentOn(
 }
 
 function written() {
-  return lines.map(({ inputTokens, usageBasis, costUsd, costBasis, finishReason }) => ({
-    inputTokens,
-    usageBasis,
-    costUsd,
-    costBasis,
-    finishReason,
-  }))
+  return lines.map(
+    ({ inputTokens, usageBasis, costUsd, costBasis, finishReason, serviceTier }) => ({
+      inputTokens,
+      serviceTier,
+      usageBasis,
+      costUsd,
+      costBasis,
+      finishReason,
+    }),
+  )
 }
 
 const ESTIMATED_LINE = {
@@ -160,6 +163,9 @@ const ESTIMATED_LINE = {
   costBasis: 'estimated',
   finishReason: 'error',
 }
+
+/** A flex request cut off is priced at the flex rates, the tier it was sent at. */
+const ESTIMATED_FLEX_LINE = { ...ESTIMATED_LINE, serviceTier: 'flex', costUsd: 1.5e-7 }
 
 const SPENT_NOTHING_LINE = {
   inputTokens: 0,
@@ -222,6 +228,20 @@ test(
   },
 )
 
+test(
+  'a flex request cut off before output and tried again is priced at flex rates',
+  { meta: { fixture: 'agent-kit.failed-attempt-line' } },
+  async () => {
+    const { url, requests } = await serve([premature, answered])
+    const { app, agent } = agentOn(url, { serviceTier: 'flex', retry: { maxAttempts: 2 } })
+
+    await app.run(agent, { input: 'Hello' })
+
+    expect(requests()).toBe(2)
+    expect(written()[0]).toEqual(ESTIMATED_FLEX_LINE)
+  },
+)
+
 /** Never answers: the request stays open until the client gives up. */
 const hung: Answer = () => undefined
 
@@ -235,7 +255,7 @@ test(
     const result = await app.run(agent, { input: 'Hello' })
 
     expect(requests()).toBe(2)
-    expect(written()).toEqual([ESTIMATED_LINE, ANSWERED_LINE])
+    expect(written()).toEqual([ESTIMATED_FLEX_LINE, ANSWERED_LINE])
     expect(
       result.session.events.filter((e) => e.type === 'model_end' && e.error === FLEX_BUDGET_PASSED),
     ).toHaveLength(1)

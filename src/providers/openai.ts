@@ -287,6 +287,7 @@ export class OpenAIAdapter implements ModelAdapter {
           ctx,
           error: budget.passed() ? new Error(FLEX_BUDGET_PASSED) : error,
           durationMs: Date.now() - startedAt,
+          serviceTier: 'flex',
         })
       } finally {
         budget.stop()
@@ -433,7 +434,8 @@ export class OpenAIAdapter implements ModelAdapter {
         retryableErrors: (error) => !emitted && (retryConfig.retryableErrors?.(error) ?? true),
       },
       signal,
-      onRetry: ({ error, durationMs }) => abandonedAttemptEnd({ ctx, error, durationMs }),
+      onRetry: ({ error, durationMs }) =>
+        abandonedAttemptEnd({ ctx, error, durationMs, serviceTier }),
     })
   }
 }

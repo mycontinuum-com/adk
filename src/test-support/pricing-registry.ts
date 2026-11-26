@@ -47,8 +47,10 @@ const REGISTRY = {
   'gpt-4o-mini': {
     litellm_provider: 'openai',
     input_cost_per_token: 1.5e-7,
+    input_cost_per_token_flex: 7.5e-8,
     cache_read_input_token_cost: 7.5e-8,
     output_cost_per_token: 6e-7,
+    output_cost_per_token_flex: 3e-7,
   },
   'gpt-live-1': { litellm_provider: 'openai', mode: 'realtime', input_cost_per_second: 0.05 / 60 },
   'gpt-realtime': {
