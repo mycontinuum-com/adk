@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { afterEach, beforeEach, expect, onTestFinished, test, vi } from 'vitest'
 
 import { adk } from '../api/app'
+import { FLEX_BUDGET_PASSED } from '../core/constants'
 import { configureUsageLog } from '../core/usage-log'
 import { useTestPricing } from '../test-support/pricing-registry'
 import { openai } from './models'
@@ -109,7 +110,12 @@ async function serve(answers: readonly Answer[]): Promise<{ url: string; request
 /** An agent on `endpoints` OpenAI endpoints served by `url`, one by default. */
 function agentOn(
   url: string,
-  options: { retry?: { maxAttempts: number }; endpoints?: number; serviceTier?: 'flex' } = {},
+  options: {
+    retry?: { maxAttempts: number }
+    endpoints?: number
+    serviceTier?: 'flex'
+    flexBudgetMs?: number
+  } = {},
 ) {
   const adapter = new OpenAIAdapter(
     Array.from({ length: options.endpoints ?? 1 }, () => ({
@@ -127,7 +133,11 @@ function agentOn(
   }
   const agent = app.agent({
     name: 'backend',
-    model: openai('gpt-4o-mini', { retry, serviceTier: options.serviceTier }),
+    model: openai('gpt-4o-mini', {
+      retry,
+      serviceTier: options.serviceTier,
+      flexBudgetMs: options.flexBudgetMs,
+    }),
     context: [app.context.history()],
   })
   return { app, agent }
@@ -209,6 +219,58 @@ test(
     expect(requests()).toBe(2)
     expect(written()).toEqual([SPENT_NOTHING_LINE, ANSWERED_LINE])
     expect(result.usage?.modelCalls).toBe(2)
+  },
+)
+
+/** Never answers: the request stays open until the client gives up. */
+const hung: Answer = () => undefined
+
+test(
+  'a flex request that passes its budget is cancelled and sent again at the standard tier',
+  { meta: { fixture: 'agent-kit.failed-attempt-line' } },
+  async () => {
+    const { url, requests } = await serve([hung, answered])
+    const { app, agent } = agentOn(url, { serviceTier: 'flex', flexBudgetMs: 50 })
+
+    const result = await app.run(agent, { input: 'Hello' })
+
+    expect(requests()).toBe(2)
+    expect(written()).toEqual([ESTIMATED_LINE, ANSWERED_LINE])
+    expect(
+      result.session.events.filter((e) => e.type === 'model_end' && e.error === FLEX_BUDGET_PASSED),
+    ).toHaveLength(1)
+  },
+)
+
+test(
+  'a flex request answered within its budget is sent once',
+  { meta: { fixture: 'agent-kit.failed-attempt-line' } },
+  async () => {
+    const { url, requests } = await serve([answered])
+    const { app, agent } = agentOn(url, { serviceTier: 'flex', flexBudgetMs: 5_000 })
+
+    const result = await app.run(agent, { input: 'Hello' })
+
+    expect(requests()).toBe(1)
+    expect(
+      result.session.events.filter((e) => e.type === 'model_end' && e.error === FLEX_BUDGET_PASSED),
+    ).toHaveLength(0)
+  },
+)
+
+test(
+  'a run aborted while a flex request waits is not sent again at the standard tier',
+  { meta: { fixture: 'agent-kit.failed-attempt-line' } },
+  async () => {
+    const { url, requests } = await serve([hung, answered])
+    const { app, agent } = agentOn(url, { serviceTier: 'flex', flexBudgetMs: 5_000 })
+
+    const run = app.run(agent, { input: 'Hello' })
+    await vi.waitFor(() => expect(requests()).toBe(1))
+    run.abort()
+    await expect(run).rejects.toThrow()
+
+    expect(requests()).toBe(1)
   },
 )
 

@@ -31,7 +31,7 @@ import type {
 } from '../types/runnables'
 
 import { abandonedAttemptEnd } from '../context/build'
-import { CALL_ID_PREFIX } from '../core/constants'
+import { CALL_ID_PREFIX, FLEX_BUDGET_PASSED } from '../core/constants'
 import { withStreamRetry } from '../core/retry'
 import { DecisionsUnavailableError, ModelResponseFailedError } from '../errors/types'
 import { createEventId, createCallId } from '../session'
@@ -269,19 +269,27 @@ export class OpenAIAdapter implements ModelAdapter {
       config.serviceTier === 'flex' &&
       endpoint.type !== 'azure'
     ) {
-      const flex = this.executeStep(ctx, config, signal, endpoint, 'flex')
+      const budget = flexBudget(signal, config.flexBudgetMs)
+      const flex = this.executeStep(ctx, config, budget.signal, endpoint, 'flex')
       const startedAt = Date.now()
       let emitted = false
       try {
         for (;;) {
           const next = await flex.next()
           if (next.done) return next.value
+          if (!emitted && next.value.type !== 'model_end') budget.outputStarted()
           emitted ||= next.value.type !== 'model_end'
           yield next.value
         }
       } catch (error) {
         if (emitted || signal?.aborted) throw error
-        yield abandonedAttemptEnd({ ctx, error, durationMs: Date.now() - startedAt })
+        yield abandonedAttemptEnd({
+          ctx,
+          error: budget.passed() ? new Error(FLEX_BUDGET_PASSED) : error,
+          durationMs: Date.now() - startedAt,
+        })
+      } finally {
+        budget.stop()
       }
     }
     const tier =
@@ -445,6 +453,33 @@ function samplingOptions(config: ProviderModelConfig, reasoning: { effort?: stri
     ...(config.temperature != null && samples && { temperature: config.temperature }),
     ...(topP != null && samples && { top_p: topP }),
     ...(config.maxTokens != null && { max_output_tokens: config.maxTokens }),
+  }
+}
+
+/**
+ * A signal that follows `signal` and also aborts once `budgetMs` has passed, with `passed` telling
+ * the two apart. `outputStarted` ends the timer, and `stop` also the link to `signal`. Without a
+ * budget it is `signal`.
+ */
+function flexBudget(signal: AbortSignal | undefined, budgetMs: number | undefined) {
+  if (budgetMs === undefined)
+    return { signal, passed: () => false, outputStarted: () => undefined, stop: () => undefined }
+  const own = new AbortController()
+  let passed = false
+  const unlink = signal ? registerAbortHandler(signal, () => own.abort()) : undefined
+  if (signal?.aborted) own.abort()
+  const timer = setTimeout(() => {
+    passed = true
+    own.abort()
+  }, budgetMs)
+  return {
+    signal: own.signal,
+    passed: () => passed,
+    outputStarted: () => clearTimeout(timer),
+    stop: () => {
+      clearTimeout(timer)
+      unlink?.()
+    },
   }
 }
 

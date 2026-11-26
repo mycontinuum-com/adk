@@ -25,3 +25,6 @@ export function createSessionId(): string {
 export function createEventId(): string {
   return `${EVENT_ID_PREFIX}${randomUUID()}`
 }
+
+/** The error a flex request that passed its `flexBudgetMs` leaves on its model_end event. */
+export const FLEX_BUDGET_PASSED = 'Flex request passed its budget'

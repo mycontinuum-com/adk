@@ -7,6 +7,7 @@
  */
 export { z } from 'zod/v4'
 export { adk } from './api'
+export { FLEX_BUDGET_PASSED } from './core/constants'
 export type {
   AdkConfig,
   AdkApp,
